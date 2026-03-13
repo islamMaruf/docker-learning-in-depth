@@ -1,4 +1,4 @@
-# HTTP/1.0 (HyperText Transfer Protocol Version 1.0) In Details
+# Chapter 25: HTTP/1.0 (HyperText Transfer Protocol Version 1.0) In Details
 
 ## Chapter Overview
 

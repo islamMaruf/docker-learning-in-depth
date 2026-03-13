@@ -1,4 +1,4 @@
-# Chapter 040: Subnetting and Subnet Masks In Details
+# Chapter 33: Subnetting and Subnet Masks In Details
 
 ## Overview
 

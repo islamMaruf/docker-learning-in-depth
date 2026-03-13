@@ -1,4 +1,4 @@
-# Chapter 26: Managing Containers - Complete Lifecycle Control
+# Chapter 19: Managing Containers - Complete Lifecycle Control
 
 ## Overview
 

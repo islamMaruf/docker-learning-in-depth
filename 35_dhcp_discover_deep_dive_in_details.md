@@ -1,4 +1,4 @@
-# Chapter 042: DHCP DISCOVER - Breaking Into Pieces In Details
+# Chapter 35: DHCP DISCOVER - Breaking Into Pieces In Details
 
 ## Overview
 

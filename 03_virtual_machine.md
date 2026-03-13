@@ -1,4 +1,4 @@
-# Chapter 10: Virtual Machine
+# Chapter 3: Virtual Machine
 
 ## Overview
 

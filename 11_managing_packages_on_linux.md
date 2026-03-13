@@ -1,4 +1,4 @@
-# Chapter 18: Managing Packages on Linux - A Complete Beginner's Guide
+# Chapter 11: Managing Packages on Linux - A Complete Beginner's Guide
 
 ## Introduction: The Software Management Problem
 

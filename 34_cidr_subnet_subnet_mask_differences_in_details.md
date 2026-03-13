@@ -1,4 +1,4 @@
-# Chapter 041: CIDR, Subnet, and Subnet Mask - Understanding the Differences In Details
+# Chapter 34: CIDR, Subnet, and Subnet Mask - Understanding the Differences In Details
 
 ## Overview
 

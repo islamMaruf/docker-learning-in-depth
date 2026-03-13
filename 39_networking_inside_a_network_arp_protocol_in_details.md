@@ -1,4 +1,4 @@
-# Chapter 046: Networking Inside A Network - ARP Protocol In Details
+# Chapter 39: Networking Inside A Network - ARP Protocol In Details
 
 ## Overview
 

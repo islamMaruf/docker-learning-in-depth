@@ -1,4 +1,4 @@
-# Chapter 044: DHCP REQUEST and ACKNOWLEDGE - Breaking Into Pieces In Details
+# Chapter 37: DHCP REQUEST and ACKNOWLEDGE - Breaking Into Pieces In Details
 
 ## Overview
 

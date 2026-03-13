@@ -1,4 +1,4 @@
-# Chapter 049: Routing Table In Details
+# Chapter 42: Routing Table In Details
 
 ## Overview
 

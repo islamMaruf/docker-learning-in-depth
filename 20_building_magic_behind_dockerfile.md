@@ -1,4 +1,4 @@
-# Chapter 27: Building Magic Behind the Dockerfile - Understanding Docker Image Layers
+# Chapter 20: Building Magic Behind the Dockerfile - Understanding Docker Image Layers
 
 ## Overview
 

@@ -1,4 +1,4 @@
-# Chapter 24: WORKDIR Deep Dive
+# Chapter 17: WORKDIR Deep Dive
 
 ## Overview
 

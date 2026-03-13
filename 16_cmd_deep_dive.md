@@ -1,4 +1,4 @@
-# Chapter 23: CMD Deep Dive - Default Container Commands
+# Chapter 16: CMD Deep Dive - Default Container Commands
 
 ## Overview
 

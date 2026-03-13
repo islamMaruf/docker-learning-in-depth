@@ -1,4 +1,4 @@
-# Chapter 17: Running Ubuntu on Docker - A Complete Beginner's Guide
+# Chapter 10: Running Ubuntu on Docker - A Complete Beginner's Guide
 
 ## Introduction: Why Run Linux Inside Docker?
 

@@ -1,4 +1,4 @@
-# Chapter 048: Visualizing Multiple NICs in a Single Computer - In Details
+# Chapter 41: Visualizing Multiple NICs in a Single Computer - In Details
 
 ## Overview
 

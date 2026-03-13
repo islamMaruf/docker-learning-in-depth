@@ -1,4 +1,4 @@
-# Chapter 5: What Is Docker? - The Revolution That Changed Software Deployment
+# Chapter 1: What Is Docker? - The Revolution That Changed Software Deployment
 
 ## Overview
 

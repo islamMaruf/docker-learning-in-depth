@@ -1,4 +1,4 @@
-# Chapter 036: TLS (Transport Layer Security) In Details
+# Chapter 29: TLS (Transport Layer Security) In Details
 
 ## Overview
 

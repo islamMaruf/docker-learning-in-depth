@@ -1,4 +1,4 @@
-# Chapter 13: Docker Engine Internals - Understanding the Guardian Behind Containers
+# Chapter 6: Docker Engine Internals - Understanding the Guardian Behind Containers
 
 ## Overview
 

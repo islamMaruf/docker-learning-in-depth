@@ -1,4 +1,4 @@
-# Chapter 038: Data Link Layer Frame In Details
+# Chapter 31: Data Link Layer Frame In Details
 
 ## Overview
 

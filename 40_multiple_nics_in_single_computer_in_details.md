@@ -1,4 +1,4 @@
-# Chapter 047: Multiple NICs In A Single Computer - In Details
+# Chapter 40: Multiple NICs In A Single Computer - In Details
 
 ## Overview
 

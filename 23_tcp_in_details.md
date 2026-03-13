@@ -1,4 +1,4 @@
-# Chapter 30: TCP Protocol Deep Dive - Internal Mechanics
+# Chapter 23: TCP Protocol Deep Dive - Internal Mechanics
 
 ## Overview
 

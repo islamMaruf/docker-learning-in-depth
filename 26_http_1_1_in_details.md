@@ -1,4 +1,4 @@
-# Chapter 033: HTTP/1.1 In Details
+# Chapter 26: HTTP/1.1 In Details
 
 ## Overview
 

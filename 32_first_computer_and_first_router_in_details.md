@@ -1,4 +1,4 @@
-# Chapter 039: First Computer & First Router In Details
+# Chapter 32: First Computer & First Router In Details
 
 ## Overview
 

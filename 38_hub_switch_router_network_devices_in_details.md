@@ -1,4 +1,4 @@
-# Chapter 045: Hub, Switch, Router - Network Devices In Details
+# Chapter 38: Hub, Switch, Router - Network Devices In Details
 
 ## Overview
 

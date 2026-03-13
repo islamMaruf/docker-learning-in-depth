@@ -1,4 +1,4 @@
-# Chapter 22: Towards The Dockerfile - Automating Container Workflows
+# Chapter 15: Towards The Dockerfile - Automating Container Workflows
 
 ## Overview
 

@@ -1,4 +1,4 @@
-# Chapter 035: DNS - Domain Name System In Details
+# Chapter 28: DNS - Domain Name System In Details
 
 ## Overview
 

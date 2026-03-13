@@ -1,4 +1,4 @@
-# Chapter 25: Detach Mode - Running Containers in the Background
+# Chapter 18: Detach Mode - Running Containers in the Background
 
 ## Overview
 

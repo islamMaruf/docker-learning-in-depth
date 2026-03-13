@@ -1,4 +1,4 @@
-# Chapter 15: Linux - The Foundation of Docker
+# Chapter 8: Linux - The Foundation of Docker
 
 ## Overview
 

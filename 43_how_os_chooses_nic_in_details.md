@@ -1,4 +1,4 @@
-# Chapter 050: How OS Chooses NIC - The Complete Algorithm In Details
+# Chapter 43: How OS Chooses NIC - The Complete Algorithm In Details
 
 ## Overview
 

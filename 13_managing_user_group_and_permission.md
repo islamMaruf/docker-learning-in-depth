@@ -1,4 +1,4 @@
-# Chapter 20: Managing Users, Groups, and Permissions
+# Chapter 13: Managing Users, Groups, and Permissions
 
 ## Overview
 

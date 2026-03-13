@@ -1,4 +1,4 @@
-# Chapter 034: HTTP/2 In Details
+# Chapter 27: HTTP/2 In Details
 
 ## Overview
 

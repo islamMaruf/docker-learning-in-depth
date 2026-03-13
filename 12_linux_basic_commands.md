@@ -1,4 +1,4 @@
-# Chapter 19: Linux Basic Commands
+# Chapter 12: Linux Basic Commands
 
 ## Overview
 

@@ -1,4 +1,4 @@
-# Chapter 29: The TCP/IP Model - From Theory to Reality
+# Chapter 22: The TCP/IP Model - From Theory to Reality
 
 ## Overview
 

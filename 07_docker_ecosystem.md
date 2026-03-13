@@ -1,4 +1,4 @@
-# Chapter 14: Docker Ecosystem - The Platform, Not Just a Tool
+# Chapter 7: Docker Ecosystem - The Platform, Not Just a Tool
 
 ## Overview
 

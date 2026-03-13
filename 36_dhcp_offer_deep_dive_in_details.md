@@ -1,4 +1,4 @@
-# Chapter 043: DHCP OFFER - Breaking Into Pieces In Details
+# Chapter 36: DHCP OFFER - Breaking Into Pieces In Details
 
 ## Overview
 

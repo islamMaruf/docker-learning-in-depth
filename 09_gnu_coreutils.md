@@ -1,4 +1,4 @@
-# Chapter 16: GNU Coreutils - The Essential Command-Line Tools
+# Chapter 9: GNU Coreutils - The Essential Command-Line Tools
 
 ## Overview
 

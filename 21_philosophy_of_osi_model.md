@@ -1,4 +1,4 @@
-# Chapter 28: Philosophy of the OSI Model
+# Chapter 21: Philosophy of the OSI Model
 
 ## Overview
 

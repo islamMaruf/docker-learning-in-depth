@@ -1,4 +1,4 @@
-# Chapter 9: Understanding the Kernel - The Brain of Your Operating System
+# Chapter 2: Understanding the Kernel - The Brain of Your Operating System
 
 ## Overview
 

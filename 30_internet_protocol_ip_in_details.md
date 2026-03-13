@@ -1,4 +1,4 @@
-# Chapter 037: Internet Protocol (IP) In Details
+# Chapter 30: Internet Protocol (IP) In Details
 
 ## Overview
 

@@ -1,4 +1,4 @@
-# Chapter 12: Container vs Virtual Machine & Docker Engine
+# Chapter 5: Container vs Virtual Machine & Docker Engine
 
 ## Overview
 
