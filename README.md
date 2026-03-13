@@ -4,9 +4,9 @@ A comprehensive guide to Docker, Linux, and containerization - transforming vide
 
 ## 📚 About This Series
 
-This educational series provides an in-depth exploration of Docker, Linux fundamentals, and container orchestration. Each chapter builds upon previous concepts, creating a complete learning path from absolute basics to advanced networking concepts. The content is designed for developers, DevOps engineers, and anyone looking to master containerization technology.
+This educational series provides an in-depth exploration of Docker, Linux fundamentals, container orchestration, and comprehensive networking from first principles. Each chapter builds upon previous concepts, creating a complete learning path from absolute basics to advanced networking protocols and infrastructure design. The content is designed for developers, DevOps engineers, network engineers, and anyone looking to master containerization technology and modern networking.
 
-**Total Chapters**: 23 | **Word Count**: ~200,000+ words | **Status**: Complete
+**Total Chapters**: 43 | **Word Count**: ~400,000+ words | **Status**: Complete
 
 ## 🎯 Who Is This For?
 
@@ -14,13 +14,16 @@ This educational series provides an in-depth exploration of Docker, Linux fundam
 - **Developers** wanting to containerize applications
 - **DevOps Engineers** mastering container orchestration
 - **System Administrators** transitioning to modern infrastructure
+- **Network Engineers** building deep protocol understanding
 - **Students** preparing for cloud computing careers
+- **Web Developers** understanding HTTP, DNS, and TLS
+- **Security Professionals** learning network security fundamentals
 
 ## 📖 Chapter Overview
 
 ### Part 1: Docker Fundamentals (Chapters 1-9)
 
-#### [Chapter 1: What Is Docker?](chapters/01_what_is_docker.md)
+#### [Chapter 1: What Is Docker?](01_what_is_docker.md)
 *The Revolution That Changed Software Deployment*
 
 Discover what Docker is and why it revolutionized software deployment. Using the analogy of shipping containers, you'll understand the problems Docker solves and its impact on modern development.
@@ -29,7 +32,7 @@ Discover what Docker is and why it revolutionized software deployment. Using the
 
 ---
 
-#### [Chapter 2: Kernel](chapters/02_kernel.md)
+#### [Chapter 2: Kernel](02_kernel.md)
 *The Heart of Operating Systems*
 
 Deep dive into operating system kernels - what they are, what they do, and why they're fundamental to understanding containers.
@@ -38,7 +41,7 @@ Deep dive into operating system kernels - what they are, what they do, and why t
 
 ---
 
-#### [Chapter 3: Virtual Machine](chapters/03_virtual_machine.md)
+#### [Chapter 3: Virtual Machine](03_virtual_machine.md)
 *Understanding Virtualization*
 
 Explore virtual machines, hypervisors, and how virtualization works. Essential foundation for understanding how containers differ from VMs.
@@ -47,7 +50,7 @@ Explore virtual machines, hypervisors, and how virtualization works. Essential f
 
 ---
 
-#### [Chapter 4: Container](chapters/04_container.md)
+#### [Chapter 4: Container](04_container.md)
 *Lightweight Application Isolation*
 
 Learn what containers are, how they achieve isolation, and why they're more efficient than virtual machines.
@@ -56,7 +59,7 @@ Learn what containers are, how they achieve isolation, and why they're more effi
 
 ---
 
-#### [Chapter 5: Container vs VM & Docker Engine](chapters/05_container_vs_vm_docker_engine.md)
+#### [Chapter 5: Container vs VM & Docker Engine](05_container_vs_vm_docker_engine.md)
 *Understanding the Differences*
 
 Direct comparison between containers and virtual machines, plus introduction to Docker Engine architecture.
@@ -65,7 +68,7 @@ Direct comparison between containers and virtual machines, plus introduction to 
 
 ---
 
-#### [Chapter 6: Docker Engine Internals](chapters/06_docker_engine_internals.md)
+#### [Chapter 6: Docker Engine Internals](06_docker_engine_internals.md)
 *How Docker Really Works*
 
 Deep dive into Docker Engine architecture: Docker Daemon, containerd, runc, and the complete request flow.
@@ -74,7 +77,7 @@ Deep dive into Docker Engine architecture: Docker Daemon, containerd, runc, and 
 
 ---
 
-#### [Chapter 7: Docker Ecosystem](chapters/07_docker_ecosystem.md)
+#### [Chapter 7: Docker Ecosystem](07_docker_ecosystem.md)
 *The Platform, Not Just a Tool*
 
 Understand Docker as a complete ecosystem: CLI, Engine, Hub, Compose, Desktop, and how they work together.
@@ -83,7 +86,7 @@ Understand Docker as a complete ecosystem: CLI, Engine, Hub, Compose, Desktop, a
 
 ---
 
-#### [Chapter 8: Linux](chapters/08_linux.md)
+#### [Chapter 8: Linux](08_linux.md)
 *The Foundation of Docker*
 
 Learn what Linux actually is (kernel vs distribution), why Docker requires Linux, and how distributions work.
@@ -92,7 +95,7 @@ Learn what Linux actually is (kernel vs distribution), why Docker requires Linux
 
 ---
 
-#### [Chapter 9: GNU Coreutils](chapters/09_gnu_coreutils.md)
+#### [Chapter 9: GNU Coreutils](09_gnu_coreutils.md)
 *The Essential Command-Line Tools*
 
 Explore GNU Project history, coreutils (ls, cat, grep), shells (bash, zsh), and the terminal vs shell distinction.
@@ -103,7 +106,7 @@ Explore GNU Project history, coreutils (ls, cat, grep), shells (bash, zsh), and 
 
 ### Part 2: Linux Fundamentals (Chapters 10-13)
 
-#### [Chapter 10: Running Ubuntu on Docker](chapters/10_running_ubuntu_on_docker.md)
+#### [Chapter 10: Running Ubuntu on Docker](10_running_ubuntu_on_docker.md)
 *A Complete Beginner's Guide*
 
 Practical hands-on: running Ubuntu containers, understanding interactive mode, and exploring Linux inside Docker.
@@ -112,7 +115,7 @@ Practical hands-on: running Ubuntu containers, understanding interactive mode, a
 
 ---
 
-#### [Chapter 11: Managing Packages on Linux](chapters/11_managing_packages_on_linux.md)
+#### [Chapter 11: Managing Packages on Linux](11_managing_packages_on_linux.md)
 *APT, Package Managers, and Software Installation*
 
 Master Linux package management: apt, dpkg, repositories, and installing software in containers.
@@ -121,7 +124,7 @@ Master Linux package management: apt, dpkg, repositories, and installing softwar
 
 ---
 
-#### [Chapter 12: Linux Basic Commands](chapters/12_linux_basic_commands.md)
+#### [Chapter 12: Linux Basic Commands](12_linux_basic_commands.md)
 *Essential Command-Line Operations*
 
 Comprehensive guide to essential Linux commands for file operations, text processing, and system navigation.
@@ -130,7 +133,7 @@ Comprehensive guide to essential Linux commands for file operations, text proces
 
 ---
 
-#### [Chapter 13: Managing User, Group & Permission](chapters/13_managing_user_group_and_permission.md)
+#### [Chapter 13: Managing User, Group & Permission](13_managing_user_group_and_permission.md)
 *Linux Security Fundamentals*
 
 Deep dive into Linux permissions, users, groups, chmod, chown, and security best practices.
@@ -141,7 +144,7 @@ Deep dive into Linux permissions, users, groups, chmod, chown, and security best
 
 ### Part 3: Docker in Practice (Chapters 14-20)
 
-#### [Chapter 14: Docker Hands On](chapters/14_docker_hands_on.md)
+#### [Chapter 14: Docker Hands On](14_docker_hands_on.md)
 *Practical Docker Operations*
 
 Essential Docker commands: pulling images, running containers, exec, naming, and building custom images.
@@ -150,7 +153,7 @@ Essential Docker commands: pulling images, running containers, exec, naming, and
 
 ---
 
-#### [Chapter 15: Towards the Dockerfile](chapters/15_towards_the_dockerfile.md)
+#### [Chapter 15: Towards the Dockerfile](15_towards_the_dockerfile.md)
 *Building Custom Container Images*
 
 Introduction to Dockerfiles: syntax, instructions, and building reproducible container images.
@@ -159,7 +162,7 @@ Introduction to Dockerfiles: syntax, instructions, and building reproducible con
 
 ---
 
-#### [Chapter 16: CMD - Deep Dive](chapters/16_cmd_deep_dive.md)
+#### [Chapter 16: CMD - Deep Dive](16_cmd_deep_dive.md)
 *Container Startup Commands*
 
 Comprehensive exploration of CMD instruction: shell vs exec form, default commands, and container entry points.
@@ -168,7 +171,7 @@ Comprehensive exploration of CMD instruction: shell vs exec form, default comman
 
 ---
 
-#### [Chapter 17: WORKDIR - Deep Dive](chapters/17_workdir_deep_dive.md)
+#### [Chapter 17: WORKDIR - Deep Dive](17_workdir_deep_dive.md)
 *Working Directory Management*
 
 Master WORKDIR instruction: setting working directory, path resolution, and organizing container filesystem.
@@ -177,7 +180,7 @@ Master WORKDIR instruction: setting working directory, path resolution, and orga
 
 ---
 
-#### [Chapter 18: Detach Mode](chapters/18_detach_mode.md)
+#### [Chapter 18: Detach Mode](18_detach_mode.md)
 *Background Container Execution*
 
 Learn detached mode: running containers in background, foreground vs background, and container lifecycle.
@@ -186,7 +189,7 @@ Learn detached mode: running containers in background, foreground vs background,
 
 ---
 
-#### [Chapter 19: Managing Containers](chapters/19_managing_containers.md)
+#### [Chapter 19: Managing Containers](19_managing_containers.md)
 *Container Lifecycle and Operations*
 
 Complete guide to container management: starting, stopping, removing, inspecting, and monitoring containers.
@@ -195,7 +198,7 @@ Complete guide to container management: starting, stopping, removing, inspecting
 
 ---
 
-#### [Chapter 20: Building Magic Behind Dockerfile](chapters/20_building_magic_behind_dockerfile.md)
+#### [Chapter 20: Building Magic Behind Dockerfile](20_building_magic_behind_dockerfile.md)
 *Advanced Build Concepts*
 
 Advanced Dockerfile concepts: layer caching, multi-stage builds, build optimization, and image size reduction.
@@ -206,7 +209,7 @@ Advanced Dockerfile concepts: layer caching, multi-stage builds, build optimizat
 
 ### Part 4: Networking Fundamentals (Chapters 21-23)
 
-#### [Chapter 21: Philosophy of OSI Model](chapters/21_philosophy_of_osi_model.md)
+#### [Chapter 21: Philosophy of OSI Model](21_philosophy_of_osi_model.md)
 *Understanding Network Layers*
 
 Deep dive into OSI seven-layer model: philosophy, history, and how it structures network communication.
@@ -215,7 +218,7 @@ Deep dive into OSI seven-layer model: philosophy, history, and how it structures
 
 ---
 
-#### [Chapter 22: TCP/IP Model](chapters/22_tcp_ip_model.md)
+#### [Chapter 22: TCP/IP Model](22_tcp_ip_model.md)
 *The Internet Protocol Suite*
 
 Practical TCP/IP model: four layers, how the internet works, and relationship to OSI model.
@@ -224,12 +227,194 @@ Practical TCP/IP model: four layers, how the internet works, and relationship to
 
 ---
 
-#### [Chapter 23: TCP in Details](chapters/23_tcp_in_details.md)
+#### [Chapter 23: TCP in Details](23_tcp_in_details.md)
 *Reliable Data Transmission*
 
 Comprehensive TCP protocol analysis: three-way handshake, reliable delivery, flow control, and congestion management.
 
 **Key Concepts**: TCP handshake, sequence numbers, acknowledgments, flow control, connection management
+
+---
+
+### Part 5: Advanced Networking Deep Dives (Chapters 24-43)
+
+#### [Chapter 24: UDP in Details](24_udp_in_details.md)
+*Fast, Connectionless Transport*
+
+Deep dive into UDP protocol: minimal 8-byte header, connectionless architecture, and when to choose UDP over TCP.
+
+**Key Concepts**: UDP header structure, connectionless protocol, UDP vs TCP, real-time applications, stateless communication
+
+---
+
+#### [Chapter 25: HTTP 1.0 in Details](25_http_1_0_in_details.md)
+*The Original HTTP Protocol*
+
+Understanding HTTP 1.0: request-response model, methods, status codes, and the foundation of web communication.
+
+**Key Concepts**: HTTP methods, status codes, headers, request-response cycle, connection handling
+
+---
+
+#### [Chapter 26: HTTP 1.1 in Details](26_http_1_1_in_details.md)
+*Persistent Connections and Improvements*
+
+Exploring HTTP 1.1 enhancements: persistent connections, chunked transfer, caching, and performance optimizations.
+
+**Key Concepts**: Keep-alive, persistent connections, chunked encoding, caching mechanisms, Host header
+
+---
+
+#### [Chapter 27: HTTP 2 in Details](27_http_2_in_details.md)
+*Binary Protocol and Multiplexing*
+
+Modern HTTP/2 features: binary framing, multiplexing, server push, and header compression with HPACK.
+
+**Key Concepts**: Binary protocol, stream multiplexing, server push, HPACK compression, performance gains
+
+---
+
+#### [Chapter 28: DNS (Domain Name System) in Details](28_dns_domain_name_system_in_details.md)
+*The Internet's Phone Book*
+
+Complete DNS architecture: record types, resolution process, DNS hierarchy, and how domain names map to IP addresses.
+
+**Key Concepts**: DNS resolution, A/AAAA/CNAME/MX records, DNS hierarchy, recursive queries, DNS caching
+
+---
+
+#### [Chapter 29: TLS (Transport Layer Security) in Details](29_tls_transport_layer_security_in_details.md)
+*Securing Network Communication*
+
+TLS protocol deep dive: handshake process, certificates, encryption algorithms, and securing HTTP with HTTPS.
+
+**Key Concepts**: TLS handshake, certificates, public/private keys, cipher suites, HTTPS, encryption
+
+---
+
+#### [Chapter 30: Internet Protocol (IP) in Details](30_internet_protocol_ip_in_details.md)
+*The Heart of Network Routing*
+
+Comprehensive IP protocol analysis: IPv4/IPv6, packet structure, routing fundamentals, and address architecture.
+
+**Key Concepts**: IP packets, IPv4 header, IPv6, routing, TTL, fragmentation, network layer
+
+---
+
+#### [Chapter 31: Data Link Layer Frame in Details](31_data_link_layer_frame_in_details.md)
+*Layer 2 Ethernet Communication*
+
+Understanding Ethernet frames: MAC addresses, frame structure, preamble, FCS, and Layer 2 addressing.
+
+**Key Concepts**: Ethernet frames, MAC addresses, preamble, frame check sequence, Layer 2, encapsulation
+
+---
+
+#### [Chapter 32: First Computer and First Router in Details](32_first_computer_and_first_router_in_details.md)
+*Building a Network from Scratch*
+
+Step-by-step network construction: connecting first computer to first router, DHCP, gateway configuration.
+
+**Key Concepts**: Network initialization, gateway, DHCP basics, first connection, network topology
+
+---
+
+#### [Chapter 33: Subnetting and Subnet Masks in Details](33_subnetting_and_subnet_masks_in_details.md)
+*Dividing Networks Efficiently*
+
+Complete subnetting guide: subnet masks, network/host portions, binary calculations, and network design.
+
+**Key Concepts**: Subnet masks, subnetting, network division, binary AND operations, CIDR notation
+
+---
+
+#### [Chapter 34: CIDR, Subnet, Subnet Mask Differences in Details](34_cidr_subnet_subnet_mask_differences_in_details.md)
+*Understanding Network Addressing Terminology*
+
+Clarifying CIDR notation vs subnets vs subnet masks: concepts, relationships, and practical applications.
+
+**Key Concepts**: CIDR, classless addressing, subnet vs subnet mask, network prefix, address allocation
+
+---
+
+#### [Chapter 35: DHCP DISCOVER Deep Dive in Details](35_dhcp_discover_deep_dive_in_details.md)
+*First Step of IP Address Assignment*
+
+Packet-level analysis of DHCP DISCOVER: broadcast behavior, header structure, and Layer 2-7 breakdown.
+
+**Key Concepts**: DHCP DISCOVER, broadcast, 0.0.0.0 source, 255.255.255.255 destination, UDP ports 67/68
+
+---
+
+#### [Chapter 36: DHCP OFFER Deep Dive in Details](36_dhcp_offer_deep_dive_in_details.md)
+*Server's Response to DHCP DISCOVER*
+
+Detailed DHCP OFFER packet analysis: server response, offered IP address, DHCP options, and lease information.
+
+**Key Concepts**: DHCP OFFER, IP offer, DHCP server response, lease time, DHCP options
+
+---
+
+#### [Chapter 37: DHCP REQUEST and ACKNOWLEDGE in Details](37_dhcp_request_and_acknowledge_in_details.md)
+*Completing the DORA Process*
+
+Final DHCP steps: REQUEST packet structure, ACKNOWLEDGE confirmation, and successful IP address assignment.
+
+**Key Concepts**: DHCP REQUEST, DHCP ACK, DORA completion, IP assignment, lease confirmation
+
+---
+
+#### [Chapter 38: Hub, Switch, Router - Network Devices in Details](38_hub_switch_router_network_devices_in_details.md)
+*Understanding Network Hardware*
+
+Comprehensive comparison of network devices: hubs (Layer 1), switches (Layer 2), routers (Layer 3).
+
+**Key Concepts**: Hub vs switch vs router, OSI layers, MAC tables, routing tables, network segmentation
+
+---
+
+#### [Chapter 39: Networking Inside a Network - ARP Protocol in Details](39_networking_inside_a_network_arp_protocol_in_details.md)
+*Resolving IP to MAC Addresses*
+
+ARP protocol deep dive: how IP addresses map to MAC addresses, ARP cache, ARP requests/replies.
+
+**Key Concepts**: ARP protocol, IP-to-MAC resolution, ARP cache, broadcast, ARP table
+
+---
+
+#### [Chapter 40: Multiple NICs in Single Computer in Details](40_multiple_nics_in_single_computer_in_details.md)
+*Multi-Homed Computer Configuration*
+
+Configuring multiple network interfaces: use cases, routing implications, and multi-network connectivity.
+
+**Key Concepts**: Multiple NICs, multi-homing, interface configuration, routing with multiple interfaces
+
+---
+
+#### [Chapter 41: Visualizing Multiple NICs in Single Computer in Details](41_visualizing_multiple_nics_in_single_computer_in_details.md)
+*Understanding Multi-NIC Topologies*
+
+Visual exploration of multi-NIC scenarios: network diagrams, packet flow, and routing decisions.
+
+**Key Concepts**: Network visualization, multi-NIC topology, packet routing, interface selection
+
+---
+
+#### [Chapter 42: Routing Table in Details](42_routing_table_in_details.md)
+*How Operating Systems Route Packets*
+
+Complete routing table analysis: structure, entries, metrics, default gateway, and routing decisions.
+
+**Key Concepts**: Routing table, destination network, gateway, interface, metric, default route
+
+---
+
+#### [Chapter 43: How OS Chooses NIC in Details](43_how_os_chooses_nic_in_details.md)
+*The Complete Routing Algorithm*
+
+Step-by-step algorithm for NIC selection: binary AND operations, longest prefix matching, and route selection.
+
+**Key Concepts**: Longest prefix match, binary AND, subnet mask matching, route selection algorithm, NIC selection
 
 ---
 
@@ -250,10 +435,25 @@ For those familiar with basics who want to master Docker internals and advanced 
 
 Perfect for developers needing strong Linux foundation before diving into containers.
 
-### Path 4: Networking Specialist
+### Path 4: Networking Fundamentals
 **Focus**: Ch 21 → 22 → 23
 
-Understanding network fundamentals crucial for microservices and distributed systems.
+Understanding basic network fundamentals for containerized applications.
+
+### Path 5: Advanced Networking Mastery
+**Focus**: Ch 21 → 22 → 23 → 24 → 28 → 29 → 30 → 31 → 32 → 33 → 34 → 38 → 39 → 42 → 43
+
+Complete networking deep dive from OSI/TCP basics through advanced protocols and routing.
+
+### Path 6: Web Protocols Specialist
+**Focus**: Ch 25 → 26 → 27 → 28 → 29
+
+Master HTTP evolution (1.0, 1.1, 2.0), DNS, and TLS for web applications.
+
+### Path 7: Network Infrastructure Expert
+**Focus**: Ch 32 → 33 → 34 → 35 → 36 → 37 → 38 → 39 → 40 → 41 → 42 → 43
+
+Build networks from scratch: DHCP, subnetting, routing, and multi-NIC configurations.
 
 ## 🎓 What You'll Master
 
@@ -264,9 +464,15 @@ By completing this series, you will:
 ✅ **Work confidently with Linux** systems and command-line  
 ✅ **Build production-ready** Docker images  
 ✅ **Optimize** container performance and security  
-✅ **Understand networking** fundamentals for distributed systems  
+✅ **Understand networking** from Layer 1 to Layer 7  
 ✅ **Debug** containers and troubleshoot issues  
 ✅ **Apply** containerization in real-world projects  
+✅ **Master TCP/UDP** protocols at packet level  
+✅ **Configure DHCP, DNS, and TLS** infrastructure  
+✅ **Design and subnet** networks with CIDR  
+✅ **Understand HTTP** evolution (1.0, 1.1, 2.0)  
+✅ **Build routing tables** and configure multi-NIC systems  
+✅ **Implement ARP** and Layer 2 communication  
 
 ## 🛠️ Technical Requirements
 
@@ -283,8 +489,9 @@ By completing this series, you will:
 | **Docker Fundamentals** | 9 (Ch 1-9) | ~9,000 words | ~81,000 |
 | **Linux Basics** | 4 (Ch 10-13) | ~7,000 words | ~28,000 |
 | **Docker Practice** | 7 (Ch 14-20) | ~8,000 words | ~56,000 |
-| **Networking** | 3 (Ch 21-23) | ~12,000 words | ~36,000 |
-| **Total** | **23 chapters** | ~8,700 words | **~201,000** |
+| **Networking Fundamentals** | 3 (Ch 21-23) | ~12,000 words | ~36,000 |
+| **Advanced Networking** | 20 (Ch 24-43) | ~10,000 words | ~200,000 |
+| **Total** | **43 chapters** | ~9,300 words | **~401,000** |
 
 ## 🎯 Key Features
 
@@ -395,10 +602,13 @@ Visual representations of:
 - **Testing**: Consistent test environments
 - **CI/CD**: Automated build and deployment
 - **Microservices**: Container orchestration basics
-- **Security**: Container isolation and permissions
+- **Security**: Container isolation and permissions, TLS/SSL
 - **Optimization**: Image size and performance
-- **Debugging**: Troubleshooting containers
-- **Networking**: Container communication
+- **Debugging**: Troubleshooting containers and network issues
+- **Networking**: Container communication, multi-NIC routing
+- **Infrastructure**: DHCP configuration, subnet design
+- **Web Services**: HTTP protocol optimization, DNS setup
+- **Network Design**: Routing tables, CIDR planning, multi-network systems
 
 ## 📚 Recommended Reading Order
 
@@ -409,12 +619,22 @@ Ch 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9 → 10 → 11 → 12 → 13
 
 ### For Developers with Basic Docker Knowledge:
 ```
-Ch 6 → 7 → 8 → 9 → 15 → 16 → 17 → 20 → 21 → 22 → 23
+Ch 6 → 7 → 8 → 9 → 15 → 16 → 17 → 20 → 21 → 22 → 23 → 30 → 38
 ```
 
 ### For System Administrators:
 ```
-Ch 8 → 9 → 10 → 11 → 12 → 13 → 6 → 7 → 14 → 19
+Ch 8 → 9 → 10 → 11 → 12 → 13 → 6 → 7 → 14 → 19 → 21 → 22 → 32 → 33 → 34 → 42 → 43
+```
+
+### For Network Engineers (Complete Path):
+```
+Ch 21 → 22 → 23 → 24 → 30 → 31 → 32 → 33 → 34 → 35 → 36 → 37 → 38 → 39 → 40 → 41 → 42 → 43 → 25 → 26 → 27 → 28 → 29
+```
+
+### For Web Developers:
+```
+Ch 1 → 5 → 10 → 14 → 15 → 21 → 22 → 25 → 26 → 27 → 28 → 29
 ```
 
 ## 🎓 Learning Outcomes
@@ -449,6 +669,16 @@ Ch 8 → 9 → 10 → 11 → 12 → 13 → 6 → 7 → 14 → 19
 - Troubleshoot network issues
 - Design distributed systems
 
+### After Part 5 (Advanced Networking):
+- Master UDP vs TCP protocols
+- Understand HTTP evolution (1.0, 1.1, 2.0)
+- Configure DNS and TLS
+- Implement complete DHCP process
+- Design and subnet networks with CIDR
+- Configure routing tables and multi-NIC systems
+- Understand ARP and Layer 2 communication
+- Build networks from first principles
+
 ## 🌟 Special Chapters
 
 ### Most Comprehensive:
@@ -456,16 +686,22 @@ Ch 8 → 9 → 10 → 11 → 12 → 13 → 6 → 7 → 14 → 19
 - **Chapter 8** (12,400 words): Linux fundamentals
 - **Chapter 6** (11,500 words): Docker Engine internals
 - **Chapter 9** (11,200 words): GNU Coreutils
+- **Chapter 30**: Internet Protocol (IP) comprehensive analysis
+- **Chapter 35-37**: Complete DHCP packet-level analysis
 
 ### Most Practical:
 - **Chapter 14**: Docker Hands On
 - **Chapter 10**: Running Ubuntu on Docker
 - **Chapter 20**: Building Magic Behind Dockerfile
+- **Chapter 32**: First Computer and First Router setup
+- **Chapter 42-43**: Routing tables and NIC selection
 
 ### Most Theoretical:
 - **Chapter 21**: Philosophy of OSI Model
 - **Chapter 2**: Kernel deep dive
 - **Chapter 23**: TCP in Details
+- **Chapter 30**: IP Protocol architecture
+- **Chapter 29**: TLS cryptography and handshake
 
 ## 🔗 Related Topics
 
@@ -476,21 +712,24 @@ This series provides foundation for:
 - **Cloud Computing**: AWS ECS, Azure Container Instances, GCP Cloud Run
 - **Microservices**: Service architecture
 - **DevOps**: Infrastructure as code
+- **Network Engineering**: Routing, switching, protocol design
+- **Web Development**: HTTP, DNS, TLS optimization
+- **System Administration**: Multi-network configuration
+- **Security**: TLS/SSL, network security, container isolation
 
 ## 📖 How to Use This Repository
 
 ### Reading Online
-Navigate to any chapter in the `chapters/` directory to read directly on GitHub.
+Navigate to any chapter file to read directly on GitHub.
 
 ### Local Setup
 ```bash
 # Clone repository
 git clone <repository-url>
-cd video-to-book-copilot
+cd docker-learning-in-depth
 
 # Browse chapters
-cd chapters
-ls -la
+ls -la *.md
 
 # Read with your favorite markdown viewer
 # Or use VS Code, Obsidian, etc.
@@ -499,10 +738,10 @@ ls -la
 ### Searching Content
 ```bash
 # Search for specific topics
-grep -r "Docker Hub" chapters/
+grep -r "Docker Hub" *.md
 
 # Find chapters covering specific concepts
-grep -l "namespace" chapters/*.md
+grep -l "namespace" *.md
 ```
 
 ## 🎯 Next Steps After Completing
@@ -514,6 +753,11 @@ grep -l "namespace" chapters/*.md
 5. **Study security** best practices
 6. **Contribute to open-source** Docker projects
 7. **Build production systems** with containers
+8. **Design network architectures** with VLANs and advanced routing
+9. **Implement load balancing** and service mesh
+10. **Master IPv6** deployment strategies
+11. **Study network security** protocols and firewalls
+12. **Build VPN** and secure tunneling solutions
 
 ## 📜 License
 
@@ -531,16 +775,26 @@ grep -l "namespace" chapters/*.md
 
 ## 🗂️ Quick Chapter Access
 
-**Fundamentals**: [1](chapters/01_what_is_docker.md) | [2](chapters/02_kernel.md) | [3](chapters/03_virtual_machine.md) | [4](chapters/04_container.md) | [5](chapters/05_container_vs_vm_docker_engine.md) | [6](chapters/06_docker_engine_internals.md) | [7](chapters/07_docker_ecosystem.md) | [8](chapters/08_linux.md) | [9](chapters/09_gnu_coreutils.md)
+**Fundamentals**: [1](01_what_is_docker.md) | [2](02_kernel.md) | [3](03_virtual_machine.md) | [4](04_container.md) | [5](05_container_vs_vm_docker_engine.md) | [6](06_docker_engine_internals.md) | [7](07_docker_ecosystem.md) | [8](08_linux.md) | [9](09_gnu_coreutils.md)
 
-**Linux**: [10](chapters/10_running_ubuntu_on_docker.md) | [11](chapters/11_managing_packages_on_linux.md) | [12](chapters/12_linux_basic_commands.md) | [13](chapters/13_managing_user_group_and_permission.md)
+**Linux**: [10](10_running_ubuntu_on_docker.md) | [11](11_managing_packages_on_linux.md) | [12](12_linux_basic_commands.md) | [13](13_managing_user_group_and_permission.md)
 
-**Practice**: [14](chapters/14_docker_hands_on.md) | [15](chapters/15_towards_the_dockerfile.md) | [16](chapters/16_cmd_deep_dive.md) | [17](chapters/17_workdir_deep_dive.md) | [18](chapters/18_detach_mode.md) | [19](chapters/19_managing_containers.md) | [20](chapters/20_building_magic_behind_dockerfile.md)
+**Practice**: [14](14_docker_hands_on.md) | [15](15_towards_the_dockerfile.md) | [16](16_cmd_deep_dive.md) | [17](17_workdir_deep_dive.md) | [18](18_detach_mode.md) | [19](19_managing_containers.md) | [20](20_building_magic_behind_dockerfile.md)
 
-**Networking**: [21](chapters/21_philosophy_of_osi_model.md) | [22](chapters/22_tcp_ip_model.md) | [23](chapters/23_tcp_in_details.md)
+**Networking**: [21](21_philosophy_of_osi_model.md) | [22](22_tcp_ip_model.md) | [23](23_tcp_in_details.md)
+
+**Advanced Networking - Protocols**: [24](24_udp_in_details.md) | [25](25_http_1_0_in_details.md) | [26](26_http_1_1_in_details.md) | [27](27_http_2_in_details.md) | [28](28_dns_domain_name_system_in_details.md) | [29](29_tls_transport_layer_security_in_details.md)
+
+**Advanced Networking - IP & Layer 2**: [30](30_internet_protocol_ip_in_details.md) | [31](31_data_link_layer_frame_in_details.md) | [32](32_first_computer_and_first_router_in_details.md)
+
+**Advanced Networking - Subnetting**: [33](33_subnetting_and_subnet_masks_in_details.md) | [34](34_cidr_subnet_subnet_mask_differences_in_details.md)
+
+**Advanced Networking - DHCP**: [35](35_dhcp_discover_deep_dive_in_details.md) | [36](36_dhcp_offer_deep_dive_in_details.md) | [37](37_dhcp_request_and_acknowledge_in_details.md)
+
+**Advanced Networking - Devices & Routing**: [38](38_hub_switch_router_network_devices_in_details.md) | [39](39_networking_inside_a_network_arp_protocol_in_details.md) | [40](40_multiple_nics_in_single_computer_in_details.md) | [41](41_visualizing_multiple_nics_in_single_computer_in_details.md) | [42](42_routing_table_in_details.md) | [43](43_how_os_chooses_nic_in_details.md)
 
 ---
 
-**Start your journey**: Begin with [Chapter 1: What Is Docker?](chapters/01_what_is_docker.md) 🚀
+**Start your journey**: Begin with [Chapter 1: What Is Docker?](01_what_is_docker.md) 🚀
 
-*Last Updated: December 31, 2025*
+*Last Updated: March 13, 2026*
