@@ -1,1090 +1,368 @@
-# Chapter 17: WORKDIR Deep Dive
+# Chapter 17: `WORKDIR` Deep Dive
 
-## Overview
+> **In one sentence:** `WORKDIR` sets the directory in which the following Dockerfile instructions run, and in which the container starts, so you can use short relative paths instead of repeating long absolute ones.
 
-In the previous chapter, we explored the `CMD` instruction in Dockerfiles and learned how to specify commands that run automatically when a container starts. While `CMD` defines *what* to execute, the `WORKDIR` instruction determines *where* that execution happens. Understanding `WORKDIR` is crucial for creating clean, maintainable Dockerfiles and avoiding path-related issues that can plague containerized applications.
+**Level:** 🟢 Beginner → 🟡 Intermediate · **Reading time:** ~30 minutes
 
-The `WORKDIR` instruction sets the working directory for any `RUN`, `CMD`, `ENTRYPOINT`, `COPY`, and `ADD` instructions that follow it in the Dockerfile. Think of it as the `cd` command in your Dockerfile—but more powerful and persistent. Without proper use of `WORKDIR`, you'll find yourself constantly writing long, absolute paths throughout your Dockerfile, making it error-prone and difficult to maintain.
-
-In this chapter, we'll explore:
-- Why `WORKDIR` is essential for clean Dockerfiles
-- How working directories function in containers
-- The difference between absolute and relative paths
-- Common patterns and anti-patterns
-- Practical examples demonstrating proper `WORKDIR` usage
-- Troubleshooting path-related issues in containers
-
-By the end of this chapter, you'll understand exactly when and how to use `WORKDIR` to create professional, maintainable Docker images.
-
-## Prerequisites
-
-Before diving into this chapter, you should be familiar with:
-
-- **Basic Dockerfile structure** - Understanding instructions like `FROM`, `RUN`, and `COPY`
-- **CMD instruction** - Knowledge from the previous chapter about runtime commands
-- **Linux file system hierarchy** - Understanding the concept of root (`/`) and directories
-- **Path notation** - Distinguishing between absolute paths (`/app/server.go`) and relative paths (`server.go`)
-- **Container basics** - How to build images and run containers using Docker
-
-You should also have Docker installed on your system and be comfortable executing commands in a terminal.
-
-## Understanding the Problem: Life Without WORKDIR
-
-To truly appreciate `WORKDIR`, let's first understand the problems that arise when we don't use it properly.
-
-### The Default Working Directory
-
-When you create a container from an Ubuntu image (or most base images), the default working directory is set to the root directory `/`. You can verify this by running:
-
-```bash
-docker run -it ubuntu bash
-pwd
-```
-
-The output will be:
-```
-/
-```
-
-This means that any commands you execute will run from the root directory unless you explicitly change location or specify full paths.
-
-### The Path Problem
-
-Let's examine a Dockerfile that doesn't use `WORKDIR` properly:
-
-```dockerfile
-FROM ubuntu:latest
-
-# Install Go programming language
-RUN apt-get update && apt-get install -y golang-go
-
-# Create an app directory
-RUN mkdir /app
-
-# Copy server.go from host to container
-COPY server.go /app/server.go
-
-# Run the application
-CMD ["go", "run", "/app/server.go"]
-```
-
-In this example, we've created several issues:
-
-1. **Repetitive absolute paths**: We have to write `/app/server.go` multiple times
-2. **Error-prone**: If we decide to change the directory structure, we must update every occurrence
-3. **Verbose**: The CMD instruction requires the full path `/app/server.go`
-4. **No context**: Future commands don't "know" where our application files are
-
-### Real-World Scenario
-
-Imagine you're building a complex application with the following structure:
-
-```
-/app
-├── server.go
-├── config
-│   └── app.config
-├── handlers
-│   ├── user.go
-│   └── product.go
-└── utils
-    └── helpers.go
-```
-
-Without `WORKDIR`, every instruction would need to specify full paths:
-
-```dockerfile
-COPY server.go /app/server.go
-COPY config/app.config /app/config/app.config
-COPY handlers/user.go /app/handlers/user.go
-COPY handlers/product.go /app/handlers/product.go
-COPY utils/helpers.go /app/utils/helpers.go
-CMD ["go", "run", "/app/server.go"]
-```
-
-This becomes unmanageable quickly. Now let's see how `WORKDIR` solves this problem elegantly.
-
-## Introducing WORKDIR
-
-The `WORKDIR` instruction sets the working directory for subsequent instructions in the Dockerfile. It's similar to the `cd` (change directory) command in Linux, but with persistent effects throughout the Docker build process.
-
-### Basic Syntax
-
-```dockerfile
-WORKDIR /path/to/directory
-```
-
-The `WORKDIR` instruction accepts both absolute and relative paths:
-
-- **Absolute path**: `WORKDIR /app` (starts from root)
-- **Relative path**: `WORKDIR app` (relative to current directory)
-
-### How WORKDIR Works
-
-When you use `WORKDIR`, Docker:
-
-1. **Creates the directory if it doesn't exist** - No need for `RUN mkdir`
-2. **Changes to that directory** - All subsequent commands execute from there
-3. **Maintains the context** - The working directory persists for the rest of the Dockerfile
-
-Let's refactor our previous example:
-
-```dockerfile
-FROM ubuntu:latest
-
-# Install Go programming language
-RUN apt-get update && apt-get install -y golang-go
-
-# Set working directory (creates /app automatically)
-WORKDIR /app
-
-# Copy server.go from host to container
-# Now 'dot' refers to /app
-COPY server.go .
-
-# Run the application - no absolute path needed!
-CMD ["go", "run", "server.go"]
-```
-
-Notice the improvements:
-
-- **No `mkdir` needed**: `WORKDIR /app` creates the directory automatically
-- **Clean COPY**: `COPY server.go .` is clear and concise
-- **Simple CMD**: `CMD ["go", "run", "server.go"]` without full paths
-- **Better maintainability**: To change location, modify only one line
-
-## WORKDIR Mechanics: Absolute vs Relative Paths
-
-Understanding the difference between absolute and relative paths is critical for using `WORKDIR` effectively.
-
-### Absolute Paths
-
-An absolute path starts with a forward slash (`/`) and specifies the location from the root of the filesystem:
-
-```dockerfile
-WORKDIR /app
-```
-
-This sets the working directory to `/app`, regardless of where you currently are in the filesystem. It's like giving GPS coordinates—you'll always end up at the exact same place.
-
-**Visualization:**
-
-```
-Root filesystem
-/
-├── bin/
-├── etc/
-├── home/
-├── app/          ← WORKDIR /app points here
-│   └── server.go
-└── var/
-```
-
-### Relative Paths
-
-A relative path doesn't start with a forward slash and is relative to the current working directory:
-
-```dockerfile
-WORKDIR app
-```
-
-If you're currently in `/`, this would create `/app`. If you're in `/home`, it would create `/home/app`.
-
-### Combining WORKDIR Instructions
-
-You can use multiple `WORKDIR` instructions in a Dockerfile. Each one changes the working directory for subsequent instructions:
-
-```dockerfile
-FROM ubuntu:latest
-
-# Set to /app
-WORKDIR /app
-
-# Now at /app/backend (relative path)
-WORKDIR backend
-
-# Now at /app/backend/src (another relative path)
-WORKDIR src
-
-# Check current location
-RUN pwd
-# Output: /app/backend/src
-```
-
-**Best Practice**: For clarity, use absolute paths for the primary working directory and relative paths only when building nested structures.
-
-## Practical Example: Building a Go Server Image
-
-Let's build a complete example demonstrating proper `WORKDIR` usage with our Go server.
-
-### Project Structure (Host Machine)
-
-```
-docker-learning/
-├── Dockerfile
-└── server.go
-```
-
-**server.go:**
-
-```go
-package main
-
-import (
-    "fmt"
-    "net/http"
-)
-
-func handler(w http.ResponseWriter, r *http.Request) {
-    fmt.Fprintf(w, "Hello World")
-}
-
-func main() {
-    http.HandleFunc("/", handler)
-    http.ListenAndServe(":8080", nil)
-}
-```
-
-### Version 1: Without WORKDIR (Anti-Pattern)
-
-```dockerfile
-FROM ubuntu:latest
-
-# Install Go
-RUN apt-get update && apt-get install -y golang-go
-
-# Manually create directory
-RUN mkdir /app
-
-# Copy with absolute paths
-COPY server.go /app/server.go
-
-# Run with absolute path
-CMD ["go", "run", "/app/server.go"]
-```
-
-**Problems with this approach:**
-
-1. Manual directory creation required
-2. Full path `/app/server.go` must be specified everywhere
-3. If we add more files, we need to specify `/app/` for each one
-4. The default working directory remains `/` when the container runs
-
-### Version 2: With WORKDIR (Best Practice)
-
-```dockerfile
-FROM ubuntu:latest
-
-# Install Go
-RUN apt-get update && apt-get install -y golang-go
-
-# Set working directory (creates /app automatically)
-WORKDIR /app
-
-# Copy server.go to current directory (/app)
-COPY server.go .
-
-# Run from current directory
-CMD ["go", "run", "server.go"]
-```
-
-**Advantages:**
-
-1. Automatic directory creation
-2. Clean, readable paths
-3. All subsequent operations happen in `/app` context
-4. Easy to maintain and modify
-
-### Building and Testing
-
-Let's build this image:
-
-```bash
-docker build -t new-go-server:1.0.3 .
-```
-
-**Build output:**
-
-```
-[+] Building 5.2s (8/8) FINISHED
- => [1/4] FROM ubuntu:latest
- => [2/4] RUN apt-get update && apt-get install -y golang-go
- => [3/4] WORKDIR /app
- => [4/4] COPY server.go .
- => exporting to image
-Successfully tagged new-go-server:1.0.3
-```
-
-Now run the container:
-
-```bash
-docker run new-go-server:1.0.3
-```
-
-**Output:**
-
-```
-Server running on port 8080
-```
-
-### Verifying WORKDIR Inside Container
-
-Let's enter the running container to verify our working directory:
-
-```bash
-# Start container in background
-docker run -d --name go-server new-go-server:1.0.3
-
-# Execute bash inside container
-docker exec -it go-server bash
-```
-
-**Inside the container:**
-
-```bash
-# Check current directory
-pwd
-# Output: /app
-
-# List files
-ls
-# Output: server.go
-
-# Check if server is running
-apt-get update && apt-get install -y curl
-curl localhost:8080
-# Output: Hello World
-```
-
-Perfect! Our `WORKDIR` setting persists at runtime, making debugging and maintenance much easier.
-
-## WORKDIR vs RUN mkdir: Key Differences
-
-You might wonder: "Can't I just use `RUN mkdir /app` instead of `WORKDIR /app`?"
-
-Let's examine the differences:
-
-### Using RUN mkdir
-
-```dockerfile
-FROM ubuntu:latest
-RUN apt-get update && apt-get install -y golang-go
-
-# Create directory
-RUN mkdir /app
-
-# Copy files - STILL need absolute path
-COPY server.go /app/server.go
-
-# CMD - STILL need absolute path
-CMD ["go", "run", "/app/server.go"]
-```
-
-**Current working directory**: Still `/` (root)
-
-### Using WORKDIR
-
-```dockerfile
-FROM ubuntu:latest
-RUN apt-get update && apt-get install -y golang-go
-
-# Create directory AND set as working directory
-WORKDIR /app
-
-# Copy files - use relative path
-COPY server.go .
-
-# CMD - use relative path
-CMD ["go", "run", "server.go"]
-```
-
-**Current working directory**: `/app`
-
-### Comparison Table
-
-| Feature | RUN mkdir | WORKDIR |
-|---------|-----------|---------|
-| Creates directory | ✅ Yes | ✅ Yes (if doesn't exist) |
-| Changes working directory | ❌ No | ✅ Yes |
-| Affects subsequent instructions | ❌ No | ✅ Yes |
-| Affects container runtime | ❌ No | ✅ Yes |
-| Requires absolute paths later | ✅ Yes | ❌ No |
-| Idempotent (can run multiple times) | ❌ No (fails if exists) | ✅ Yes |
-
-**Verdict**: Always use `WORKDIR` instead of `RUN mkdir` for setting application directories in Docker.
-
-## Common Patterns and Best Practices
-
-### Pattern 1: Single Application Directory
-
-For simple applications, use a single `WORKDIR`:
-
-```dockerfile
-FROM node:18
-WORKDIR /usr/src/app
-COPY package*.json ./
-RUN npm install
-COPY . .
-CMD ["node", "server.js"]
-```
-
-### Pattern 2: Organized Project Structure
-
-For complex applications, organize logically:
-
-```dockerfile
-FROM python:3.11
-
-# Set main application directory
-WORKDIR /opt/myapp
-
-# Copy and install dependencies
-COPY requirements.txt .
-RUN pip install -r requirements.txt
-
-# Copy source code
-COPY src/ ./src/
-COPY config/ ./config/
-
-# Set working directory to src for runtime
-WORKDIR /opt/myapp/src
-
-CMD ["python", "main.py"]
-```
-
-### Pattern 3: Build and Runtime Separation (Multi-stage)
-
-```dockerfile
-# Build stage
-FROM golang:1.20 AS builder
-WORKDIR /build
-COPY . .
-RUN go build -o server
-
-# Runtime stage
-FROM ubuntu:latest
-WORKDIR /app
-COPY --from=builder /build/server .
-CMD ["./server"]
-```
-
-### Best Practice Guidelines
-
-1. **Use absolute paths for primary WORKDIR**
-   ```dockerfile
-   WORKDIR /app  # Good
-   WORKDIR app   # Avoid (ambiguous)
-   ```
-
-2. **Set WORKDIR early in Dockerfile**
-   ```dockerfile
-   FROM ubuntu:latest
-   WORKDIR /app  # Set immediately after FROM
-   COPY . .
-   ```
-
-3. **Keep WORKDIR consistent with conventions**
-   - Node.js: `/usr/src/app`
-   - Python: `/opt/app` or `/app`
-   - Go: `/app` or `/go/src/app`
-   - Java: `/opt/app`
-
-4. **Don't use WORKDIR for temporary operations**
-   ```dockerfile
-   # Bad
-   WORKDIR /tmp
-   RUN some-command
-   WORKDIR /app
-   
-   # Good
-   RUN cd /tmp && some-command
-   ```
-
-5. **Combine related operations**
-   ```dockerfile
-   # Good
-   WORKDIR /app
-   COPY package*.json ./
-   RUN npm install
-   COPY . .
-   ```
-
-## Common Mistakes and How to Avoid Them
-
-### Mistake 1: Using Slash Prefix in Relative Contexts
-
-**Problem:**
-
-```dockerfile
-WORKDIR /app
-# Later trying to reference files
-CMD ["go", "run", "/server.go"]  # Wrong! Looking for /server.go (root)
-```
-
-**Solution:**
-
-```dockerfile
-WORKDIR /app
-CMD ["go", "run", "server.go"]  # Correct! Looks in /app/server.go
-```
-
-**Explanation**: When `WORKDIR` is set to `/app`, the command `go run server.go` looks for `/app/server.go`. Using `/server.go` would look in the root directory, not the app directory.
-
-### Mistake 2: Not Understanding Path Resolution
-
-**Problem:**
-
-```dockerfile
-WORKDIR /app
-COPY . /app  # Redundant - already in /app!
-```
-
-**Solution:**
-
-```dockerfile
-WORKDIR /app
-COPY . .  # Clean and correct
-```
-
-### Mistake 3: Forgetting WORKDIR Affects Runtime
-
-**Problem:**
-
-```dockerfile
-FROM ubuntu:latest
-WORKDIR /tmp  # Wrong directory for application
-COPY app.py .
-CMD ["python", "app.py"]
-```
-
-When you `docker exec` into this container, you'll start in `/tmp`, which is confusing.
-
-**Solution:**
-
-```dockerfile
-FROM ubuntu:latest
-WORKDIR /app  # Proper application directory
-COPY app.py .
-CMD ["python", "app.py"]
-```
-
-### Mistake 4: Overusing WORKDIR
-
-**Problem:**
-
-```dockerfile
-WORKDIR /app
-WORKDIR /app/src
-WORKDIR /app/src/main
-# Too many nested directories
-```
-
-**Solution:**
-
-```dockerfile
-WORKDIR /app/src/main  # Direct path is clearer
-```
-
-## Advanced WORKDIR Scenarios
-
-### Scenario 1: Environment Variables in WORKDIR
-
-You can use environment variables with `WORKDIR`:
-
-```dockerfile
-FROM ubuntu:latest
-
-ENV APP_HOME=/opt/myapp
-WORKDIR ${APP_HOME}
-
-COPY . .
-CMD ["./start.sh"]
-```
-
-This allows flexible configuration through environment variables.
-
-### Scenario 2: WORKDIR with Multi-stage Builds
-
-```dockerfile
-# Stage 1: Build
-FROM maven:3.8-openjdk-17 AS build
-WORKDIR /build
-COPY pom.xml .
-COPY src ./src
-RUN mvn clean package
-
-# Stage 2: Runtime
-FROM openjdk:17-slim
-WORKDIR /app
-COPY --from=build /build/target/app.jar .
-CMD ["java", "-jar", "app.jar"]
-```
-
-Each stage can have its own `WORKDIR`, keeping build and runtime contexts separate.
-
-### Scenario 3: WORKDIR with Volume Mounts
-
-When using volume mounts, `WORKDIR` helps establish consistent paths:
-
-```dockerfile
-FROM node:18
-WORKDIR /usr/src/app
-VOLUME /usr/src/app/data
-CMD ["node", "server.js"]
-```
-
-Running with volume:
-
-```bash
-docker run -v $(pwd)/data:/usr/src/app/data myapp
-```
-
-The application can access data at `./data` (relative to `/usr/src/app`).
-
-## Debugging WORKDIR Issues
-
-### Issue 1: "No such file or directory" Errors
-
-**Symptom:**
-
-```bash
-docker run myapp
-Error: cannot find server.go: no such file or directory
-```
-
-**Diagnosis:**
-
-```bash
-docker run -it myapp bash
-pwd  # Check current directory
-ls   # List files
-```
-
-**Common causes:**
-
-1. `WORKDIR` not set correctly
-2. Files copied to wrong location
-3. Absolute path used when relative expected
-
-**Fix:**
-
-```dockerfile
-# Ensure WORKDIR matches COPY destination
-WORKDIR /app
-COPY server.go .  # Copies to /app/server.go
-CMD ["go", "run", "server.go"]  # Looks in /app/
-```
-
-### Issue 2: Unexpected Working Directory at Runtime
-
-**Symptom:**
-
-When you `docker exec` into container, you're in the wrong directory.
-
-**Diagnosis:**
-
-```bash
-docker exec -it mycontainer bash
-pwd  # Shows /
-```
-
-**Fix:**
-
-Add or correct `WORKDIR` in Dockerfile:
-
-```dockerfile
-FROM ubuntu:latest
-WORKDIR /app  # Ensure this is set
-# ... rest of Dockerfile
-```
-
-### Issue 3: Build Context vs WORKDIR Confusion
-
-**Symptom:**
-
-```
-Error: COPY failed: file not found
-```
-
-**Remember:**
-
-- **Build context** (the `.` in `docker build .`) is on your **host machine**
-- **WORKDIR** affects the **container filesystem**
-
-```dockerfile
-# Host: docker-learning/server.go
-# Container: /app/
-
-WORKDIR /app                    # Container path
-COPY server.go .                # From host context to /app/
-```
-
-## Real-World Example: Full-Stack Application
-
-Let's build a realistic example with a Node.js backend:
-
-### Project Structure (Host)
-
-```
-my-node-app/
-├── Dockerfile
-├── package.json
-├── package-lock.json
-├── src/
-│   ├── server.js
-│   ├── routes/
-│   │   ├── users.js
-│   │   └── products.js
-│   └── utils/
-│       └── logger.js
-└── config/
-    └── database.js
-```
-
-### Dockerfile with Proper WORKDIR
-
-```dockerfile
-FROM node:18-alpine
-
-# Set working directory
-WORKDIR /usr/src/app
-
-# Copy package files
-COPY package*.json ./
-
-# Install dependencies
-RUN npm ci --only=production
-
-# Copy application source
-COPY src/ ./src/
-COPY config/ ./config/
-
-# Set working directory to src for runtime
-WORKDIR /usr/src/app/src
-
-# Expose port
-EXPOSE 3000
-
-# Run application
-CMD ["node", "server.js"]
-```
-
-### Why This Works Well
-
-1. **`WORKDIR /usr/src/app`** - Standard Node.js convention
-2. **Dependency installation first** - Leverages Docker layer caching
-3. **Source copied after dependencies** - Changes to code don't invalidate dependency layer
-4. **Runtime WORKDIR set to src** - Server runs from correct location
-5. **Relative paths throughout** - Clean and maintainable
-
-### Building and Running
-
-```bash
-# Build image
-docker build -t my-node-app:1.0.0 .
-
-# Run container
-docker run -p 3000:3000 my-node-app:1.0.0
-
-# Verify working directory
-docker exec -it <container-id> sh
-pwd
-# Output: /usr/src/app/src
-```
-
-## WORKDIR and Security Considerations
-
-### Running as Non-Root User
-
-```dockerfile
-FROM node:18-alpine
-
-# Create app directory
-WORKDIR /app
-
-# Create non-root user
-RUN addgroup -g 1001 appuser && \
-    adduser -D -u 1001 -G appuser appuser
-
-# Copy files
-COPY --chown=appuser:appuser . .
-
-# Switch to non-root user
-USER appuser
-
-CMD ["node", "server.js"]
-```
-
-**Key points:**
-
-1. `WORKDIR /app` creates directory with root ownership
-2. `--chown` flag in `COPY` sets correct ownership
-3. `USER appuser` ensures application doesn't run as root
-4. Application can still read/write in `/app` due to ownership
-
-### Avoiding Sensitive Directories
-
-**Don't use these as WORKDIR:**
-
-- `/` - Root directory (too broad)
-- `/root` - Root user's home (security risk)
-- `/etc` - System configuration (can break system)
-- `/bin` or `/usr/bin` - System binaries (dangerous)
-
-**Safe choices:**
-
-- `/app`
-- `/usr/src/app`
-- `/opt/myapp`
-- `/home/appuser/app` (when running as non-root)
-
-## Performance Implications
-
-### Docker Layer Caching
-
-`WORKDIR` creates a new layer in your Docker image. Understanding this helps optimize builds:
-
-```dockerfile
-FROM node:18
-
-# Layer 1: WORKDIR creates /app
-WORKDIR /app
-
-# Layer 2: Copy package files
-COPY package*.json ./
-
-# Layer 3: Install dependencies (cached unless package*.json changes)
-RUN npm install
-
-# Layer 4: Copy source (changes frequently)
-COPY . .
-
-CMD ["node", "server.js"]
-```
-
-**Optimization tip**: Place `WORKDIR` early and copy frequently-changing files last to maximize cache hits.
-
-### Multiple WORKDIR Instructions
-
-Each `WORKDIR` instruction creates a layer:
-
-```dockerfile
-# Creates 3 layers
-WORKDIR /app
-WORKDIR /app/src
-WORKDIR /app/src/main
-```
-
-**Better approach:**
-
-```dockerfile
-# Creates 1 layer
-WORKDIR /app/src/main
-```
-
-This reduces image size slightly and simplifies the build process.
-
-## Exercises and Hands-On Practice
-
-### Exercise 1: Basic WORKDIR Usage
-
-**Task**: Create a simple Python application with proper `WORKDIR`.
-
-1. Create `app.py`:
-
-```python
-print("Hello from Python app!")
-print("Working directory is set correctly!")
-```
-
-2. Create `Dockerfile`:
-
-```dockerfile
-FROM python:3.11-slim
-# Add WORKDIR instruction here
-# Copy app.py
-# Set CMD to run app.py
-```
-
-3. Build and run:
-
-```bash
-docker build -t python-workdir-test .
-docker run python-workdir-test
-```
-
-**Expected output:**
-
-```
-Hello from Python app!
-Working directory is set correctly!
-```
-
-### Exercise 2: Debugging Path Issues
-
-**Task**: Fix the broken Dockerfile below.
-
-**Broken Dockerfile:**
-
-```dockerfile
-FROM ubuntu:latest
-RUN apt-get update && apt-get install -y golang-go
-RUN mkdir /myapp
-COPY server.go /myapp/server.go
-CMD ["go", "run", "server.go"]
-```
-
-**Problem**: The CMD will fail because working directory is `/`, not `/myapp`.
-
-**Your task**: Add appropriate `WORKDIR` instruction to fix it.
-
-### Exercise 3: Multi-File Application
-
-**Task**: Create a Dockerfile for an application with multiple files.
-
-**Directory structure:**
-
-```
-project/
-├── Dockerfile
-├── main.js
-├── utils/
-│   └── helper.js
-└── config/
-    └── settings.json
-```
-
-**Requirements:**
-
-1. Use Node.js base image
-2. Set `/usr/src/app` as working directory
-3. Copy all files maintaining structure
-4. Run `main.js` using `node`
-
-### Exercise 4: Investigate Runtime WORKDIR
-
-**Task**: Build an image and explore working directory at runtime.
-
-1. Create simple Dockerfile:
-
-```dockerfile
-FROM alpine:latest
-WORKDIR /test
-RUN echo "File in test directory" > test.txt
-CMD ["sh"]
-```
-
-2. Build and run:
-
-```bash
-docker build -t workdir-explore .
-docker run -it workdir-explore
-```
-
-3. Inside container, execute:
-
-```bash
-pwd              # What directory are you in?
-ls               # What files do you see?
-cd /             # Go to root
-ls               # Is 'test' directory there?
-cd /test         # Go back to test
-cat test.txt     # Can you read the file?
-```
-
-## Summary and Key Takeaways
-
-### What We Learned
-
-1. **WORKDIR Purpose**: Sets the working directory for subsequent Dockerfile instructions and container runtime
-   
-2. **Automatic Creation**: `WORKDIR` creates directories if they don't exist, eliminating the need for `RUN mkdir`
-
-3. **Path Types**:
-   - Absolute paths (`/app`) specify location from root
-   - Relative paths (`src`) are relative to current `WORKDIR`
-
-4. **Advantages**:
-   - Cleaner, more readable Dockerfiles
-   - Eliminates repetitive absolute paths
-   - Makes maintenance easier
-   - Sets consistent runtime environment
-
-5. **Best Practices**:
-   - Use `WORKDIR` instead of `RUN mkdir` for application directories
-   - Set `WORKDIR` early in Dockerfile
-   - Use absolute paths for primary working directory
-   - Follow language-specific conventions
-
-6. **Common Mistakes**:
-   - Using absolute paths when relative expected
-   - Not setting `WORKDIR` and requiring full paths everywhere
-   - Confusing build context (host) with container filesystem
-
-### The WORKDIR Magic
-
-Remember the transformation from verbose to clean:
-
-**Without WORKDIR:**
-```dockerfile
-RUN mkdir /app
-COPY server.go /app/server.go
-CMD ["go", "run", "/app/server.go"]
-```
-
-**With WORKDIR:**
-```dockerfile
-WORKDIR /app
-COPY server.go .
-CMD ["go", "run", "server.go"]
-```
-
-The difference is dramatic—cleaner code, better maintainability, and professional Docker images.
-
-### Next Steps
-
-In the next chapter, we'll explore **Detached Mode** and learn how to run containers in the background, manage long-running processes, and interact with containers without blocking your terminal. We'll also dive deeper into container lifecycle management, examining how `WORKDIR` and `CMD` work together in production scenarios.
-
-### Quick Reference Card
-
-```dockerfile
-# Basic WORKDIR
-WORKDIR /app
-
-# With environment variable
-ENV APP_HOME=/opt/app
-WORKDIR ${APP_HOME}
-
-# Multiple WORKDIR (builds path)
-WORKDIR /app
-WORKDIR src      # Now at /app/src
-
-# Copy to WORKDIR
-WORKDIR /app
-COPY . .         # Copies to /app/
-
-# Run command in WORKDIR
-WORKDIR /app
-RUN npm install  # Runs in /app/
-
-# CMD in WORKDIR context
-WORKDIR /app
-CMD ["node", "server.js"]  # Runs /app/server.js
-```
-
-## Conclusion
-
-The `WORKDIR` instruction is a small but mighty tool in your Docker arsenal. While it might seem like a simple convenience feature, it's actually a fundamental component of professional Docker image creation. Proper use of `WORKDIR` leads to:
-
-- **Cleaner Dockerfiles** - No repetitive absolute paths
-- **Easier maintenance** - Change location in one place
-- **Better debugging** - Consistent runtime environment
-- **Professional standards** - Following Docker best practices
-
-As you continue your Docker journey, you'll find that `WORKDIR`, combined with other instructions like `CMD`, `COPY`, and `RUN`, forms the foundation of well-architected container images. Master these basics, and you'll be well-prepared to tackle more complex Docker scenarios.
-
-Remember: **WORKDIR is not just about convenience—it's about creating maintainable, professional Docker images that you and your team can work with confidently.**
+**Prerequisites:** [Chapter 12](12_linux_basic_commands.md) (paths) and [Chapters 15](15_towards_the_dockerfile.md)–[16](16_cmd_deep_dive.md).
 
 ---
 
-**In the next chapter**, we'll explore running containers in detached mode, managing background processes, and controlling container lifecycle—essential skills for production deployments and long-running services. See you there!
+## What you will learn
+
+- What the **working directory** is (a general Linux idea) and where containers start by default
+- What `WORKDIR` does and why it beats `RUN mkdir` and `RUN cd`
+- Absolute vs relative `WORKDIR`, and how a chain of them resolves
+- Which instructions are affected (and how `COPY` paths are interpreted)
+- How to override at run time (`-w`), how it interacts with `exec`, `USER`, and volumes
+- Common patterns, mistakes and troubleshooting
+
+---
+
+## 1. The working directory (a reminder)
+
+Every running process has a **current working directory (cwd)**. **Relative paths** (`server.go`, `./data`, `../x`) are resolved from it (Chapter 12). Check it with `pwd`.
+
+By default the working directory in a container is **`/`**, unless the image sets one:
+
+```bash
+docker run --rm ubuntu:24.04 pwd          # /
+docker run --rm node:22 pwd               # /  (Node's official image doesn't set one)
+docker run --rm python:3.12 pwd           # /
+docker run --rm golang:1.22 pwd           # /go   (this image does set WORKDIR)
+```
+
+Being in `/` is inconvenient, and it's untidy to put your application into the root of the file system.
+
+---
+
+## 2. The problem: life without `WORKDIR`
+
+```dockerfile
+FROM ubuntu:24.04
+RUN apt-get update && apt-get install -y --no-install-recommends golang-go && rm -rf /var/lib/apt/lists/*
+RUN mkdir /app
+COPY server.go /app/server.go
+COPY config/app.conf /app/config/app.conf
+CMD ["go", "run", "/app/server.go"]
+```
+
+Issues:
+
+1. `/app` is spelled out again and again. Moving the app means editing every line.
+2. A missed slash sends a file to the wrong place.
+3. Anyone who runs `docker run -it IMAGE bash` (or `docker exec`) starts in `/`, far from the code.
+4. Relative commands (`go run server.go`) don't work.
+
+---
+
+## 3. What `WORKDIR` does
+
+```dockerfile
+WORKDIR /app
+```
+
+1. **Creates** the directory (and missing parents) if it doesn't exist. No need for `RUN mkdir`.
+2. **Sets it as the current directory** for every *following* `RUN`, `CMD`, `ENTRYPOINT`, `COPY` and `ADD`.
+3. **Is stored in the image's metadata**, so at run time the container's main process (and `docker exec`) starts there too.
+
+```dockerfile
+FROM ubuntu:24.04
+RUN apt-get update && apt-get install -y --no-install-recommends golang-go && rm -rf /var/lib/apt/lists/*
+WORKDIR /app
+COPY server.go .                # . means "the working directory" → /app/server.go
+COPY config/ ./config/          # → /app/config/
+CMD ["go", "run", "server.go"]  # runs in /app
+```
+
+To change the location you edit **one** line.
+
+### How `COPY`/`ADD` read paths
+
+| Side | Interpreted relative to |
+|---|---|
+| **Source** (`COPY src ...`) | The **build context** on your machine (not `WORKDIR`) |
+| **Destination** (`COPY ... dest`) | The image's **`WORKDIR`** if `dest` is relative; the file system root if it starts with `/` |
+
+```dockerfile
+WORKDIR /app
+COPY server.go ./           # /app/server.go
+COPY server.go .            # same
+COPY server.go /app/        # same (absolute)
+COPY server.go /server.go   # /server.go: NOT in /app!
+```
+
+A common confusion: **build context** (`docker build .`, on the host) vs **WORKDIR** (inside the image). They are unrelated file systems.
+
+---
+
+## 4. `WORKDIR` vs `RUN mkdir` vs `RUN cd`
+
+| | `RUN mkdir /app` | `RUN cd /app` | `WORKDIR /app` |
+|---|---|---|---|
+| Creates the directory | Yes (fails if it exists, unless `-p`) | No | Yes (no error if it exists) |
+| Changes the directory for later instructions | **No** | **No** (only within that one `RUN`'s shell) | **Yes** |
+| Affects the container at run time | No | No | **Yes** |
+
+Each `RUN` starts a fresh shell, so:
+
+```dockerfile
+RUN cd /app
+RUN pwd              # prints "/": the cd was forgotten
+```
+
+If you truly need a directory change for one command, chain it: `RUN cd /tmp && make`. Or use `WORKDIR` and change back.
+
+Conclusion: **use `WORKDIR` for the application's directory.**
+
+---
+
+## 5. Absolute and relative `WORKDIR`
+
+```dockerfile
+WORKDIR /app        # absolute: always exactly /app
+WORKDIR backend     # relative: /app/backend (resolved against the previous WORKDIR)
+WORKDIR src         # /app/backend/src
+RUN pwd             # /app/backend/src
+WORKDIR /opt/other  # absolute again: resets the chain
+```
+
+- A relative `WORKDIR` starts from the *previous* `WORKDIR` (or `/` if there was none).
+- Prefer **absolute** paths: they are unambiguous and don't break if someone inserts a line above.
+- **Variables work**, as long as they are defined by `ENV` or `ARG` earlier: `ENV APP_HOME=/opt/myapp` then `WORKDIR ${APP_HOME}`. (`ENV` also stays available at run time.)
+- **Multiple `WORKDIR`s are fine**, but avoid needless chains: `WORKDIR /app/src/main` is clearer than three lines. (Each `WORKDIR` adds a tiny metadata step to the history, and creates the directory if missing; the size impact is negligible.)
+- Don't use `WORKDIR` merely for a temporary excursion, or you must remember to switch back. Prefer `RUN cd /tmp && ...` for one-off work, or use absolute paths.
+
+---
+
+## 6. Runtime behavior and overrides
+
+The image's `WORKDIR` becomes the container's default working directory:
+
+```bash
+docker run --rm -it go-server:1.0.0 bash      # prompt: root@…:/app#
+docker exec -it mycontainer bash              # also starts in /app (the container's working dir)
+```
+
+Override when needed:
+
+```bash
+docker run --rm -w /tmp ubuntu:24.04 pwd               # /tmp
+docker exec -w /etc mycontainer pwd                    # /etc
+```
+
+In **Docker Compose**: `working_dir: /app` under the service.
+
+Check what an image uses:
+
+```bash
+docker inspect -f '{{.Config.WorkingDir}}' go-server:1.0.0     # /app
+```
+
+---
+
+## 7. `WORKDIR` and other features
+
+### With `USER` (permissions) 🔴
+`WORKDIR` creates the directory if it doesn't exist. Depending on the builder version, the created directory may be **owned by root**, so a non-root `USER` cannot write into it. Don't rely on the default. Be explicit:
+
+```dockerfile
+FROM node:22-alpine
+RUN addgroup -g 10001 app && adduser -D -u 10001 -G app app
+WORKDIR /app
+COPY --chown=app:app package*.json ./     # files owned by app
+RUN npm ci --omit=dev
+COPY --chown=app:app . .
+RUN chown app:app /app                    # make the directory itself writable, if the app must create files there
+USER app
+CMD ["node", "server.js"]
+```
+
+(Chapter 13: permissions and non-root users.)
+
+### With volumes and bind mounts
+A mount replaces the contents of its target path, so a mount to `/app` **hides** the files you copied there:
+
+```bash
+docker run --rm -v "$PWD":/app myimage      # your host folder now appears at /app; the image's /app content is hidden
+```
+
+That is intentional for development ("live code"), but a surprise if you didn't expect it. Mount data into a sub-folder (`-v data:/app/data`) to keep the code.
+
+### With multi-stage builds
+Each `FROM` starts a new stage with its own `WORKDIR` (Chapter 20):
+
+```dockerfile
+FROM golang:1.22 AS build
+WORKDIR /src
+COPY . .
+RUN CGO_ENABLED=0 go build -o /out/server .
+
+FROM gcr.io/distroless/static-debian12
+WORKDIR /app
+COPY --from=build /out/server .
+CMD ["./server"]
+```
+
+(Distroless has no shell, so exec-form `CMD` is required: Chapter 16.)
+
+### Choosing the directory
+
+| Good | Why |
+|---|---|
+| `/app` | Short, common convention |
+| `/usr/src/app` | Convention used by many Node.js examples |
+| `/opt/<name>` | Standard place for optional third-party software |
+| `/home/<user>/app` | When running as a non-root user with a home |
+
+Avoid: `/` (messy), `/root` (root's home), `/etc`, `/bin`, `/usr/bin`, `/tmp` (temporary, may be cleared), and other system directories. Follow the base image's convention when one exists (`golang` uses `/go`; `nginx` serves from `/usr/share/nginx/html`).
+
+---
+
+## 8. Common patterns
+
+**Node.js (dependency-cache friendly):**
+
+```dockerfile
+FROM node:22-alpine
+WORKDIR /usr/src/app
+COPY package*.json ./          # copy only the dependency manifests first
+RUN npm ci --omit=dev          # this layer is cached until the manifests change
+COPY . .                       # your code changes often: keep it last
+EXPOSE 3000
+CMD ["node", "server.js"]
+```
+
+**Python:**
+
+```dockerfile
+FROM python:3.12-slim
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+COPY . .
+CMD ["python", "main.py"]
+```
+
+**Tests in the same layout:** `docker run --rm -w /app/tests IMG pytest`.
+
+---
+
+## 9. Hands-on lab
+
+**Lab 1: default working directory and `WORKDIR`**
+
+```bash
+mkdir wd-lab && cd wd-lab
+cat > Dockerfile << 'EOF'
+FROM alpine:3.20
+RUN pwd                      # prints / during the build
+WORKDIR /test
+RUN pwd && echo "hello" > note.txt
+WORKDIR sub
+RUN pwd                      # /test/sub
+CMD ["sh"]
+EOF
+docker build --progress=plain -t wd-lab . 2>&1 | grep -E '^#[0-9]+ [0-9.]+ /|RUN'
+docker run --rm -it wd-lab
+```
+
+Inside: `pwd` (→ `/test/sub`), `ls` (nothing), `cat ../note.txt` (`hello`), `cd / && ls` (you'll see `test`).
+
+**Lab 2: prove `RUN cd` doesn't stick**
+
+```bash
+printf 'FROM alpine:3.20\nRUN mkdir /work\nRUN cd /work\nRUN pwd\n' > Dockerfile
+docker build --no-cache --progress=plain . 2>&1 | grep -A1 'RUN pwd'      # prints /
+```
+
+**Lab 3: the Go server with and without `WORKDIR`**: rebuild the Chapter 15 server, then run `docker run --rm -it IMG pwd` and `docker inspect -f '{{.Config.WorkingDir}}' IMG`.
+
+**Lab 4: overrides**
+
+```bash
+docker run --rm -w /etc alpine:3.20 pwd            # /etc
+docker run -d --name wd alpine:3.20 sleep 300
+docker exec wd pwd                                   # /
+docker exec -w /tmp wd pwd                           # /tmp
+docker rm -f wd
+```
+
+**Lab 5: bind-mount hides files**
+
+```bash
+mkdir mounted && echo "from host" > mounted/host.txt
+docker run --rm -v "$PWD/mounted":/test wd-lab ls /test      # host.txt (image's note.txt is hidden)
+docker run --rm wd-lab ls /test                              # note.txt (no mount: the image's files)
+```
+
+---
+
+## 10. Troubleshooting
+
+| Symptom | Likely cause | Fix |
+|---|---|---|
+| `can't open file 'server.go': No such file or directory` at run time | `COPY` destination differs from `WORKDIR`, or CMD uses a wrong path | `docker run --rm -it IMG sh`, then `pwd; ls -R` |
+| File copied to `/` instead of `/app` | Absolute destination (`COPY x /x`) or `WORKDIR` set *after* `COPY` | Put `WORKDIR` before `COPY`; use relative destinations |
+| `docker exec` starts in `/` | Image has no `WORKDIR` | Add `WORKDIR` (or use `docker exec -w`) |
+| `RUN cd dir` then later commands run in the wrong place | `cd` doesn't persist between `RUN`s | Use `WORKDIR` |
+| `COPY failed: file not found in build context` | The **source** path is wrong (relative to the context, not `WORKDIR`) | Check the path from where you run `docker build`; check `.dockerignore` |
+| Permission denied writing in `/app` at run time | Directory owned by root but the app runs as non-root | `chown` it, or `COPY --chown`, or create it with the right owner |
+| My code disappeared when I ran with `-v $PWD:/app` | The mount hides the image's `/app` | Intended: it shows your host files instead. Mount a subfolder for data only |
+| `WORKDIR` variable is empty | `ENV/ARG` not defined **before** it | Move the `ENV` above |
+
+---
+
+## 11. Best practices
+
+1. **Always** set a `WORKDIR` for your application. Don't rely on `/`.
+2. Use an **absolute** path (`/app`) for the main `WORKDIR`, and set it **early**, right after `FROM` and installation steps.
+3. Use **`WORKDIR`**, never `RUN mkdir && cd` to set up the app folder.
+4. Copy files with **relative destinations** (`COPY . .`), so the destination follows `WORKDIR`.
+5. Order for caching: dependency manifests → install → source (Chapter 15).
+6. Don't use system directories; follow conventions of your language and base image.
+7. With non-root users, set ownership explicitly.
+8. Remember that mounts replace the directory's contents.
+
+---
+
+## 12. Summary
+
+- `WORKDIR /path` creates the directory if needed, then sets the working directory for following `RUN`, `CMD`, `ENTRYPOINT`, `COPY` and `ADD`, and for the container at start-up.
+- `RUN cd` and `RUN mkdir` don't do that. Each `RUN` is a separate shell.
+- Relative `WORKDIR`s chain from the previous one; prefer absolute paths; `ENV`/`ARG` variables can be used.
+- Override at run time with `-w` (`docker run`, `docker exec`).
+- `COPY` sources come from the build context; destinations are relative to `WORKDIR`.
+- Watch out for ownership with non-root users, and for mounts that hide the directory's contents.
+
+---
+
+## 13. Check your understanding
+
+1. What is the default working directory in a container from an image that doesn't set one?
+2. Why does `RUN cd /app` not affect the next `RUN`?
+3. After `WORKDIR /app`, where does `COPY config.json ./conf/` put the file? And `COPY config.json /conf/`?
+4. What is the working directory after `WORKDIR /a`, `WORKDIR b`, `WORKDIR /c`, `WORKDIR d`?
+5. How do you start a container in `/tmp` without editing the Dockerfile?
+6. You run `docker run -v "$PWD":/app IMG` and the files you `COPY`d into `/app` seem to vanish. Why?
+
+<details>
+<summary>Answers</summary>
+
+1. `/` (the root directory).
+2. Each `RUN` runs in a separate shell; the directory change lasts only for that instruction.
+3. `/app/conf/config.json`; and `/conf/config.json` (absolute path, outside `/app`).
+4. `/c/d`.
+5. `docker run -w /tmp IMG ...`
+6. The bind mount hides whatever the image had at `/app`; you see your host folder's contents instead.
+</details>
+
+**Practice**
+
+1. Rewrite the "without `WORKDIR`" Dockerfile from section 2 to use `WORKDIR` and short paths. Verify with `docker inspect -f '{{.Config.WorkingDir}}'`.
+2. Create a small project with `main.py`, `utils/helper.py` and `config/settings.json`; write a Dockerfile that copies the structure into `/usr/src/app` (`COPY . .`) and runs `main.py`. Confirm with `docker run --rm IMG find . -type f`.
+3. Add `USER` with a non-root account to that Dockerfile and make the app write a log file into `/usr/src/app/logs`. Make it work (hint: create and `chown` the directory).
+
+---
+
+**Next:** [Chapter 18 – Detached Mode](18_detach_mode.md)
