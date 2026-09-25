@@ -1,1627 +1,323 @@
-# Chapter 40: Multiple NICs In A Single Computer - In Details
+# Chapter 40: Multiple NICs in a Single Computer
 
-## Overview
+> **In one sentence:** Almost every real computer has **more than one network interface** (Ethernet + Wi-Fi + loopback + VPN + Docker bridge + more), each connected to a different network with its own IP address, mask and possibly gateway, which raises the question every OS must answer for **every single packet**: "*which interface should this go out of?*" (the answer is the **routing table**, the topic of Chapters 42–43).
 
-You understand network communication with a single NIC. You've seen how a computer connects to a router via an Ethernet cable or WiFi, obtains an IP address through DHCP, and sends data through that single network interface.
+**Level:** 🟡 Intermediate · **Reading time:** ~45 minutes
 
-**But what if a computer has multiple NICs?**
-
-Multiple Network Interface Cards (NICs) in a single computer fundamentally change everything. Instead of one connection to one network with one IP address, you now have:
-
-- **Multiple physical connections** (Ethernet + WiFi + USB WiFi adapter)
-- **Multiple IP addresses** (one per NIC)
-- **Multiple networks** (each NIC connects to a potentially different network)
-- **A critical routing problem:** When sending data, which NIC should the OS use?
-
-This chapter explores:
-- **PCI (Peripheral Component Interconnect):** The bus system that allows multiple hardware components to connect to a motherboard
-- **Multiple NIC configurations:** How and why computers have multiple network interfaces
-- **The IP address assignment problem:** How each NIC gets its own IP address
-- **The routing decision problem:** How the OS determines which NIC to use when sending data
-
-**This chapter sets up the critical problem that routing tables solve.**
+**Prerequisites:** Chapters [32](32_first_computer_and_first_router_in_details.md) (NIC basics), [33](33_subnetting_and_subnet_masks_in_details.md) (masks) and [39](39_networking_inside_a_network_arp_protocol_in_details.md) (ARP).
 
 ---
 
-## Review: Single NIC Operation
+## What you will learn
 
-### The Simple Case We've Studied So Far
-
-```
-┌──────────────────────────────┐
-│       Computer               │
-│  ┌────────────────────────┐  │
-│  │  Operating System      │  │
-│  │  ┌──────────────────┐  │  │
-│  │  │ Application Layer│  │  │
-│  │  ├──────────────────┤  │  │
-│  │  │Presentation Layer│  │  │
-│  │  ├──────────────────┤  │  │
-│  │  │  Session Layer   │  │  │
-│  │  ├──────────────────┤  │  │
-│  │  │ Transport Layer  │  │  │
-│  │  ├──────────────────┤  │  │
-│  │  │  Network Layer   │  │  │
-│  │  ├──────────────────┤  │  │
-│  │  │ Data Link Layer  │  │  │
-│  │  ├──────────────────┤  │  │
-│  │  │ Physical Layer   │  │  │
-│  │  │ (Binary: 010101) │  │  │
-│  │  └────────┬─────────┘  │  │
-│  └───────────┼────────────┘  │
-│              │               │
-│       ┌──────▼──────┐        │
-│       │     NIC     │        │
-│       │ (Converts   │        │
-│       │  Binary →   │        │
-│       │  Electric   │        │
-│       │  Signals)   │        │
-│       └──────┬──────┘        │
-└──────────────┼───────────────┘
-               │
-         Ethernet Cable
-               │
-               ▼
-         ┌─────────┐
-         │  Router │
-         └─────────┘
-```
-
-**Single NIC workflow:**
-
-1. **Application Layer:** HTTP request created
-2. **Transport Layer:** Port numbers assigned (source + destination)
-3. **Network Layer:** IP addresses assigned (source + destination)
-4. **Data Link Layer:** MAC addresses assigned (source + destination)
-5. **Physical Layer:** OS converts everything to binary (0s and 1s)
-6. **NIC receives binary data:** Converts to electrical signals
-7. **NIC sends to router:** Via Ethernet cable (wired) or electromagnetic waves (WiFi)
-
-**Simple and straightforward!**
+- How a computer gets **several NICs** (PCIe/PCI, USB, onboard, Wi-Fi, and **virtual** ones)
+- What a computer looks like when it is **connected to several networks at once** ("multihomed" / "dual-homed")
+- How **DHCP runs independently on each interface**
+- **Why choosing the right interface is a real problem**, and what happens when the wrong one is used
+- Why you can't just "use the first NIC": the OS's dilemma, previewing the routing table
+- **Real-world use cases**: firewalls, servers with management networks, VPNs, laptops, Docker hosts, hypervisors
+- **Hands-on:** build a two-NIC host in namespaces and watch it pick the right interface
 
 ---
 
-### NIC's Job: Send and Receive
+## 1. Review: everything so far had one NIC
 
-**NIC (Network Interface Card) has two primary responsibilities:**
-
-```
-┌─────────────────────────────────────┐
-│           NIC Functions             │
-├─────────────────────────────────────┤
-│ 1. SEND (Transmit):                 │
-│    - Receive binary data from OS    │
-│    - Convert to electrical signals  │
-│    - Transmit to connected device   │
-│                                     │
-│ 2. RECEIVE:                         │
-│    - Receive electrical signals     │
-│    - Convert to binary data         │
-│    - Send to OS for processing      │
-└─────────────────────────────────────┘
-```
-
-**Signal types:**
-
-- **Ethernet (wired):** Electrical signals through copper wire (current on/off at the speed of electricity)
-- **WiFi (wireless):** Electromagnetic signals through air (radio waves)
-
-**Example transmission:**
+In earlier chapters our computer had **one network card, connected to one network** (`192.168.1.0/24`) with one gateway. The decision "which NIC?" never arose, because there was only one candidate:
 
 ```
-OS → NIC:
-Binary: 01001000 01100101 01101100 01101100 01101111
-        (H       e       l       l       o)
-
-NIC → Router (Ethernet):
-Electrical pulses: High voltage (1), Low voltage (0)
-Time sequence: ON-OFF-ON-OFF-ON-...
-
-NIC → Router (WiFi):
-Electromagnetic waves: Frequency modulation
-Radio signals at 2.4 GHz or 5 GHz
+Computer ── eth0 (192.168.1.10/24) ── switch ── router (192.168.1.1) ── Internet
 ```
+That's the simple case, and it's worth knowing that the rules you learned (the four settings, ARP for the next hop, mask-based local/remote decision) are unchanged. Multiple NICs add **only one new question**: *which of my interfaces?*
 
 ---
 
-### Router's Internal Structure (Review)
+## 2. Where do extra NICs come from?
 
-**Remember: Home routers have two components:**
+### 2.1 Buses: how NICs connect to the computer
+A NIC is a hardware device that sits on the computer's internal **bus**:
 
-```
-┌───────────────────────────────────────┐
-│          HOME ROUTER                  │
-│  ┌─────────────────────────────────┐  │
-│  │    Switch Component (Layer 2)   │  │
-│  │  - CAM table                    │  │
-│  │  - Forwards frames locally      │  │
-│  │  - Handles same-network traffic │  │
-│  └─────────────────────────────────┘  │
-│                                       │
-│  ┌─────────────────────────────────┐  │
-│  │   Router Component (Layer 3)    │  │
-│  │  - Routing table                │  │
-│  │  - Routes between networks      │  │
-│  │  - Handles different-network    │  │
-│  │    traffic                      │  │
-│  └─────────────────────────────────┘  │
-└───────────────────────────────────────┘
-```
+| Bus | What it is | NIC examples |
+|---|---|---|
+| **PCI Express (PCIe)** | The modern high-speed serial bus connecting the CPU to devices (its ancestor is **PCI**, Peripheral Component Interconnect) | Onboard Ethernet chips, add-in NICs (1/10/25/100 Gbit/s), M.2 Wi-Fi cards |
+| **USB** | External plug-and-play bus | USB Ethernet adapters, USB Wi-Fi sticks, phone tethering (RNDIS/CDC-ECM) |
+| **Thunderbolt** | PCIe over a cable | Fast external NICs |
+| **SoC-integrated** | Ethernet/Wi-Fi inside the chip | Phones, Raspberry Pi (USB-attached internally on some models) |
 
-**When Computer A sends to Computer E (same network):**
-- Switch component handles forwarding
-- Router component stays idle
+Analogy (PCI as roads): the motherboard is a city; PCIe is the highway system connecting neighborhoods (CPU, memory, GPU, storage, NICs) — a NIC is a building on that road with a door (the RJ-45 port or antenna) to the outside world. You can build more buildings (add cards) as long as the road has slots (lanes).
 
-**When Computer A sends to Internet (different network):**
-- Router component activates
-- Makes routing decision
-- Forwards to WAN interface
-
----
-
-## The Limitation We've Assumed
-
-### Implicit Assumption in All Previous Examples
-
-**Every example so far has had this constraint:**
-
-```
-One Computer = One NIC = One IP Address = One Network
-
-Computer A:
-- NIC: 1
-- IP: 192.168.1.2
-- Connected to: Router's LAN (192.168.1.0/24)
-- MAC: A
-```
-
-**This is the simple case. But real-world computers often have multiple NICs.**
-
----
-
-## Enter PCI: Peripheral Component Interconnect
-
-### What is PCI?
-
-**PCI = Peripheral Component Interconnect**
-
-Let's break down this term:
-
-```
-PERIPHERAL:
-- Means: Path, road, line
-- Analogy: Streets in a city
-
-COMPONENT:
-- Means: Hardware devices (RAM, CPU, graphics card, USB devices)
-- Analogy: Houses along the street
-
-INTERCONNECT:
-- Means: Connection between components
-- Analogy: How houses connect via the street
-```
-
----
-
-### The Road Analogy
-
-**Imagine a physical road in a neighborhood:**
-
-```
-        Habib's House
-             │
-             │ (connected to road)
-             │
-═════════════╪═════════════════════════════════════
-             │                      Road
-             │                  (The Path)
-═════════════╪═════════════════════════════════════
-             │
-             │ (connected to road)
-             │
-         Your House
-
-
-═════════════╪═════════════════════════════════════
-             │
-          Friend's
-           House
-```
-
-**How it works:**
-
-1. **Peripheral (Road):** The physical path connecting everything
-2. **Component (Houses):** Individual buildings along the road
-3. **Interconnect:** The connections - you can travel from your house to Habib's house via the road
-
-**If you want to visit Habib:**
-- Exit your house
-- Walk on the road
-- Arrive at Habib's house
-
-**If Habib wants to visit your friend:**
-- Exit Habib's house
-- Walk on the road
-- Arrive at friend's house
-
-**The road enables interconnection between all components (houses).**
-
----
-
-### PCI in Computer Motherboards
-
-**A computer motherboard is like the neighborhood:**
-
-```
-┌─────────────────────────────────────────────────────────┐
-│                    MOTHERBOARD                          │
-│                                                         │
-│   CPU Slot ───────┐                                    │
-│                   │                                    │
-│   RAM Slot 1 ─────┤                                    │
-│   RAM Slot 2 ─────┼──── PCI Bus 0 (Main Bus) ─────    │
-│   RAM Slot 3 ─────┤                                    │
-│                   │                                    │
-│   Graphics ───────┤                                    │
-│   Card Slot       │                                    │
-│                   │                                    │
-│   USB Slot 1 ─────┤                                    │
-│   USB Slot 2 ─────┼──── PCI Bus 1 ─────────────       │
-│   USB Slot 3 ─────┤                                    │
-│                   │                                    │
-│   Ethernet ───────┼──── PCI Bus 2 ─────────────       │
-│   Slot            │                                    │
-│                   │                                    │
-│   Monitor ────────┼──── PCI Bus 3 ─────────────       │
-│   Slot (HDMI)     │                                    │
-│                   │                                    │
-│   Power ──────────┘                                    │
-│   Connector                                            │
-│                                                         │
-│   (All buses interconnected via chipset)               │
-└─────────────────────────────────────────────────────────┘
-```
-
-**Components that connect via PCI:**
-
-- **CPU (Processor):** The brain, processes instructions
-- **RAM (Memory):** Stores data temporarily
-- **Graphics Card:** Renders video output
-- **USB Devices:** Keyboards, mice, WiFi adapters, external storage
-- **Ethernet Port:** Wired network connection
-- **Monitor Port:** Video output (HDMI, DisplayPort, VGA)
-- **Power Connector:** Provides electricity
-
----
-
-### PCI Bus System in Detail
-
-**Motherboards have multiple PCI buses:**
-
-```
-PCI Bus 0 (Main Bus)
-═══════╪═════════╪═════════╪═════════════════════
-      Slot 0   Slot 1   Slot 2
-       │        │        │
-       CPU      RAM      Graphics
-                         Card
-
-PCI Bus 1
-═══════╪═════════╪═════════════════════════════
-      Slot 0   Slot 1
-       │        │
-      USB 1    USB 2
-
-PCI Bus 2
-═══════╪═════════════════════════════════════════
-      Slot 0
-       │
-     Ethernet
-
-PCI Bus 3
-═══════╪═════════════════════════════════════════
-      Slot 0
-       │
-     Monitor
-     (HDMI)
-```
-
-**Naming convention:**
-
-- **Bus numbering:** PCI Bus 0, PCI Bus 1, PCI Bus 2, etc.
-- **Slot numbering within each bus:** Slot 0, Slot 1, Slot 2, etc.
-- **Example:** USB device on PCI Bus 1, Slot 0
-
----
-
-### How Components Communicate via PCI
-
-**CPU wants to control RAM:**
-
-```
-Step 1: CPU needs to access RAM
-Step 2: CPU sends request via PCI Bus 0
-Step 3: Request travels to RAM's slot
-Step 4: RAM receives and responds
-Step 5: Response travels back via PCI Bus 0
-Step 6: CPU receives response
-```
-
-**CPU wants to send data to NIC (Ethernet):**
-
-```
-Step 1: CPU has data to send
-Step 2: CPU sends to PCI Bus 2 (where Ethernet NIC is)
-Step 3: Data travels to Ethernet NIC's slot
-Step 4: NIC receives binary data
-Step 5: NIC converts to electrical signals
-Step 6: NIC transmits to router
-```
-
-**Key insight: PCI buses allow all components to interconnect and communicate.**
-
----
-
-## Multiple NICs: The Reality
-
-### Desktop Computer Example
-
-**Most desktop computers have these network options:**
-
-```
-┌────────────────────────────────────┐
-│      Desktop Computer (Back)       │
-│                                    │
-│  ┌────┐ ┌────┐ ┌────┐             │
-│  │USB1│ │USB2│ │USB3│  ← 3 USB Ports
-│  └────┘ └────┘ └────┘             │
-│                                    │
-│  ┌──────────┐                      │
-│  │ Ethernet │  ← Ethernet Port     │
-│  │  Port    │     (RJ-45)          │
-│  └──────────┘                      │
-│                                    │
-│  ┌────┐ ┌────┐                     │
-│  │HDMI│ │ VGA│  ← Monitor Ports    │
-│  └────┘ └────┘                     │
-│                                    │
-│  [Power]  ← Power Connector        │
-└────────────────────────────────────┘
-```
-
-**Possible network connections:**
-
-1. **Ethernet cable** plugged into Ethernet port
-2. **WiFi USB adapter** plugged into USB1, USB2, or USB3
-
-**Example scenario:**
-
-```
-USB1: Keyboard (not network)
-USB2: Mouse (not network)
-USB3: WiFi USB Adapter ← Network interface!
-
-Ethernet Port: Cable to router ← Network interface!
-
-Result: 2 network interfaces simultaneously!
-```
-
----
-
-### Laptop Computer Example
-
-**Laptops typically have:**
-
-```
-┌────────────────────────────────────┐
-│         Laptop (Sides)             │
-│                                    │
-│  Left Side:                        │
-│  ┌────┐ ┌────┐                     │
-│  │USB1│ │USB2│  ← USB Ports        │
-│  └────┘ └────┘                     │
-│                                    │
-│  ┌──────────┐                      │
-│  │ Ethernet │  ← Ethernet Port     │
-│  └──────────┘                      │
-│                                    │
-│  Right Side:                       │
-│  [HDMI]  [Audio]  [Power]          │
-│                                    │
-│  Internal (not visible):           │
-│  - Built-in WiFi adapter           │
-│  - Built-in Bluetooth              │
-└────────────────────────────────────┘
-```
-
-**Network interface options:**
-
-1. **Built-in WiFi** (inside laptop, always present)
-2. **Ethernet port** (can plug cable)
-3. **WiFi USB adapter** (can plug into USB for additional WiFi)
-4. **USB Ethernet adapter** (if built-in Ethernet broken)
-
-**Example scenario:**
-
-```
-Built-in WiFi: Connected to Router A via WiFi
-USB1: WiFi USB Adapter → Connected to Router B via WiFi
-Ethernet Port: Cable to Router C
-
-Result: 3 network interfaces simultaneously!
-```
-
----
-
-### WiFi USB Adapter
-
-**What is a WiFi USB adapter?**
-
-```
-           ┌─────────────────┐
-           │  WiFi Antenna   │
-           │      ╱│╲        │
-           └──────┼──────────┘
-                  │
-             ┌────┴─────┐
-             │   WiFi   │
-             │  Chipset │
-             └────┬─────┘
-                  │
-             ┌────┴─────┐
-             │   USB    │
-             │Connector │
-             └──────────┘
-```
-
-**Purpose:** Allows desktop computers (which typically don't have built-in WiFi) to connect wirelessly to routers.
-
-**How it works:**
-
-1. Plug USB connector into USB port
-2. OS detects new USB device
-3. Driver installed (if not already present)
-4. WiFi chipset powered via USB
-5. WiFi antenna receives electromagnetic signals from router
-6. Chipset converts WiFi signals to USB data
-7. OS treats it as a network interface
-
-**Use cases:**
-
-- Desktop computer without built-in WiFi
-- Laptop with broken built-in WiFi
-- Connecting to second WiFi network simultaneously
-- Better antenna range than built-in WiFi
-
----
-
-## The Multiple NIC Scenario
-
-### Real-World Configuration
-
-**Let's set up a specific example:**
-
-```
-┌────────────────────────────────────┐
-│       Laptop Computer              │
-│                                    │
-│  Internal WiFi: Built-in           │
-│  USB Port 1: WiFi USB Adapter      │
-│  Ethernet Port: Cable to Router    │
-│                                    │
-│  Total NICs: 3                     │
-└───┬───────────┬───────────┬────────┘
-    │           │           │
-    │ (WiFi)    │ (WiFi)    │ (Ethernet Cable)
-    │           │           │
-    ▼           ▼           ▼
-┌─────────┐ ┌─────────┐ ┌─────────┐
-│Router A │ │Router B │ │Router C │
-│ (WiFi)  │ │ (WiFi)  │ │ (Wired) │
-└─────────┘ └─────────┘ └─────────┘
-    │           │           │
-Network 1   Network 2   Network 3
-```
-
-**Three separate routers, three separate networks, one computer!**
-
----
-
-### DHCP Process for Each NIC
-
-**When the computer boots up, each NIC independently runs DHCP:**
-
-```
-NIC 1 (Built-in WiFi) connects to Router A:
-┌────────────────────────────────────────┐
-│ DHCP Process (DORA)                    │
-├────────────────────────────────────────┤
-│ 1. Discover: "I need an IP!"           │
-│ 2. Offer: "I can give you 192.168.1.2"│
-│ 3. Request: "I accept 192.168.1.2"    │
-│ 4. Acknowledge: "Confirmed!"           │
-└────────────────────────────────────────┘
-
-Result: NIC 1 gets IP 192.168.1.2
-
-
-NIC 2 (WiFi USB Adapter) connects to Router B:
-┌────────────────────────────────────────┐
-│ DHCP Process (DORA)                    │
-├────────────────────────────────────────┤
-│ 1. Discover: "I need an IP!"           │
-│ 2. Offer: "I can give you 192.168.2.2"│
-│ 3. Request: "I accept 192.168.2.2"    │
-│ 4. Acknowledge: "Confirmed!"           │
-└────────────────────────────────────────┘
-
-Result: NIC 2 gets IP 192.168.2.2
-
-
-NIC 3 (Ethernet) connects to Router C:
-┌────────────────────────────────────────┐
-│ DHCP Process (DORA)                    │
-├────────────────────────────────────────┤
-│ 1. Discover: "I need an IP!"           │
-│ 3. Offer: "I can give you 192.168.3.2"│
-│ 3. Request: "I accept 192.168.3.2"    │
-│ 4. Acknowledge: "Confirmed!"           │
-└────────────────────────────────────────┘
-
-Result: NIC 3 gets IP 192.168.3.2
-```
-
-**Critical observation: The computer now has THREE IP addresses!**
-
----
-
-### The Computer's Network State
-
-**After all three NICs complete DHCP:**
-
-```
-Computer's Network Interfaces:
-
-┌──────────────────────────────────────────────────┐
-│ NIC 1: Built-in WiFi                             │
-├──────────────────────────────────────────────────┤
-│ IP Address: 192.168.1.2                          │
-│ Subnet Mask: 255.255.255.0 (/24)                │
-│ Gateway: 192.168.1.1 (Router A)                  │
-│ MAC Address: AA:BB:CC:DD:EE:01                   │
-│ Connected to: Router A                           │
-│ Network: 192.168.1.0/24                          │
-└──────────────────────────────────────────────────┘
-
-┌──────────────────────────────────────────────────┐
-│ NIC 2: WiFi USB Adapter                          │
-├──────────────────────────────────────────────────┤
-│ IP Address: 192.168.2.2                          │
-│ Subnet Mask: 255.255.255.0 (/24)                │
-│ Gateway: 192.168.2.1 (Router B)                  │
-│ MAC Address: AA:BB:CC:DD:EE:02                   │
-│ Connected to: Router B                           │
-│ Network: 192.168.2.0/24                          │
-└──────────────────────────────────────────────────┘
-
-┌──────────────────────────────────────────────────┐
-│ NIC 3: Ethernet                                  │
-├──────────────────────────────────────────────────┤
-│ IP Address: 192.168.3.2                          │
-│ Subnet Mask: 255.255.255.0 (/24)                │
-│ Gateway: 192.168.3.1 (Router C)                  │
-│ MAC Address: AA:BB:CC:DD:EE:03                   │
-│ Connected to: Router C                           │
-│ Network: 192.168.3.0/24                          │
-└──────────────────────────────────────────────────┘
-
-Total IP Addresses: 3
-Total Networks: 3
-Total Physical Connections: 3
-```
-
----
-
-### Five NICs Example (Extreme Case)
-
-**Hypothetical: Computer with 5 NICs:**
-
-```
-Computer connects to 5 different routers:
-
-Router 1 (192.168.1.0/24)
-   └─ NIC 1 gets 192.168.1.2
-
-Router 2 (192.168.2.0/24)
-   └─ NIC 2 gets 192.168.2.2
-
-Router 3 (192.168.3.0/24)
-   └─ NIC 3 gets 192.168.3.2
-
-Router 4 (192.168.4.0/24)
-   └─ NIC 4 gets 192.168.4.2
-
-Router 5 (192.168.5.0/24)
-   └─ NIC 5 gets 192.168.5.2
-
-Result:
-- Computer has 5 IP addresses
-- Computer connected to 5 different networks
-- Each NIC is an independent network interface
-```
-
-**Question:** How many IP addresses does the computer have?
-**Answer:** Five!
-
-**Question:** How many networks is the computer connected to?
-**Answer:** Five (assuming each router runs its own independent network)!
-
----
-
-## Network Topology with Multiple NICs
-
-### Complete Network Diagram
-
-```
-┌──────────────────────────────────────────────────────────┐
-│                                                          │
-│            Computer (Our Laptop)                         │
-│                                                          │
-│   ┌──────────────┐  ┌──────────────┐  ┌─────────────┐  │
-│   │ NIC 1        │  │ NIC 2        │  │ NIC 3       │  │
-│   │ Built-in WiFi│  │ USB WiFi     │  │ Ethernet    │  │
-│   │ IP: 1.2      │  │ IP: 2.2      │  │ IP: 3.2     │  │
-│   │ MAC: ...:01  │  │ MAC: ...:02  │  │ MAC: ...:03 │  │
-│   └──────┬───────┘  └──────┬───────┘  └──────┬──────┘  │
-└──────────┼──────────────────┼──────────────────┼─────────┘
-           │                  │                  │
-           │ WiFi             │ WiFi             │ Ethernet
-           │ Signal           │ Signal           │ Cable
-           │                  │                  │
-           ▼                  ▼                  ▼
-    ┌─────────────┐    ┌─────────────┐    ┌─────────────┐
-    │  Router A   │    │  Router B   │    │  Router C   │
-    │  Gateway:   │    │  Gateway:   │    │  Gateway:   │
-    │  192.168.1.1│    │  192.168.2.1│    │  192.168.3.1│
-    └──────┬──────┘    └──────┬──────┘    └──────┬──────┘
-           │                   │                   │
-           │                   │                   │
-    ┌──────┴──────┐    ┌──────┴──────┐    ┌──────┴──────┐
-    │  Network 1  │    │  Network 2  │    │  Network 3  │
-    │192.168.1.0  │    │192.168.2.0  │    │192.168.3.0  │
-    │    /24      │    │    /24      │    │    /24      │
-    └─────────────┘    └─────────────┘    └─────────────┘
-           │                   │                   │
-      Other devices       Other devices       Other devices
-      on Network 1        on Network 2        on Network 3
-           │                   │                   │
-           ▼                   ▼                   ▼
-    ┌──────────┐        ┌──────────┐        ┌──────────┐
-    │ Host 1   │        │ Host 2   │        │ Host 3   │
-    │ IP: 1.10 │        │ IP: 2.10 │        │ IP: 3.10 │
-    └──────────┘        └──────────┘        └──────────┘
-```
-
-**Each router has other hosts (computers, phones, IoT devices) connected to it.**
-
----
-
-### Each Router's Perspective
-
-**Router A's view:**
-
-```
-Router A knows:
-- Gateway: 192.168.1.1 (me)
-- Network: 192.168.1.0/24
-- Connected hosts:
-  - 192.168.1.2 (Our computer's NIC 1)
-  - 192.168.1.10 (Host 1)
-  - 192.168.1.11 (Another device)
-  - ...
-
-Router A DOESN'T know:
-- Our computer also has NIC 2 and NIC 3
-- Our computer is also on Network 2 and Network 3
-- From Router A's perspective: Our computer is just another host
-```
-
-**Router B's view:**
-
-```
-Router B knows:
-- Gateway: 192.168.2.1 (me)
-- Network: 192.168.2.0/24
-- Connected hosts:
-  - 192.168.2.2 (Our computer's NIC 2)
-  - 192.168.2.10 (Host 2)
-  - ...
-
-Router B DOESN'T know:
-- Our computer also has NIC 1 and NIC 3
-- From Router B's perspective: Our computer is just another host
-```
-
-**Router C's view:**
-
-```
-Router C knows:
-- Gateway: 192.168.3.1 (me)
-- Network: 192.168.3.0/24
-- Connected hosts:
-  - 192.168.3.2 (Our computer's NIC 3)
-  - 192.168.3.10 (Host 3)
-  - ...
-
-Router C DOESN'T know:
-- Our computer also has NIC 1 and NIC 2
-- From Router C's perspective: Our computer is just another host
-```
-
-**Critical insight: Each router thinks the computer is a single-homed host (one NIC). They have no idea the computer is multi-homed (multiple NICs).**
-
----
-
-## The Routing Problem
-
-### Scenario: Sending Data to Host 3
-
-**Setup:**
-
-```
-Our Computer wants to communicate with Host 3:
-- Host 3 IP: 192.168.3.10
-- Host 3 is on Network 3 (192.168.3.0/24)
-- Host 3 connects to Router C
-```
-
-**The process begins normally:**
-
-```
-Application Layer:
-- HTTP Request: "GET /data"
-- Destination: 192.168.3.10
-
-Transport Layer:
-- Source Port: 52000 (ephemeral)
-- Destination Port: 80 (HTTP)
-- Protocol: TCP
-
-Network Layer:
-- Source IP: ??? (Which one? We have 3 IPs!)
-- Destination IP: 192.168.3.10
-- Protocol: IP
-
-Data Link Layer:
-- Source MAC: ??? (Which NIC's MAC?)
-- Destination MAC: ??? (Depends on which NIC we use)
-- Protocol: Ethernet
-
-Physical Layer:
-- Binary data: 01010101...
-- Ready to send to NIC
-```
-
-**The OS reaches Physical Layer and must answer a critical question:**
-
----
-
-### The Critical Decision
-
-```
-┌────────────────────────────────────────────────┐
-│  Operating System (Physical Layer)             │
-├────────────────────────────────────────────────┤
-│                                                │
-│  Binary data ready: 01010101...                │
-│                                                │
-│  Must send to a NIC to transmit.               │
-│                                                │
-│  Available NICs:                               │
-│    - NIC 1 (Built-in WiFi) → Router A         │
-│    - NIC 2 (USB WiFi) → Router B              │
-│    - NIC 3 (Ethernet) → Router C              │
-│                                                │
-│  QUESTION: Which NIC should I send to?        │
-│                                                │
-│  ┌──────────────────────────────────────────┐ │
-│  │  If I send to NIC 1:                     │ │
-│  │    - Goes to Router A                    │ │
-│  │    - Router A on Network 1 (192.168.1.*) │ │
-│  │    - Destination 192.168.3.10            │ │
-│  │    - NOT on Network 1!                   │ │
-│  │    - Router A will reject or route       │ │
-│  │      incorrectly                         │ │
-│  └──────────────────────────────────────────┘ │
-│                                                │
-│  ┌──────────────────────────────────────────┐ │
-│  │  If I send to NIC 2:                     │ │
-│  │    - Goes to Router B                    │ │
-│  │    - Router B on Network 2 (192.168.2.*) │ │
-│  │    - Destination 192.168.3.10            │ │
-│  │    - NOT on Network 2!                   │ │
-│  │    - Router B will reject or route       │ │
-│  │      incorrectly                         │ │
-│  └──────────────────────────────────────────┘ │
-│                                                │
-│  ┌──────────────────────────────────────────┐ │
-│  │  If I send to NIC 3:                     │ │
-│  │    - Goes to Router C                    │ │
-│  │    - Router C on Network 3 (192.168.3.*) │ │
-│  │    - Destination 192.168.3.10            │ │
-│  │    - YES! On Network 3!                  │ │
-│  │    - Router C will deliver correctly!    │ │
-│  │    - ✓ CORRECT CHOICE                    │ │
-│  └──────────────────────────────────────────┘ │
-│                                                │
-│  PROBLEM: How do I KNOW to choose NIC 3?      │
-└────────────────────────────────────────────────┘
-```
-
----
-
-### Why Wrong NIC = Failed Communication
-
-**Sending to NIC 1 (Wrong!):**
-
-```
-Step 1: OS sends binary data to NIC 1
-Step 2: NIC 1 converts to electrical signals (WiFi to Router A)
-Step 3: Router A receives frame:
-   Source IP: 192.168.1.2 (NIC 1's IP)
-   Dest IP: 192.168.3.10
-   
-Step 4: Router A checks: Is 192.168.3.10 on my network?
-   My network: 192.168.1.0/24
-   Destination: 192.168.3.10 (192.168.3.0/24)
-   Result: DIFFERENT NETWORK
-   
-Step 5: Router A's routing decision:
-   Option A: Drop packet (no route to 192.168.3.0/24)
-   Option B: Send to default gateway (ISP)
-   Option C: Send to WAN (if Router A routes to internet)
-   
-Step 6: Packet gets lost or goes to wrong destination
-Step 7: Host 3 never receives data
-Step 8: Communication FAILS
-```
-
-**Sending to NIC 3 (Correct!):**
-
-```
-Step 1: OS sends binary data to NIC 3
-Step 2: NIC 3 converts to electrical signals (Ethernet to Router C)
-Step 3: Router C receives frame:
-   Source IP: 192.168.3.2 (NIC 3's IP)
-   Dest IP: 192.168.3.10
-   
-Step 4: Router C checks: Is 192.168.3.10 on my network?
-   My network: 192.168.3.0/24
-   Destination: 192.168.3.10 (192.168.bits.0/24)
-   Result: SAME NETWORK!
-   
-Step 5: Router C's switch component handles:
-   - Checks CAM table for 192.168.3.10's MAC
-   - Forwards frame directly to Host 3
-   
-Step 6: Host 3 receives frame
-Step 7: Host 3 processes data
-Step 8: Communication SUCCESS
-```
-
----
-
-### The Problem Visualized
-
-```
-Destination: Host 3 (192.168.3.10)
-
-Wrong Path (via NIC 1):
-Computer → NIC 1 → Router A (Network 1) → ??? → LOST
-
-Wrong Path (via NIC 2):
-Computer → NIC 2 → Router B (Network 2) → ??? → LOST
-
-Correct Path (via NIC 3):
-Computer → NIC 3 → Router C (Network 3) → Host 3 ✓
-```
-
-**The OS must intelligently choose NIC 3!**
-
----
-
-## Why This is a Hard Problem
-
-### The OS's Dilemma
-
-**What the OS knows:**
-
-```
-1. Destination IP: 192.168.3.10 (from application request)
-2. Available NICs: NIC 1, NIC 2, NIC 3
-3. Each NIC has IP address and gateway
-4. Binary data ready to transmit
-```
-
-**What the OS doesn't immediately know:**
-
-```
-1. Which network is 192.168.3.10 on?
-2. Which NIC connects to that network?
-3. Should the packet go directly or through a gateway?
-4. What if multiple NICs could reach the destination?
-5. What if no NIC can reach the destination?
-```
-
-**The OS needs a decision-making mechanism!**
-
----
-
-### What Makes This Complex
-
-**Multiple factors to consider:**
-
-```
-1. Subnet Masks:
-   - NIC 1: 192.168.1.2/24 (Network: 192.168.1.0)
-   - NIC 2: 192.168.2.2/24 (Network: 192.168.2.0)
-   - NIC 3: 192.168.3.2/24 (Network: 192.168.3.0)
-   - Destination: 192.168.3.10
-   
-   Question: Which network contains 192.168.3.10?
-   Answer: Network 3 (192.168.3.0/24)
-   Conclusion: Must use NIC 3!
-
-2. Gateways:
-   - NIC 1: Gateway 192.168.1.1 (Router A)
-   - NIC 2: Gateway 192.168.2.1 (Router B)
-   - NIC 3: Gateway 192.168.3.1 (Router C)
-   
-   Question: If destination NOT on any local network, which gateway?
-   Answer: Need routing rules!
-
-3. Priorities:
-   - What if destination reachable via multiple NICs?
-   - Which NIC to prefer?
-   - Fastest? Most reliable? Cheapest?
-
-4. Failures:
-   - What if preferred NIC is down?
-   - Fallback to another NIC?
-   - How to detect NIC failure?
-```
-
----
-
-### The Fundamental Question
-
-```
-┌────────────────────────────────────────────────┐
-│                                                │
-│  Given:                                        │
-│    - Destination IP: X.X.X.X                   │
-│    - Multiple NICs with different networks     │
-│                                                │
-│  Determine:                                    │
-│    - Which NIC to send through?                │
-│                                                │
-│  Requirements:                                 │
-│    - Must be deterministic (consistent)        │
-│    - Must be fast (low latency)                │
-│    - Must handle failures gracefully           │
-│    - Must support complex routing scenarios    │
-│                                                │
-│  Solution: ROUTING TABLE                       │
-│            (Next chapter!)                     │
-└────────────────────────────────────────────────┘
-```
-
----
-
-## The Routing Table Solution (Preview)
-
-### What is a Routing Table?
-
-**A routing table is a lookup table that tells the OS:**
-
-> "For destination IP X.X.X.X, send the packet through NIC Y using gateway Z."
-
-**Example routing table for our 3-NIC computer:**
-
-```
-┌─────────────────┬──────────┬─────────────┬─────────┐
-│ Destination     │ Gateway  │ Netmask     │ Iface   │
-├─────────────────┼──────────┼─────────────┼─────────┤
-│ 192.168.1.0     │ 0.0.0.0  │ 255.255.255.0│ NIC 1  │
-│ 192.168.2.0     │ 0.0.0.0  │ 255.255.255.0│ NIC 2  │
-│ 192.168.3.0     │ 0.0.0.0  │ 255.255.255.0│ NIC 3  │
-│ 0.0.0.0         │ 192.168.1.1│ 0.0.0.0   │ NIC 1  │
-└─────────────────┴──────────┴─────────────┴─────────┘
-
-How to read:
-- Row 1: For destinations on 192.168.1.0/24, send directly via NIC 1
-- Row 2: For destinations on 192.168.2.0/24, send directly via NIC 2
-- Row 3: For destinations on 192.168.3.0/24, send directly via NIC 3
-- Row 4: For all other destinations, send via gateway 192.168.1.1 using NIC 1
-```
-
----
-
-### How the OS Uses the Routing Table
-
-**Algorithm (simplified):**
-
-```
-function selectNIC(destinationIP):
-    for each row in routingTable:
-        if destinationIP matches row's destination/netmask:
-            return row's interface (NIC)
-    
-    // No match found
-    return defaultGatewayNIC
-```
-
-**Example: Send to 192.168.3.10:**
-
-```
-Step 1: Check routing table
-Step 2: Match destination 192.168.3.10 against each row
-   - Row 1: 192.168.1.0/24? No (3 ≠ 1)
-   - Row 2: 192.168.2.0/24? No (3 ≠ 2)
-   - Row 3: 192.168.3.0/24? YES! ✓
-Step 3: Use NIC 3
-Step 4: Gateway: 0.0.0.0 (means direct delivery, no gateway)
-Step 5: Send packet via NIC 3 to Router C
-```
-
----
-
-### Why Routing Tables are Powerful
-
-**Routing tables enable:**
-
-1. **Multiple network interfaces:**
-   - Each NIC can have its own routing rules
-   - OS automatically selects correct NIC
-
-2. **Complex routing:**
-   - Direct delivery for local networks
-   - Gateway routing for remote networks
-   - Multiple paths to same destination
-
-3. **Failover:**
-   - Primary path fails → Use backup path
-   - Load balancing across multiple NICs
-
-4. **Performance optimization:**
-   - Route traffic through fastest NIC
-   - Prefer wired over wireless
-
-5. **Security:**
-   - Route sensitive traffic through VPN NIC
-   - Route public traffic through regular NIC
-
-**We'll explore routing tables in depth in the next two chapters!**
-
----
-
-## Real-World Use Cases
-
-### Use Case 1: Development and Testing
-
-**Scenario:** Software developer needs to test application on multiple networks simultaneously.
-
-```
-Computer Configuration:
-- NIC 1: Corporate network (192.168.1.0/24)
-  - Access to: Internal servers, databases, file shares
-  - Internet: Via corporate firewall
-  
-- NIC 2: Guest network (192.168.100.0/24)
-  - Access to: Internet only
-  - Isolated from corporate resources
-  
-- NIC 3: Test network (10.0.0.0/24)
-  - Access to: Test servers, staging environment
-  - No internet access
-
-Routing Table:
-- Corporate resources (192.168.1.0/24) → NIC 1
-- Test resources (10.0.0.0/24) → NIC 3
-- Internet (0.0.0.0/0) → NIC 2 (guest network)
-```
-
-**Benefit:** Developer can access corporate resources, test environments, and internet simultaneously without switching networks.
-
----
-
-### Use Case 2: High Availability Server
-
-**Scenario:** Critical server must remain accessible even if one network connection fails.
-
-```
-Server Configuration:
-- NIC 1: Primary network interface (1 Gbps Ethernet)
-  - IP: 192.168.1.100
-  - Connected to: Switch A → Router A
-  
-- NIC 2: Backup network interface (1 Gbps Ethernet)
-  - IP: 192.168.1.101
-  - Connected to: Switch B → Router B
-  
-- Both NICs on the same network (192.168.1.0/24)
-- Active-Passive failover configured
-
-Normal Operation:
-- Primary: NIC 1 handles all traffic
-- Backup: NIC 2 idle, monitoring
-
-Failure Scenario:
-- Cable to NIC 1 unplugged
-- OS detects NIC 1 down
-- Routing table updated: Switch traffic to NIC 2
-- Clients continue accessing server (brief interruption)
-- Downtime: < 5 seconds
-```
-
-**Benefit:** Server remains accessible 99.99% of time despite hardware failures.
-
----
-
-### Use Case 3: Network Segregation
-
-**Scenario:** Computer must access both trusted and untrusted networks, maintaining security separation.
-
-```
-Computer Configuration:
-- NIC 1: Trusted network (Ethernet)
-  - IP: 10.0.1.50
-  - Access: Internal company data, financial systems
-  - Security: Firewall locked down
-  
-- NIC 2: Untrusted network (WiFi - Guest)
-  - IP: 192.168.200.75
-  - Access: Internet only for software updates
-  - Security: Isolated, no access to NIC 1's network
-
-Routing Rules:
-- Internal IPs (10.0.0.0/8) → NIC 1 ONLY
-- Internet (0.0.0.0/0) → NIC 2 ONLY
-- Policy: NEVER route between NIC 1 and NIC 2
-```
-
-**Benefit:** Even if NIC 2 compromised by malware from internet, attacker cannot reach NIC 1's trusted network.
-
----
-
-### Use Case 4: VPN + Regular Internet
-
-**Scenario:** User wants both VPN-encrypted traffic and direct internet access simultaneously.
-
-```
-Computer Configuration:
-- NIC 1: Physical Ethernet
-  - IP: 192.168.1.50
-  - Access: Regular internet
-  
-- NIC 2: Virtual VPN interface (TUN/TAP)
-  - IP: 10.8.0.5
-  - Access: Encrypted tunnel to corporate VPN server
-  - All traffic encrypted
-
-Routing Table:
-- Corporate resources (10.0.0.0/8) → NIC 2 (VPN)
-- Company email server (mail.company.com) → NIC 2 (VPN)
-- Everything else (0.0.0.0/0) → NIC 1 (direct internet)
-
-Example Traffic:
-- Accessing internal wiki (10.0.5.10) → Routed through VPN (NIC 2)
-- Streaming YouTube → Direct internet (NIC 1)
-- Company email → Routed through VPN (NIC 2)
-- Personal browsing → Direct internet (NIC 1)
-```
-
-**Benefit:** Corporate traffic encrypted and secured, but doesn't slow down personal internet usage.
-
----
-
-## Common Questions and Misconceptions
-
-### Q1: Can two NICs have the same IP address?
-
-**Answer: No!** (In almost all cases)
-
-```
-Why not?
-- IP addresses must be unique within a network
-- If NIC 1 has 192.168.1.50 and NIC 2 has 192.168.1.50:
-  - Router doesn't know which NIC to send responses to
-  - ARP table confusion (same IP, different MACs?)
-  - Network stack conflicts internally
-
-Exception:
-- NIC bonding/teaming (appears as single logical NIC)
-- DHCP failover scenario (brief overlap during transition)
-- Load balancing configurations (very advanced)
-```
-
----
-
-### Q2: Can two NICs be on the same network?
-
-**Answer: Yes!**
-
-```
-Example:
-- NIC 1: 192.168.1.100 (Ethernet)
-- NIC 2: 192.168.1.101 (WiFi)
-- Both on network 192.168.1.0/24
-
-Use cases:
-- Redundancy (failover)
-- Load balancing (both active)
-- Different purposes (one for management, one for data)
-
-Routing consideration:
-- Routing table must specify which NIC for different destinations
-- Default: Only one NIC marked as default gateway
-- Advanced: Policy-based routing to use both
-```
-
----
-
-### Q3: Does having multiple NICs make internet faster?
-
-**Answer: Not automatically!**
-
-```
-Common misconception:
-"If I connect WiFi + Ethernet, my internet will be 2x faster!"
-
-Reality:
-- Most applications use ONE connection at a time
-- One HTTP download uses ONE NIC
-- Total bandwidth: limited by slowest link
-
-When it CAN help:
-- Download from Source A via NIC 1
-- Simultaneously download from Source B via NIC 2
-- Total bandwidth = NIC1 speed + NIC2 speed
-
-Example:
-- Download 1 file from Google via WiFi (50 Mbps)
-- Simultaneously download 1 file from Microsoft via Ethernet (100 Mbps)
-- Total: 150 Mbps combined
-- BUT: Downloading 1 file from Google uses only 1 NIC (max 50 or 100 Mbps, not 150)
-```
-
----
-
-### Q4: How does OS know which NIC to use?
-
-**Answer: Routing table!** (Next chapter's topic)
-
-**Short answer:**
-
-```
-1. OS checks destination IP
-2. Looks up destination in routing table
-3. Routing table says: "Use NIC X for this destination"
-4. OS sends to NIC X
-5. NIC X transmits to connected router
-```
-
-**Details in next chapter!**
-
----
-
-### Q5: What if all NICs fail?
-
-**Answer: No network connectivity!**
-
-```
-Scenario: All NICs down (driver crash, hardware failure, etc.)
-
-Result:
-- OS cannot send any network traffic
-- Applications fail with "Network unreachable" error
-- Loopback (127.0.0.1) still works (internal communication)
-- No internet, no LAN access
-
-Recovery:
-- Reboot computer
-- Reinstall network drivers
-- Check hardware connections
-- Replace faulty NIC hardware
-```
-
----
-
-## Technical Details
-
-### NIC Naming Conventions
-
-**Linux (traditional):**
-
-```
-eth0: First Ethernet interface
-eth1: Second Ethernet interface
-wlan0: First WiFi interface
-wlan1: Second WiFi interface
-lo: Loopback interface (localhost)
-```
-
-**Linux (modern - systemd):**
-
-```
-enp3s0: Ethernet, PCI bus 3, slot 0
-enp4s1: Ethernet, PCI bus 4, slot 1
-wlp2s0: WiFi, PCI bus 2, slot 0
-```
-
-**Windows:**
-
-```
-"Ethernet": Local Area Connection (Ethernet)
-"Wi-Fi": Wireless Network Connection
-"Ethernet 2": Second Ethernet adapter
-"VirtualBox Host-Only Network": Virtual NIC for VirtualBox
-```
-
-**macOS:**
-
-```
-en0: First Ethernet/WiFi
-en1: Second interface
-en2: Third interface
-lo0: Loopback
-```
-
----
-
-### Viewing NICs in Operating Systems
-
-**Linux:**
+Each PCIe device is identified by an address `bus:device.function` such as `03:00.0`:
 
 ```bash
-# List all network interfaces
-ip link show
-
-# Output:
-1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536
-2: eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500
-3: wlan0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500
-
-# View IP addresses for each NIC
-ip addr show
-
-# Output:
-1: lo: inet 127.0.0.1/8
-2: eth0: inet 192.168.1.50/24
-3: wlan0: inet 192.168.2.75/24
+lspci | grep -i -E 'ethernet|network'
+# 00:1f.6 Ethernet controller: Intel Corporation Ethernet Connection (7) I219-V
+# 02:00.0 Network controller: Intel Corporation Wi-Fi 6 AX200
+lspci -k -s 02:00.0            # shows "Kernel driver in use: iwlwifi"
 ```
+The OS then creates a **network interface** per NIC port (a "name" you can use with commands; Chapter 41).
 
-**Windows:**
+### 2.2 Typical counts
 
-```powershell
-# PowerShell
-Get-NetAdapter
+| Machine | Typical interfaces |
+|---|---|
+| **Desktop** | 1 Ethernet (sometimes 2), maybe a Wi-Fi/Bluetooth card, loopback |
+| **Laptop** | Wi-Fi, Ethernet (or USB dongle), loopback, VPN, virtualization/Docker bridges |
+| **Server** | 2–8+ ports (management/BMC, data, storage, backup networks), often bonded |
+| **Firewall / router** | 2+ dedicated ports (WAN, LAN, DMZ, ...) |
+| **Docker host** | Physical NIC + `lo` + `docker0` + one `br-…` per network + one `veth…` per container |
+| **Kubernetes node** | Physical NICs + CNI bridge/tunnel devices (`cni0`, `flannel.1`, `cali…`) |
 
-# Output:
-Name              Status  MacAddress
-----              ------  ----------
-Ethernet          Up      AA-BB-CC-DD-EE-01
-Wi-Fi             Up      AA-BB-CC-DD-EE-02
-Bluetooth Network Down    AA-BB-CC-DD-EE-03
+You already have several without doing anything: `ip -br addr` on a normal Linux desktop usually lists `lo`, your Ethernet, Wi-Fi and, if Docker/VMs are installed, `docker0`/`virbr0`.
 
-# View IP configuration
-ipconfig /all
+### 2.3 Virtual NICs
+The OS can create **software interfaces** that look like NICs to applications: loopback `lo`, `veth` pairs, bridges, `tun/tap` (VPNs), `wg0` (WireGuard), VLAN sub-interfaces (`eth0.10`), bonds (`bond0`). They participate in routing exactly like hardware ones (Chapter 41).
+
+---
+
+## 3. A computer connected to several networks
+
+Example: a workstation with **three NICs**, each attached to a *different* network:
+
 ```
+                      ┌──────────────── 192.168.1.0/24 ───────── router R1 (192.168.1.1) ─── Internet
+                      │
+   ┌───────────┐  NIC1 ┤
+   │ Computer  │  NIC2 ┼──────────────── 192.168.2.0/24 ───────── router R2 (192.168.2.1) ─── Office network
+   │           │  NIC3 ┤
+   └───────────┘       └──────────────── 192.168.3.0/24 ───────── router R3 (192.168.3.1) ─── Lab equipment
+```
+Each NIC has its **own MAC, its own IP address and its own mask**:
 
-**macOS:**
+| | NIC1 | NIC2 | NIC3 |
+|---|---|---|---|
+| Network | 192.168.1.0/24 | 192.168.2.0/24 | 192.168.3.0/24 |
+| MAC | `aa:aa:aa:00:00:01` | `aa:aa:aa:00:00:02` | `aa:aa:aa:00:00:03` |
+| IP | 192.168.1.10 | 192.168.2.10 | 192.168.3.10 |
+| Mask | 255.255.255.0 | 255.255.255.0 | 255.255.255.0 |
+| Gateway | 192.168.1.1 | 192.168.2.1 | 192.168.3.1 |
+
+A computer connected to several networks is called **multihomed** (with exactly two: **dual-homed**). Each connection is a completely independent Layer-1/2/3 attachment.
+
+### DHCP happens once per interface
+Every interface runs its own DHCP conversation (Chapters 35–37) with the DHCP server **on its own network**:
+
+```
+NIC1: Discover ─► R1's DHCP ─► Offer/Request/ACK: 192.168.1.10/24, gateway 192.168.1.1, DNS ...
+NIC2: Discover ─► R2's DHCP ─► ... 192.168.2.10/24, gateway 192.168.2.1 ...
+NIC3: Discover ─► R3's DHCP ─► ... 192.168.3.10/24, gateway 192.168.3.1 ...
+```
+The result: three addresses, three masks, and (because each DHCP server tells its client "your default gateway is me") **three default-gateway offers**, but a computer normally keeps **only one default route** in effect (the others are demoted by *metric*, Chapter 42). Similarly DNS servers from all leases may be merged or the "best" interface's used.
 
 ```bash
-# List network interfaces
-ifconfig
-
-# or
-networksetup -listallhardwareports
+ip -br addr
+# lo      UNKNOWN 127.0.0.1/8
+# eth0    UP      192.168.1.10/24
+# eth1    UP      192.168.2.10/24
+# eth2    UP      192.168.3.10/24
 ```
 
 ---
 
-### MAC Addresses and Multiple NICs
+## 4. The problem: which interface?
 
-**Each NIC has its unique MAC address:**
-
-```
-Computer with 3 NICs:
-
-NIC 1 (Built-in Ethernet):
-  MAC: AA:BB:CC:DD:EE:01
-  Manufacturer: Intel
-  
-NIC 2 (WiFi Adapter):
-  MAC: AA:BB:CC:DD:EE:02
-  Manufacturer: Qualcomm
-  
-NIC 3 (USB WiFi):
-  MAC: AA:BB:CC:DD:EE:03
-  Manufacturer: Realtek
-```
-
-**Each NIC's MAC is globally unique (in theory):**
-
-- First 3 bytes: OUI (Organizationally Unique Identifier) - manufacturer
-- Last 3 bytes: Device-specific (assigned by manufacturer)
-
-**Routers track each MAC separately:**
+Now an application on this computer opens a connection to `192.168.3.20`. The kernel builds a packet: source IP `?`, destination `192.168.3.20`. It must hand the packet to **one** NIC:
 
 ```
-Router A's ARP Table:
-┌──────────────────┬────────────────────┐
-│ IP Address       │ MAC Address        │
-├──────────────────┼────────────────────┤
-│ 192.168.1.2      │ AA:BB:CC:DD:EE:01  │ ← Our NIC 1
-└──────────────────┴────────────────────┘
-
-Router B's ARP Table:
-┌──────────────────┬────────────────────┐
-│ IP Address       │ MAC Address        │
-├──────────────────┼────────────────────┤
-│ 192.168.2.2      │ AA:BB:CC:DD:EE:02  │ ← Our NIC 2
-└──────────────────┴────────────────────┘
-
-Router C's ARP Table:
-┌──────────────────┬────────────────────┐
-│ IP Address       │ MAC Address        │
-├──────────────────┼────────────────────┤
-│ 192.168.3.2      │ AA:BB:CC:DD:EE:03  │ ← Our NIC 3
-└──────────────────┴────────────────────┘
+Options:  NIC1 (net 192.168.1.0/24)   NIC2 (net 192.168.2.0/24)   NIC3 (net 192.168.3.0/24)
+                    ?                          ?                          ?
 ```
+- If the packet goes out **NIC3**: the ARP request for `192.168.3.20` (or for the gateway `192.168.3.1`) reaches the right LAN: ✅ success.
+- If it goes out **NIC1**: the frame lands on the wrong network. The ARP request for `192.168.3.20` is broadcast in `192.168.1.0/24` where nobody owns that address; no answer; the packet **dies**. Or, worse, it goes to R1 (the default gateway) which either doesn't know that private network, discards it, or sends it to the Internet where private addresses are blackholed.
 
-**Each router sees a different MAC, doesn't know they belong to the same computer!**
+```
+Wrong choice:   App → kernel → NIC1 → LAN 192.168.1.x → ARP "who has 192.168.3.20?" ... silence → timeout
+Right choice:   App → kernel → NIC3 → LAN 192.168.3.x → ARP → reply → delivered
+```
+### Why it is hard
+- The **application doesn't choose**: it only knows the destination IP and port (and usually not even which interfaces exist).
+- **Layers above** (TCP/UDP) don't know about interfaces either; they hand a segment to IP.
+- **Every destination** could be reachable via a different interface: local networks, remote networks through one of several gateways, VPN-only ranges, the Internet.
+- The choice also determines the **source IP** the packet carries (the address of the outgoing interface) and which **gateway MAC** to ARP for.
+- The decision must be **fast** (millions of packets per second) and **deterministic**.
+
+Two naive ideas fail:
+| Idea | Why it fails |
+|---|---|
+| "Use the first NIC" | Traffic to networks behind other NICs would go the wrong way |
+| "Try them all / broadcast on all NICs" | Wasteful, creates duplicates, security risk (leaks a packet into networks it should never reach), breaks ordering |
+
+**The solution:** a table of rules, the **routing table**, that maps *destination network → interface (and next hop)*, searched with the **longest matching prefix**. A first look:
+
+```
+Destination        Gateway        Interface
+192.168.1.0/24     (direct)       eth0
+192.168.2.0/24     (direct)       eth1
+192.168.3.0/24     (direct)       eth2
+default (0.0.0.0/0) 192.168.1.1   eth0     ← "if nothing else matches, go this way"
+```
+Destination `192.168.3.20` → matches the third row → `eth2`. Chapter 42 explains how this table is built and read; Chapter 43 walks the whole algorithm.
 
 ---
 
-## Summary
+## 5. Lab: a multihomed host in namespaces
 
-### What We Learned
-
-1. **PCI (Peripheral Component Interconnect):**
-   - Bus system connecting computer components
-   - Allows multiple hardware devices on motherboard
-   - Components: CPU, RAM, NICs, USB devices, etc.
-
-2. **Multiple NICs are common:**
-   - Desktop: Ethernet + WiFi USB adapter
-   - Laptop: Built-in WiFi + Ethernet + USB WiFi
-   - Servers: Multiple Ethernet for redundancy
-
-3. **Each NIC operates independently:**
-   - Each NIC connects to its own router/network
-   - Each NIC runs DHCP and gets its own IP
-   - Each NIC has its own MAC address
-
-4. **One computer, multiple identities:**
-   - 3 NICs = 3 IP addresses
-   - 3 different networks
-   - 3 different MAC addresses
-   - Routers see them as separate hosts
-
-5. **The routing problem:**
-   - When sending data, OS must choose correct NIC
-   - Wrong NIC = packet sent to wrong network
-   - Wrong network = packet lost or misdirected
-   - **Solution: Routing table (next chapter!)**
-
----
-
-### The Cliffhanger
-
-**We've identified the problem but not the solution:**
+We build a host `mh` with **two NICs**, connected to two separate networks (each with a "router"), then watch how it chooses.
 
 ```
-Problem:
-- Computer has multiple NICs
-- Must send data to destination IP
-- Which NIC to use?
-
-Questions remaining:
-- How does OS decide which NIC?
-- What if destination reachable via multiple NICs?
-- What if destination not reachable via any NIC?
-- How to handle failures and fallbacks?
-
-Solution (next chapter):
-- ROUTING TABLE
-- Routing algorithms
-- Default gateway selection
-- Policy-based routing
+   net1 10.1.0.0/24                       net2 10.2.0.0/24
+   r1 (10.1.0.1) ── eth1 [ mh ] eth2 ── r2 (10.2.0.1)
+                 10.1.0.10     10.2.0.10
+   + one host on each network:  a (10.1.0.50 on net1), b (10.2.0.50 on net2)
 ```
-
----
-
-## Next Chapter Preview
-
-**Chapter 048: Routing Tables and Interface Selection**
-
-Topics to cover:
-- Routing table structure
-- Longest prefix match algorithm
-- Default gateway routing
-- Metric and priority
-- Static vs dynamic routing
-- Route selection algorithm
-- Troubleshooting routing issues
-
-**The next chapter will answer:** "How does the OS intelligently choose which NIC to use when sending data?"
-
----
-
-## Key Takeaways
-
-1. **Multiple NICs are normal and common** in modern computing
-2. **Each NIC is independent** - its own IP, MAC, and network connection
-3. **PCI buses enable multiple NICs** by providing physical connection infrastructure
-4. **The routing problem is fundamental** - requires intelligent NIC selection
-5. **Routing tables solve this problem** - lookup table for destination → NIC mapping
-6. **Understanding multiple NICs is essential** for network administration, development, and troubleshooting
-
-**Your computer might have multiple NICs right now! Check with `ipconfig /all` (Windows), `ip addr` (Linux), or `ifconfig` (macOS).**
-
----
-
-## Further Exploration
-
-**Try this on your own computer:**
 
 ```bash
-# Linux/macOS:
-ip link show         # List all NICs
-ip addr show         # Show IP for each NIC
-ip route show        # Show routing table (preview!)
+# namespaces: the multihomed host, one "router/LAN" and one server for each network
+for n in mh n1 n2; do sudo ip netns add $n; sudo ip netns exec $n ip link set lo up; done
 
-# Windows:
-ipconfig /all        # Show all NICs and their IPs
-route print          # Show routing table (preview!)
+# net1: mh.eth1 <-> n1.e
+sudo ip link add eth1 type veth peer name n1e
+sudo ip link set eth1 netns mh; sudo ip link set n1e netns n1
+sudo ip netns exec mh ip addr add 10.1.0.10/24 dev eth1
+sudo ip netns exec n1 ip addr add 10.1.0.50/24 dev n1e
+# net2: mh.eth2 <-> n2.e
+sudo ip link add eth2 type veth peer name n2e
+sudo ip link set eth2 netns mh; sudo ip link set n2e netns n2
+sudo ip netns exec mh ip addr add 10.2.0.10/24 dev eth2
+sudo ip netns exec n2 ip addr add 10.2.0.50/24 dev n2e
+for x in "mh eth1" "mh eth2" "n1 n1e" "n2 n2e"; do set -- $x; sudo ip netns exec $1 ip link set $2 up; done
+
+# 1. Look at what the kernel built automatically from the two addresses
+sudo ip netns exec mh ip -br addr
+sudo ip netns exec mh ip route
+# 10.1.0.0/24 dev eth1 proto kernel scope link src 10.1.0.10
+# 10.2.0.0/24 dev eth2 proto kernel scope link src 10.2.0.10
+
+# 2. Ask the kernel which interface it WOULD use, and what source address
+sudo ip netns exec mh ip route get 10.1.0.50     # → dev eth1 src 10.1.0.10
+sudo ip netns exec mh ip route get 10.2.0.50     # → dev eth2 src 10.2.0.10
+sudo ip netns exec mh ip route get 8.8.8.8       # → RTNETLINK answers: Network is unreachable (no default route)
+
+# 3. Prove it with packets
+sudo ip netns exec mh ping -c 1 10.1.0.50
+sudo ip netns exec mh ping -c 1 10.2.0.50
+sudo ip netns exec mh ip neigh                   # each neighbor was learned on the CORRECT interface
 ```
+Now **break** it to feel the problem:
 
-**Questions to investigate:**
+```bash
+sudo ip netns exec mh ip route del 10.2.0.0/24 dev eth2        # remove the route to net2
+sudo ip netns exec mh ping -c 1 -W 1 10.2.0.50                 # "Network is unreachable": no route, so no NIC is chosen
+# Add a WRONG route: send net2 traffic out eth1
+sudo ip netns exec mh ip route add 10.2.0.0/24 dev eth1
+sudo ip netns exec mh ping -c 1 -W 1 10.2.0.50                 # 100% loss
+sudo ip netns exec mh ip neigh | grep 10.2.0.50                # INCOMPLETE/FAILED: it ARPed on the wrong LAN
+# repair
+sudo ip netns exec mh ip route del 10.2.0.0/24 dev eth1
+sudo ip netns exec mh ip route add 10.2.0.0/24 dev eth2
+sudo ip netns exec mh ping -c 1 10.2.0.50                      # works again
+```
+And a **default route** for "everything else": pretend `n1` is the gateway to the world:
 
-1. How many NICs does your computer have?
-2. How many are active (UP state)?
-3. What are their IP addresses?
-4. Are they on the same network or different networks?
-5. Which NIC is your default gateway using?
-
-**Experiment:**
-
-- Connect to WiFi and Ethernet simultaneously
-- Run `ipconfig` or `ip addr` - see two different IPs!
-- Disconnect WiFi - does internet still work via Ethernet?
-- Reconnect WiFi, disconnect Ethernet - internet still works?
-- This demonstrates multiple NIC selection in action!
-
-**Next chapter will reveal the mechanism behind this automatic switching: the routing table!**
-
----
-
-## Conclusion
-
-Multiple NICs transform a computer from a single-homed host (one network connection) to a multi-homed host (multiple network connections). This creates powerful capabilities:
-
-- **Redundancy:** Multiple paths ensure reliability
-- **Segregation:** Separate trusted and untrusted networks
-- **Performance:** Distribute traffic across interfaces
-- **Flexibility:** Access multiple networks simultaneously
-
-But with great power comes great complexity: **How does the OS know which NIC to use?**
-
-The routing table provides the answer.
-
-**Continue to Chapter 048 to discover how routing tables solve the NIC selection problem!**
+```bash
+sudo ip netns exec mh ip route add default via 10.1.0.50 dev eth1
+sudo ip netns exec mh ip route get 8.8.8.8        # → via 10.1.0.50 dev eth1 src 10.1.0.10
+sudo ip netns exec mh ip route get 10.2.0.50      # still eth2 (the more specific route wins)
+```
+Clean up: `for n in mh n1 n2; do sudo ip netns del $n; done`.
 
 ---
 
-*Chapter 047 complete. The foundation is set. The problem is clear. The solution awaits in Chapter 048.*
+## 6. Real-world uses of multiple NICs
+
+| Use case | How multiple NICs help |
+|---|---|
+| **Firewall / router** | One NIC per zone (WAN, LAN, DMZ); packets are forwarded between them under policy |
+| **Server with separate networks** | Management (SSH/BMC), public traffic, **storage** (iSCSI/NFS/Ceph) and **backup** networks isolated for security and performance |
+| **Laptop** | Wi-Fi + Ethernet + VPN: the OS picks per destination (corporate ranges via VPN, others direct) |
+| **Bonding / teaming / LACP** | Combine NICs for **redundancy** or bandwidth; the OS sees one `bond0` |
+| **Hypervisors** | Physical NICs plus virtual switches; each VM has virtual NICs (bridged, NAT or host-only) |
+| **Docker/Kubernetes hosts** | Physical NIC + bridges + veth pairs + overlay tunnels (`vxlan`, `flannel.1`, `cilium_*`) |
+| **Multi-WAN** | Two ISPs on two NICs for failover or load sharing (needs policy routing) |
+| **Monitoring/IDS probes** | A NIC in promiscuous mode on a mirror port with no IP address at all |
+| **Cross-network bridging** | Bridge/route between an isolated lab network and the office (careful: can bypass security zones!) |
+| **Development** | An isolated test network (`10.99.0.0/24`) alongside the normal one |
+
+**Security angle:** a dual-homed host can accidentally connect two networks that were meant to stay separate (e.g. a laptop on the office LAN and a guest Wi-Fi, or a jump host on prod and dev). Make sure IP forwarding stays **off** (`net.ipv4.ip_forward=0`) unless the machine is deliberately a router, and use host firewalls.
+
+---
+
+## 7. Docker and containers: the same problem
+
+```bash
+ip -br addr             # on a Docker host: eth0/ens…, docker0 172.17.0.1/16, br-… 172.18.0.1/16, vethXYZ (no IP: bridge ports)
+ip route
+# default via 192.168.1.1 dev eth0
+# 172.17.0.0/16 dev docker0 proto kernel scope link src 172.17.0.1
+# 172.18.0.0/16 dev br-2f… proto kernel scope link src 172.18.0.1
+docker exec <container> ip route      # inside a container: default via 172.17.0.1 dev eth0
+```
+- The **host** is multihomed: to reach a container at `172.17.0.5` it chooses `docker0`; to reach the Internet it chooses `eth0`, purely from the routing table.
+- A **container** with one `eth0` has a single default route via the bridge IP. A container attached to **two networks** (`docker network connect`) has two interfaces and two connected routes; the default route belongs to the first/`--network` one, so watch out for "why can't my container reach the other network's subnet from outside?" surprises.
+- **Overlapping subnets** are dangerous: if your VPN gives you `172.17.0.0/16` and Docker also uses `172.17.0.0/16`, the routing table can't distinguish them. Change Docker's `default-address-pools` (Chapter 34).
+
+---
+
+## 8. Common misconceptions
+
+| Misconception | Reality |
+|---|---|
+| "A computer has one IP address" | One **per interface** (and often several per interface, IPv4 and IPv6) |
+| "The OS tries every NIC" | It selects exactly one egress interface per packet using the routing table |
+| "An app picks the NIC" | It usually doesn't; it can *bind* to a source address or interface (`SO_BINDTODEVICE`, `curl --interface`), which influences but doesn't replace routing |
+| "Two NICs on the same network double the speed automatically" | Not without bonding/LACP or multipath; the OS uses one at a time per flow |
+| "Two default gateways is fine" | Only the best-metric default route is used; a second one is a backup at best, and causes asymmetric routing if misconfigured |
+| "A multihomed host forwards traffic between networks" | Only if IP forwarding is on |
+| "Each NIC needs a different subnet" | Yes for normal routing; two NICs in the same subnet cause confusing behavior (ARP flux: which NIC answers?) |
+| "Virtual interfaces aren't real" | They route, ARP and filter exactly like hardware ones |
+
+---
+
+## 9. Summary
+
+- Computers commonly have **several interfaces** (PCIe/USB/onboard/Wi-Fi + virtual ones); each has its own **MAC, IP, mask**, and runs **its own DHCP**.
+- A host attached to several networks is **multihomed**. For every outgoing packet the OS must choose **one interface (and next hop)**; the wrong choice means unreachable or leaked traffic.
+- Applications don't decide; a **routing table** maps destination networks to interfaces/gateways using **longest-prefix match** (Chapters 42–43). The kernel builds "connected" routes automatically from each interface's address and mask.
+- Only one **default route** is normally active. Watch for overlapping subnets, IP forwarding, and multi-NIC security implications.
+- Docker hosts, VPN laptops, servers and firewalls all rely on this same mechanism.
+
+---
+
+## 10. Check your understanding
+
+1. Name three ways a computer can get an extra network interface, including one virtual.
+2. A computer has NICs on `192.168.1.0/24`, `192.168.2.0/24`, `192.168.3.0/24`. Which addresses/masks does it have? How many DHCP conversations happened?
+3. Why can't the kernel simply "use the first NIC"?
+4. What is the source IP of a packet sent out NIC2?
+5. What happens if a packet for `192.168.3.20` leaves via NIC1?
+6. Which routes does the kernel create automatically when you add `10.2.0.10/24` to `eth2`?
+7. Why is it risky for a dual-homed server to have `ip_forward=1`?
+8. Why do overlapping subnets (VPN vs Docker) break routing?
+
+<details>
+<summary>Answers</summary>
+
+1. PCIe add-in card or onboard chip; USB adapter (or tethering); virtual (bridge, veth, tun/tap, VPN, bond, VLAN interface).
+2. One address and one mask per NIC (e.g. `.1.10`, `.2.10`, `.3.10`, all `/24`), and three separate DHCP DORA exchanges, one per network.
+3. Destinations live on different networks behind different NICs; using the wrong NIC means the ARP/packet never reaches the right LAN.
+4. The IP address assigned to NIC2 (e.g. `192.168.2.10`), typically the interface address chosen for the route.
+5. It's ARPed/sent onto the wrong LAN (or to the wrong gateway) and is lost, causing timeouts, or leaks into a network it shouldn't reach.
+6. A connected route `10.2.0.0/24 dev eth2 proto kernel scope link src 10.2.0.10`.
+7. The host would forward traffic between the networks, possibly bypassing firewalls/segmentation between zones.
+8. The table can hold only one best route for a given prefix, so traffic meant for one network goes to the other (or is unreachable).
+</details>
+
+**Practice**
+
+1. On your machine list all interfaces, classify each as physical or virtual, and note its IP and mask (`ip -br addr`, `ls -l /sys/class/net`).
+2. Run the lab; then add a third namespace/NIC and confirm routes appear.
+3. Run `ip route get` for five destinations (your LAN, a Docker container, `8.8.8.8`, `127.0.0.1`, a VPN range) and explain each answer.
+4. With `nmcli`, connect Ethernet and Wi-Fi at the same time; compare the `default` routes and their **metrics**.
+5. Create a Docker container attached to two networks (`docker network connect`) and inspect its routes.
+
+---
+
+**Next:** [Chapter 41 – Visualizing Multiple NICs in a Single Computer](41_visualizing_multiple_nics_in_single_computer_in_details.md)

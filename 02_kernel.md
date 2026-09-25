@@ -1,1199 +1,287 @@
-# Chapter 2: Understanding the Kernel - The Brain of Your Operating System
+# Chapter 2: The Kernel
 
-## Overview
+> **In one sentence:** The kernel is the core program of an operating system. It is the only software allowed to touch the hardware directly, and every other program must ask it for help.
 
-The kernel is the most fundamental component of any operating system - it's the "brain" that controls everything. To truly understand Docker and containers, you must first understand what the kernel is and how it works. This chapter demystifies the kernel by explaining its role in managing hardware, processes, memory, and system security.
+**Level:** 🟢 Beginner → 🟡 Intermediate · **Reading time:** ~25 minutes
 
-## Prerequisites
-
-Before diving into this chapter, you should:
-- Understand basic computer components (CPU, RAM, Hard Disk)
-- Know what processes and threads are (or review prerequisite classes)
-- Have basic knowledge of operating systems (Windows, Linux, macOS)
-- Understand the concept of applications/software
-
-## Learning Objectives
-
-By the end of this chapter, you will understand:
-- What the kernel is and its role in the operating system
-- The difference between kernel and operating system
-- User space vs kernel space architecture
-- User mode vs kernel mode (CPU execution modes)
-- What system calls are and why they exist
-- Kernel's five main responsibilities
-- Why direct hardware access is prevented
-- How the kernel ensures security and isolation
+**Why this chapter is in a Docker course:** containers do not have their own kernel. They all share the kernel of the host machine, and the isolation between them is a kernel feature. If you understand the kernel, the rest of Docker stops feeling like magic.
 
 ---
 
-## 1. Computer Architecture: A Quick Refresher
+## What you will learn
 
-Before we dive into the kernel, let's review the basic computer components we'll be working with.
-
-### 1.1 The Three Main Components
-
-```
-┌──────────────────────────────────────────────────┐
-│                  YOUR COMPUTER                   │
-├──────────────────────────────────────────────────┤
-│                                                  │
-│  ┌────────────┐    ┌────────────┐              │
-│  │    CPU     │    │    RAM     │              │
-│  │ (Processor)│    │  (Memory)  │              │
-│  │            │    │            │              │
-│  │ • Cores    │    │ • Cells    │              │
-│  │ • Registers│    │ • 64-bit   │              │
-│  │ • ALU      │    │ • Volatile │              │
-│  │ • Control  │    │            │              │
-│  └────────────┘    └────────────┘              │
-│                                                  │
-│         ┌─────────────────────┐                 │
-│         │    HARD DISK        │                 │
-│         │ (Storage/HDD/SSD)   │                 │
-│         │                     │                 │
-│         │ • Persistent        │                 │
-│         │ • Large capacity    │                 │
-│         └─────────────────────┘                 │
-└──────────────────────────────────────────────────┘
-```
-
-### 1.2 Quick Component Review
-
-**CPU (Central Processing Unit)**:
-- Has **cores** (physical processing units)
-- Each core has **registers** (tiny super-fast memory)
-- Has **ALU** (Arithmetic Logic Unit) for calculations
-- Has **Control Unit** for managing operations
-- On 64-bit computers: registers are 64-bit
-
-**RAM (Random Access Memory)**:
-- Made up of **cells** (each 64-bit on 64-bit systems)
-- **Volatile**: Loses data when power is off
-- **Fast** access for running programs
-- Limited capacity (GB range)
-
-**Hard Disk / SSD**:
-- **Persistent**: Keeps data when power is off
-- **Large** capacity (TB range)
-- Stores your files, programs, operating system
+- The three hardware parts that matter: CPU, RAM, disk
+- What an operating system (OS) is, and how it differs from the kernel
+- User space vs kernel space, and user mode vs kernel mode
+- What a system call is, and how to watch one happen on your own machine
+- What the kernel does for you (processes, memory, devices, files, security)
+- Why containers share the host kernel
 
 ---
 
-## 2. What Happens When You Install an Operating System?
+## 1. Quick refresher: the hardware
 
-### 2.1 The Installation Process
+| Part | What it does | Keeps data when powered off? |
+|---|---|---|
+| **CPU** | Runs instructions, one tiny step at a time. Has several **cores**, each with **registers** (very fast, tiny storage) | No |
+| **RAM** (memory) | Holds the programs and data that are running *right now*. Fast, but limited (GBs) | No (volatile) |
+| **Disk** (SSD/HDD) | Stores files and programs long-term. Slower, but large (TBs) | Yes |
 
-When you install an operating system (let's use Linux as our example):
-
-```
-Step 1: OS Code on Hard Disk
-┌─────────────────────────────────┐
-│     HARD DISK                   │
-│                                 │
-│  Operating System Code:         │
-│  • 10 billion lines of code     │
-│  • Stored in binary             │
-│  • Not yet running              │
-└─────────────────────────────────┘
-```
-
-**What's Stored**:
-- Operating system: ~10 billion lines of code (example for illustration)
-- All stored as **binary** on the hard disk
-- Takes up a portion of your storage
-
-### 2.2 Booting Up: Loading into RAM
-
-When you turn on your computer:
-
-```
-Step 2: OS Loads into RAM
-┌─────────────────────────────────┐
-│     RAM (Memory)                │
-│                                 │
-│  OS Code Loaded Here            │
-│  [████████████        ]         │
-│   Loaded    Available           │
-│                                 │
-│  Line-by-line execution ready   │
-└─────────────────────────────────┘
-```
-
-**What Happens**:
-1. Hard disk code **copied** to RAM
-2. Loaded portion takes partial RAM space
-3. CPU can now **execute** the code
-
-### 2.3 CPU Execution
-
-```
-Step 3: CPU Executes OS Code
-┌──────────────────────────┐
-│        CPU               │
-│                          │
-│  • Control Unit          │
-│  • Pointer Register      │
-│  ↓                       │
-│  Executes line-by-line   │
-│  from RAM                │
-└──────────────────────────┘
-          ↓
-    ┌─────────────┐
-    │ Result: OS  │
-    │ Runs!       │
-    └─────────────┘
-```
-
-**Key Points**:
-- **Control Unit** + **Pointer Register** = Execute code line by line
-- When execution starts, you see your **desktop** / **interface**
-- OS is now controlling your computer!
+A program is just a file on disk. To run it, the OS copies it into RAM and the CPU executes its instructions.
 
 ---
 
-## 3. What is an Operating System (OS)?
+## 2. What is an operating system?
 
-### 3.1 Definition
+When you press the power button:
 
-**Operating System**: The system that helps you **operate** (run/manage) your computer.
+1. A tiny program stored on the motherboard (firmware, such as UEFI) starts.
+2. It finds a **bootloader** on the disk and runs it.
+3. The bootloader loads the **kernel** from disk into RAM and starts it.
+4. The kernel starts the first process, which starts everything else (login screen, desktop, background services).
 
-**What OS Does**:
-```
-Operating System
-        ↓
-   Takes Control
-        ↓
-┌───────────────────────┐
-│   Hardware Access     │
-├───────────────────────┤
-│  • CPU                │
-│  • RAM                │
-│  • Hard Disk          │
-│  • Keyboard           │
-│  • Mouse              │
-│  • Monitor            │
-│  • Network devices    │
-│  • All hardware!      │
-└───────────────────────┘
-```
-
-**Result**: OS gains **exclusive access** to all hardware!
-
-### 3.2 Kernel vs Operating System
-
-**Common Misconception**: "OS and Kernel are the same thing"
-
-**Reality**: Kernel is the **core part** of the OS
+An **operating system** is the kernel **plus** the programs that make the computer usable:
 
 ```
-┌──────────────────────────────────────────┐
-│        OPERATING SYSTEM (Full)           │
-│                                          │
-│  ┌────────────────────────────────┐     │
-│  │        KERNEL                  │     │
-│  │    (Core of OS / Brain)        │     │
-│  │                                │     │
-│  │  • Process Management          │     │
-│  │  • Memory Management           │     │
-│  │  • Hardware Control            │     │
-│  │  • Security                    │     │
-│  └────────────────────────────────┘     │
-│                                          │
-│  + Utility Programs                      │
-│    • File viewer                         │
-│    • Clock display                       │
-│    • Image viewer                        │
-│    • Video player                        │
-│    • Terminal/Shell                      │
-└──────────────────────────────────────────┘
+┌───────────────────────────────────────────────┐
+│ Operating system (e.g. Ubuntu)                │
+│                                               │
+│   Programs: shell, file tools, package        │
+│   manager, desktop, libraries ...             │
+│  ┌─────────────────────────────────────────┐  │
+│  │ KERNEL (Linux)                          │  │
+│  └─────────────────────────────────────────┘  │
+└───────────────────────────────────────────────┘
+                   Hardware
 ```
 
-**Key Insight**:
-- **Kernel** = Brain/Core (manages everything)
-- **OS** = Kernel + Utilities (the complete system)
-
-**When People Say "OS"**:
-- Often they actually mean the **kernel**
-- Example: "Linux OS" usually refers to the Linux **kernel** + utilities
-- The kernel is what truly matters for understanding Docker!
+> **Terminology tip:** strictly speaking, **Linux is only the kernel**. Ubuntu, Debian, Fedora and Alpine are *distributions*: Linux kernel + a collection of other software. People often say "Linux" to mean the whole thing, which is fine in casual talk but matters in this course. Docker images contain a *distribution's files* (like Ubuntu's programs) but never a kernel.
 
 ---
 
-## 4. Kernel: The Brain of the Operating System
+## 3. What does the kernel do?
 
-### 4.1 What is the Kernel?
+The kernel is the middle layer between programs and hardware. Its main jobs:
 
-**Kernel** = The core part of the operating system
+| Job | In plain words |
+|---|---|
+| **Process management** | Creates and ends processes, and decides which one gets the CPU next (*scheduling*). This is how one CPU seems to run hundreds of programs at once |
+| **Memory management** | Gives each process its own private memory and reclaims it when the process ends. One program cannot read another's memory |
+| **Device management** | Talks to the disk, network card, keyboard, screen, etc. through **drivers** |
+| **File system management** | Turns "the file `notes.txt` in `/home/me`" into actual blocks on disk; enforces file permissions |
+| **System call interface** | The official "front desk" through which programs request all of the above |
+| **Security and isolation** | Checks who is allowed to do what; keeps processes apart |
 
-**Analogy**: 
-- If the OS is a human body
-- The **kernel** is the **brain**
-- Everything essential happens in the brain/kernel
+(The exact list differs between textbooks. What matters is the idea: **the kernel controls the hardware and shares it fairly and safely.**)
 
-### 4.2 Kernel's Exclusive Powers
+### The "everything is a file" idea (Linux and Unix)
 
-```
-┌───────────────────────────────────────────┐
-│              KERNEL                       │
-│         (Brain of OS)                     │
-├───────────────────────────────────────────┤
-│                                           │
-│  Has EXCLUSIVE Access to:                 │
-│                                           │
-│  ✅ CPU (complete control)                │
-│  ✅ RAM (all memory)                      │
-│  ✅ Hard Disk (all storage)               │
-│  ✅ All Hardware Devices                  │
-│                                           │
-│  Controls EVERYTHING!                     │
-└───────────────────────────────────────────┘
-```
+Linux exposes many things through file-like paths and file descriptors:
 
-**Reality**: 
-- When we say "OS" in technical discussions, we primarily mean the **kernel**
-- The kernel is where all the real work happens
-- Utilities are just user-facing conveniences
+- regular files and directories
+- devices: `/dev/sda` (a disk), `/dev/null` (a black hole)
+- kernel information: `/proc/<pid>/` (details of a process)
+- network connections (sockets), pipes
+
+That is why the same `read` and `write` operations work on all of them. (Note: programs such as `ls` are *executable files*, but they are not special device files.)
 
 ---
 
-## 5. The Two Spaces: User Space and Kernel Space
+## 4. User space and kernel space
 
-This is one of the **most important** concepts for understanding Docker!
-
-### 5.1 The Architecture
+Memory and CPU privileges are split into two worlds.
 
 ```
-┌───────────────────────────────────────────────────┐
-│                YOUR COMPUTER                      │
-├───────────────────────────────────────────────────┤
-│                                                   │
-│  ┌─────────────────────────────────────────┐     │
-│  │        USER SPACE                       │     │
-│  │                                         │     │
-│  │  ┌─────┐  ┌─────┐  ┌────────┐         │     │
-│  │  │ Go  │  │Node │  │ Chrome │         │     │
-│  │  │ App │  │ App │  │Browser │   ...   │     │
-│  │  └─────┘  └─────┘  └────────┘         │     │
-│  │                                         │     │
-│  │  Your applications run here             │     │
-│  └─────────────────────────────────────────┘     │
-│              ↕ System Calls                      │
-│  ┌─────────────────────────────────────────┐     │
-│  │       KERNEL SPACE                      │     │
-│  │                                         │     │
-│  │  ┌───────────────────────────┐         │     │
-│  │  │   KERNEL (OS Brain)       │         │     │
-│  │  │                           │         │     │
-│  │  │ Direct hardware access    │         │     │
-│  │  └───────────────────────────┘         │     │
-│  └─────────────────────────────────────────┘     │
-│                ↕                                  │
-│  ┌─────────────────────────────────────────┐     │
-│  │    HARDWARE                             │     │
-│  │  • CPU  • RAM  • Hard Disk  • Devices  │     │
-│  └─────────────────────────────────────────┘     │
-└───────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────┐
+│ USER SPACE  (limited privileges)             │
+│  Chrome   VS Code   Your Python app   bash   │
+└──────────────────────┬───────────────────────┘
+                       │  system calls
+┌──────────────────────▼───────────────────────┐
+│ KERNEL SPACE  (full privileges)              │
+│  scheduler · memory manager · drivers · FS   │
+└──────────────────────┬───────────────────────┘
+                       │
+┌──────────────────────▼───────────────────────┐
+│ HARDWARE:   CPU     RAM     Disk     NIC     │
+└──────────────────────────────────────────────┘
 ```
 
-### 5.2 User Space
+| | User space | Kernel space |
+|---|---|---|
+| Who runs there | Applications (yours, the browser, `bash`, `docker` CLI...) | The kernel and its drivers |
+| Hardware access | **None directly** | Full |
+| If it crashes | Only that program dies | The whole machine can crash (a "kernel panic" on Linux) |
 
-**What is User Space?**
-- The memory area where **your applications** run
-- Examples: Go programs, Node.js apps, Chrome browser, VS Code
+### CPU modes
 
-**Characteristics**:
-- **Limited privileges**: Cannot directly access hardware
-- **Isolated**: Apps can't interfere with each other directly
-- **Safe**: If an app crashes, kernel survives
+The CPU itself enforces the split. It has (at least) two modes:
 
-**Examples of User Space Applications**:
-```
-User Space Applications:
-┌──────────────────────────────────────┐
-│  • Google Chrome (browser)           │
-│  • VS Code (editor)                  │
-│  • Go application (your program)     │
-│  • Node.js server                    │
-│  • Python script                     │
-│  • Bank application                  │
-│  • Literally any app you run!        │
-└──────────────────────────────────────┘
-```
+- **User mode**: some instructions are forbidden (for example, talking to hardware ports). Attempting them triggers an error.
+- **Kernel mode**: everything is allowed.
 
-### 5.3 Kernel Space
-
-**What is Kernel Space?**
-- The memory area where the **kernel** runs
-- Has **full access** to all hardware
-
-**Characteristics**:
-- **Full privileges**: Complete hardware control
-- **Critical**: If kernel crashes, **entire system crashes**
-- **Protected**: User space cannot directly access kernel space
-
-**Kernel Space Contents**:
-```
-Kernel Space:
-┌─────────────────────────────────────┐
-│  • Kernel code (OS core)            │
-│  • Device drivers                   │
-│  • Hardware management              │
-│  • Security enforcement             │
-│  • System call handlers             │
-└─────────────────────────────────────┘
-```
+Your program always runs in user mode. Only while the CPU is executing kernel code is it in kernel mode. (On x86 processors these are called *rings*: ring 3 for user, ring 0 for kernel.)
 
 ---
 
-## 6. CPU Modes: User Mode vs Kernel Mode
+## 5. System calls: how programs ask the kernel for help
 
-### 6.1 What are CPU Modes?
+A **system call** (*syscall*) is a request from a user-space program to the kernel. It is the *only* door into kernel space.
 
-**CPU has two execution modes** (controlled by CPU registers):
+Analogy: the kernel is a bank vault; you cannot walk in. You hand a request slip to the teller (system call). The teller checks your ID (permissions), fetches what you asked for, and hands it back.
 
-```
-CPU Modes:
-┌────────────────────────────────────────┐
-│  MODE 1: USER MODE                     │
-│  • When CPU executes user space code   │
-│  • Restricted privileges                │
-│  • Cannot access hardware directly      │
-│  • Safe for application code            │
-└────────────────────────────────────────┘
-
-┌────────────────────────────────────────┐
-│  MODE 2: KERNEL MODE                   │
-│  • When CPU executes kernel space code │
-│  • Full privileges                      │
-│  • Direct hardware access allowed       │
-│  • Used for critical operations         │
-└────────────────────────────────────────┘
-```
-
-### 6.2 Mode Switching
+### What happens when a program reads a file
 
 ```
-Example: Go App Wants to Read a File
-
-Step 1: Go app runs (CPU in USER MODE)
-    ↓
-Step 2: Go makes system call "read file"
-    ↓
-Step 3: CPU switches to KERNEL MODE
-    ↓
-Step 4: Kernel reads file from hard disk
-    ↓
-Step 5: Kernel returns data to Go app
-    ↓
-Step 6: CPU switches back to USER MODE
-    ↓
-Step 7: Go app continues execution
+1. Program (user mode):       f = open("data.txt")
+2. The library issues the `openat` system call
+3. CPU switches to kernel mode
+4. Kernel: does the file exist? does this user have permission?
+5a. Yes → kernel reads from disk (or its cache) and returns a file handle / data
+5b. No  → kernel returns an error, e.g. "Permission denied"
+6. CPU switches back to user mode
+7. Program continues with the result
 ```
 
-**Key Insight**: The CPU **constantly switches** between these modes!
+This is also the answer to "why can't a malicious program just edit my bank file?": it has no direct access to the disk. Everything goes through the kernel, and the kernel checks permissions each time.
+
+### Common system calls
+
+| Area | Examples |
+|---|---|
+| Files | `open`, `read`, `write`, `close` |
+| Processes | `fork` / `clone` (create), `execve` (run a program), `wait`, `exit` |
+| Memory | `mmap`, `brk` |
+| Network | `socket`, `connect`, `bind`, `send`, `recv` |
+
+> **Are syscalls just function calls?** No. A normal function call stays in user mode. A syscall crosses the boundary into kernel mode, which is slower, so programs try not to make more than needed.
 
 ---
 
-## 7. Why Applications Can't Access Hardware Directly
+## 6. Try it yourself (Linux)
 
-### 7.1 The Problem Without Restrictions
+You do not need Docker for these. Use any Linux machine, a WSL2 terminal, or a Linux VM.
 
-**Nightmare Scenario**:
+**See the kernel version:**
 
-```
-Without Kernel Protection:
-┌─────────────────────────────────────────┐
-│  Hacker App (malicious)                 │
-│      ↓                                  │
-│  Direct access to hard disk             │
-│      ↓                                  │
-│  Reads your bank account file           │
-│      ↓                                  │
-│  Changes: $100,000 → $0                 │
-│      ↓                                  │
-│  💰 You lose all your money! 😱         │
-└─────────────────────────────────────────┘
+```bash
+uname -r
 ```
 
-**Real Example from Video**:
+Example output: `6.8.0-45-generic`. That is the running kernel.
 
-```
-Scenario:
-┌──────────────────────────────────────┐
-│  Hard Disk Contains:                 │
-│                                      │
-│  Bank App File: $100,000             │
-│                                      │
-│  If Hacker App could access directly:│
-│  • Change $100,000 → $0              │
-│  • Steal data                        │
-│  • Delete files                      │
-│  • Corrupt system                    │
-└──────────────────────────────────────┘
+**Watch system calls with `strace`:**
+
+```bash
+# install if missing (Debian/Ubuntu)
+sudo apt install strace
+
+# trace the system calls made by `cat`
+strace cat /etc/hostname 2> trace.txt
+grep -E 'openat|read|write' trace.txt | tail -5
 ```
 
-### 7.2 The Solution: Kernel Mediation
+You should see lines such as `openat(AT_FDCWD, "/etc/hostname", O_RDONLY) = 3` followed by `read(3, ...)` and `write(1, ...)`. That is your `cat` command asking the kernel to open, read and print a file.
 
-**With Kernel Protection**:
+**See a permission check in action:**
 
-```
-┌────────────────────────────────────────────┐
-│  Hacker App wants bank file                │
-│      ↓                                     │
-│  Makes system call to kernel               │
-│      ↓                                     │
-│  ┌─────────────────────────────┐          │
-│  │  KERNEL CHECKS:             │          │
-│  │  • Does this app have       │          │
-│  │    permission?              │          │
-│  │  • Is this file protected?  │          │
-│  │  • Should I allow this?     │          │
-│  └─────────────────────────────┘          │
-│      ↓                                     │
-│  🛑 DENIED! No permission.                 │
-│                                            │
-│  ✅ Your money is safe!                    │
-└────────────────────────────────────────────┘
+```bash
+cat /etc/shadow
 ```
 
-**Key Security Features**:
-1. **Permission checks**: Each file has access controls
-2. **Process isolation**: Apps can't access each other's data
-3. **Kernel acts as gatekeeper**: No direct hardware access
+Output: `cat: /etc/shadow: Permission denied`. The kernel refused the `open` system call.
+
+**Look at kernel-provided information:**
+
+```bash
+ls /proc | head          # one directory per running process (numbers) + system info
+cat /proc/cpuinfo | head # CPU details, generated live by the kernel
+cat /proc/meminfo | head # memory details
+```
+
+`/proc` is not on your disk. The kernel creates it on demand.
 
 ---
 
-## 8. System Calls: The Communication Bridge
+## 7. Why this matters for Docker
 
-### 8.1 What is a System Call?
-
-**System Call** = A request from user space application to kernel for service
-
-**Analogy**: 
-- User space app = Customer
-- Kernel = Service desk
-- System call = Customer's service request
-
-### 8.2 How System Calls Work
+Compare two ways of running programs side by side:
 
 ```
-Example: Go App Wants to Read File "data.txt"
-
-┌────────────────────────────────────────────┐
-│  USER SPACE (Go Application)               │
-│                                            │
-│  1. Go code: file = open("data.txt")      │
-│                 ↓                          │
-│  2. Triggers SYSTEM CALL                   │
-└────────────────────────────────────────────┘
-                 ↓
-        System Call Bridge
-                 ↓
-┌────────────────────────────────────────────┐
-│  KERNEL SPACE (Kernel)                     │
-│                                            │
-│  3. Kernel receives system call            │
-│                 ↓                          │
-│  4. Kernel checks:                         │
-│     • Does "data.txt" exist?               │
-│     • Does Go app have permission?         │
-│                 ↓                          │
-│  5. If YES:                                │
-│     • Access hard disk                     │
-│     • Read file contents                   │
-│     • Return data to Go app                │
-│                                            │
-│  6. If NO:                                 │
-│     • Return error "Permission Denied"     │
-└────────────────────────────────────────────┘
-                 ↓
-         Return to User Space
-                 ↓
-┌────────────────────────────────────────────┐
-│  USER SPACE (Go Application)               │
-│                                            │
-│  7. Go receives file contents              │
-│     OR error message                       │
-│                 ↓                          │
-│  8. Go continues execution                 │
-└────────────────────────────────────────────┘
+    Virtual machines                    Containers
+┌────────┐ ┌────────┐            ┌────────┐ ┌────────┐
+│  App   │ │  App   │            │  App   │ │  App   │
+│ Guest  │ │ Guest  │            │ (files │ │ (files │
+│ kernel │ │ kernel │            │ only)  │ │ only)  │
+└────────┘ └────────┘            └────────┘ └────────┘
+    Hypervisor                    ONE shared host kernel
+     Hardware                          Hardware
 ```
 
-### 8.3 Why System Calls are Necessary
+- A **virtual machine** boots its own full kernel. Heavy, slow to start.
+- A **container** is just a process on the host, running in user space, with the kernel *restricting what it can see*. Two Linux kernel features do the work (details in Chapter 4):
+  - **namespaces**: give the process its own view of processes, network, file system, hostname
+  - **cgroups**: limit how much CPU, memory and I/O it can use
 
-**Without System Calls**:
-- Every app could crash the system
-- No security possible
-- Apps could interfere with each other
-- Hardware conflicts
+Consequences you will meet again and again:
 
-**With System Calls**:
-✅ Kernel controls all hardware access  
-✅ Permission checks enforced  
-✅ Apps isolated from each other  
-✅ System stability maintained  
+- Containers start in about a second (no OS to boot).
+- A Linux container needs a **Linux kernel**. Docker Desktop on Windows/macOS therefore runs a small hidden Linux VM to provide one.
+- Because the kernel is shared, a kernel-level bug or misconfiguration can affect every container. This is the main security trade-off compared to VMs.
+- `docker run ubuntu` does **not** install Ubuntu's kernel. It only gives the process Ubuntu's *files* (programs and libraries). You can check this:
 
-### 8.4 Common System Call Examples
-
+```bash
+uname -r                                # on your host
+docker run --rm ubuntu uname -r         # inside a container: the same kernel version
 ```
-System Call Types:
-┌──────────────────────────────────────┐
-│  File Operations:                    │
-│  • open()  - Open file               │
-│  • read()  - Read from file          │
-│  • write() - Write to file           │
-│  • close() - Close file              │
-└──────────────────────────────────────┘
 
-┌──────────────────────────────────────┐
-│  Process Operations:                 │
-│  • fork()   - Create new process     │
-│  • exec()   - Execute program        │
-│  • wait()   - Wait for process       │
-│  • exit()   - Terminate process      │
-└──────────────────────────────────────┘
-
-┌──────────────────────────────────────┐
-│  Network Operations:                 │
-│  • socket() - Create socket          │
-│  • connect()- Connect to server      │
-│  • send()   - Send data              │
-│  • recv()   - Receive data           │
-└──────────────────────────────────────┘
-```
+Both print the same version. Try it after Chapter 14.
 
 ---
 
-## 9. The Five Core Responsibilities of the Kernel
+## 8. Common mistakes and myths
 
-From the video, the instructor emphasizes the kernel has **5 main jobs**:
-
-### 9.1 Responsibility 1: Process Management
-
-```
-┌────────────────────────────────────────┐
-│  PROCESS MANAGEMENT                    │
-├────────────────────────────────────────┤
-│                                        │
-│  • Process Creation                    │
-│  • Thread Creation                     │
-│  • Process Scheduling (CPU time)       │
-│  • Process Termination                 │
-│  • Process Deletion                    │
-│  • Multitasking coordination           │
-│  • Fair time allocation                │
-└────────────────────────────────────────┘
-```
-
-**What This Means**:
-
-**Process Scheduling**:
-```
-CPU has limited time. Kernel decides:
-
-Process A gets: 10ms
-    ↓
-Process B gets: 10ms
-    ↓
-Process C gets: 10ms
-    ↓
-Repeat...
-
-Result: All processes appear to run simultaneously!
-```
-
-**Process Lifecycle**:
-1. **Create**: Start new process
-2. **Schedule**: Give CPU time
-3. **Execute**: Run the code
-4. **Terminate**: End gracefully
-5. **Delete**: Clean up resources
-
-### 9.2 Responsibility 2: Memory Management
-
-```
-┌────────────────────────────────────────┐
-│  MEMORY MANAGEMENT                     │
-├────────────────────────────────────────┤
-│                                        │
-│  • Allocate memory to processes        │
-│  • Track which memory is used          │
-│  • Free memory when process ends       │
-│  • Prevent memory conflicts            │
-│  • Manage virtual memory               │
-│  • Handle memory isolation             │
-└────────────────────────────────────────┘
-```
-
-**Example**: App Crashes
-
-```
-Before Crash:
-RAM: [Go App][ Available ]
-          ↑
-     Using memory
-
-After Crash:
-RAM: [Available][ Available ]
-          ↑
-   Kernel freed the memory!
-```
-
-**Why Important**:
-- Prevents memory leaks
-- Allows new processes to get memory
-- Ensures system doesn't run out of RAM
-
-### 9.3 Responsibility 3: Device Management
-
-```
-┌────────────────────────────────────────┐
-│  DEVICE MANAGEMENT                     │
-├────────────────────────────────────────┤
-│                                        │
-│  • Connect/disconnect devices          │
-│  • Load device drivers                 │
-│  • Manage device access                │
-│  • Handle interrupts from devices      │
-│                                        │
-│  Examples:                             │
-│  • WiFi driver                         │
-│  • Hard disk driver                    │
-│  • Monitor driver                      │
-│  • Keyboard driver                     │
-│  • Mouse driver                        │
-│  • Router connection                   │
-└────────────────────────────────────────┘
-```
-
-**Example: Plugging in USB Drive**
-
-```
-1. You plug in USB drive
-    ↓
-2. Hardware sends signal to kernel
-    ↓
-3. Kernel detects new device
-    ↓
-4. Kernel loads USB driver
-    ↓
-5. Kernel mounts filesystem
-    ↓
-6. You see "USB Drive Connected"!
-```
-
-### 9.4 Responsibility 4: File System Management
-
-```
-┌────────────────────────────────────────┐
-│  FILE SYSTEM MANAGEMENT                │
-├────────────────────────────────────────┤
-│                                        │
-│  • Create files                        │
-│  • Delete files                        │
-│  • Read/Write operations               │
-│  • Directory management                │
-│  • File permissions                    │
-│  • File metadata                       │
-└────────────────────────────────────────┘
-```
-
-**Key Insight from Video**:
-
-In Linux/Unix systems: **EVERYTHING IS A FILE!**
-
-```
-Files in Linux:
-┌──────────────────────────────────┐
-│  Regular Files:                  │
-│  • Your code (app.go)            │
-│  • Documents (report.txt)        │
-│  • Images (photo.jpg)            │
-│                                  │
-│  Special Files:                  │
-│  • Sockets (network connection)  │
-│  • Commands (ls, cd)             │
-│  • Devices (/dev/sda)            │
-│  • Processes (/proc/123)         │
-│                                  │
-│  ALL managed by kernel!          │
-└──────────────────────────────────┘
-```
-
-### 9.5 Responsibility 5: System Call Interface
-
-```
-┌────────────────────────────────────────┐
-│  SYSTEM CALL INTERFACE                 │
-├────────────────────────────────────────┤
-│                                        │
-│  • Provide API for user space apps     │
-│  • Handle system call requests         │
-│  • Validate requests                   │
-│  • Execute privileged operations       │
-│  • Return results safely               │
-└────────────────────────────────────────┘
-```
-
-**Purpose**: Enable communication between user space and kernel space
+| Myth | Reality |
+|---|---|
+| "Kernel and OS are the same thing" | The kernel is the core; the OS includes many more programs |
+| "Programs can read the disk directly" | They must use system calls; the kernel decides |
+| "User space is a separate chip" | It is a logical split of privileges and memory, not physical |
+| "A container has its own kernel" | It shares the host's kernel |
+| "Each Docker image contains Ubuntu, so it must contain the Ubuntu kernel" | It contains Ubuntu's *user-space files* only |
 
 ---
 
-## 10. Complete Example: Go App Reads a File
+## 9. Summary
 
-Let's trace through a complete example to see all concepts in action:
-
-### 10.1 The Scenario
-
-**Goal**: Go application wants to read `data.txt` from hard disk
-
-### 10.2 Step-by-Step Execution
-
-```
-STEP 1: Go App Runs in User Space
-┌────────────────────────────────────┐
-│  USER SPACE                        │
-│                                    │
-│  Go App: file = open("data.txt")  │
-│          ↓                         │
-│  CPU Mode: USER MODE               │
-└────────────────────────────────────┘
-
-STEP 2: System Call Triggered
-┌────────────────────────────────────┐
-│  System Call: OPEN                 │
-│  Parameters: "data.txt"            │
-│          ↓                         │
-│  CPU switches to KERNEL MODE       │
-└────────────────────────────────────┘
-
-STEP 3: Kernel Receives Request
-┌────────────────────────────────────┐
-│  KERNEL SPACE                      │
-│                                    │
-│  Kernel System Call Handler:       │
-│    1. What file? "data.txt"        │
-│    2. Who wants it? Go App         │
-│    3. Check permissions...         │
-└────────────────────────────────────┘
-
-STEP 4: Permission Check
-┌────────────────────────────────────┐
-│  Kernel Security Check:            │
-│                                    │
-│  • File exists? ✅ YES             │
-│  • Go app has read permission?     │
-│    ✅ YES                           │
-│                                    │
-│  Decision: ALLOW                   │
-└────────────────────────────────────┘
-
-STEP 5: Kernel Accesses Hardware
-┌────────────────────────────────────┐
-│  KERNEL → HARD DISK                │
-│                                    │
-│  1. Kernel locates file            │
-│  2. Reads file contents            │
-│  3. Loads into memory buffer       │
-└────────────────────────────────────┘
-
-STEP 6: Return to User Space
-┌────────────────────────────────────┐
-│  Kernel returns data to Go app     │
-│          ↓                         │
-│  CPU switches to USER MODE         │
-└────────────────────────────────────┘
-
-STEP 7: Go App Continues
-┌────────────────────────────────────┐
-│  USER SPACE                        │
-│                                    │
-│  Go App receives file contents     │
-│  file = <data from data.txt>       │
-│  Continue execution...             │
-└────────────────────────────────────┘
-```
-
-### 10.3 What If Permission Denied?
-
-```
-STEP 3-4: Kernel Security Check
-
-┌────────────────────────────────────┐
-│  Kernel checks:                    │
-│  • File: "bank_account.txt"        │
-│  • Requestor: Hacker App           │
-│  • Permission: ❌ DENIED           │
-│                                    │
-│  Kernel Response:                  │
-│  "Permission Denied - Error"       │
-└────────────────────────────────────┘
-        ↓
-┌────────────────────────────────────┐
-│  Hacker App receives:              │
-│  Error: "Permission Denied"        │
-│  Cannot access file!               │
-│  🛡️ Security maintained            │
-└────────────────────────────────────┘
-```
+- **Kernel** = core of the OS, the only code with full hardware access.
+- **User space** = where applications run, with limited privileges; **kernel space** = where the kernel runs.
+- The CPU switches between **user mode** and **kernel mode** to enforce this.
+- **System calls** are the controlled entry points to the kernel.
+- The kernel manages processes, memory, devices, files and security.
+- **Containers share the host kernel**, which is why they are light, and why they can use kernel features (namespaces, cgroups) for isolation.
 
 ---
 
-## 11. Visual Summary: The Complete Picture
+## 10. Check your understanding
 
-### 11.1 Simplified Architecture
+1. Is Chrome running in user space or kernel space? What about a Wi-Fi driver?
+2. What does the CPU do when a program makes a system call?
+3. Why can't one program simply read another program's memory?
+4. Your teammate says "Docker containers each contain their own Linux kernel". Correct them in one sentence.
+5. Which command shows the running kernel's version?
 
-```
-┌─────────────────────────────────────────────────┐
-│             YOUR COMPUTER                       │
-├─────────────────────────────────────────────────┤
-│                                                 │
-│  USER SPACE (Applications)                      │
-│  ┌──────┐  ┌──────┐  ┌───────┐  ┌──────┐     │
-│  │ Go   │  │Chrome│  │ Bank  │  │Hacker│     │
-│  │ App  │  │      │  │ App   │  │ App  │     │
-│  └───┬──┘  └───┬──┘  └───┬───┘  └───┬──┘     │
-│      │         │         │          │         │
-│      └─────────┴─────────┴──────────┘         │
-│                   │                            │
-│             System Calls                       │
-│                   ↓                            │
-│  ┌───────────────────────────────────────┐    │
-│  │   KERNEL SPACE (Brain)                │    │
-│  │                                       │    │
-│  │  ✅ Process Management                │    │
-│  │  ✅ Memory Management                 │    │
-│  │  ✅ Device Management                 │    │
-│  │  ✅ File System Management            │    │
-│  │  ✅ System Call Interface             │    │
-│  │                                       │    │
-│  │  Security: Permission checks          │    │
-│  └───────────────┬───────────────────────┘    │
-│                  │                             │
-│          Direct Hardware Access                │
-│                  ↓                             │
-│  ┌────────────────────────────────────────┐   │
-│  │   HARDWARE                             │   │
-│  │  • CPU  • RAM  • Hard Disk  • Devices │   │
-│  └────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────┘
-```
+<details>
+<summary>Answers</summary>
 
-### 11.2 Key Relationships
+1. Chrome: user space. The Wi-Fi driver: kernel space (drivers usually run inside the kernel).
+2. It switches from user mode to kernel mode, runs the kernel's handler, then switches back and returns the result.
+3. The kernel gives each process its own virtual memory and the CPU enforces it; the only way to interact is through kernel-approved mechanisms.
+4. Containers share the host machine's kernel; only virtual machines have their own.
+5. `uname -r`.
+</details>
 
-```
-Kernel Relationships:
-┌────────────────────────────────────┐
-│  OS = Kernel + Utilities           │
-│  Kernel = Brain of OS              │
-│  System Calls = Bridge to kernel   │
-│  User Space ≠ Kernel Space         │
-│  User Mode ≠ Kernel Mode           │
-└────────────────────────────────────┘
-```
+**Practice:** run `strace -c ls` and look at the summary table. Which system call was used the most?
 
 ---
 
-## 12. Why This Matters for Docker
-
-### 12.1 The Docker Connection
-
-**Critical Insight from the Instructor**:
-
-> "If you don't understand the kernel, you will NEVER understand Docker. I guarantee it."
-
-**Why?**
-
-```
-Docker Containers
-        ↓
-   Share Host Kernel!
-        ↓
-┌────────────────────────────────┐
-│  Container 1  │  Container 2   │
-│  (Isolated)   │  (Isolated)    │
-└───────┬───────┴────────┬───────┘
-        │                │
-        └────────┬───────┘
-                 ↓
-         ┌──────────────┐
-         │    KERNEL    │
-         │ (Shared!)    │
-         └──────────────┘
-                ↓
-         ┌──────────────┐
-         │   HARDWARE   │
-         └──────────────┘
-```
-
-**Key Docker Concepts Requiring Kernel Knowledge**:
-
-1. **Container Isolation**: How containers are isolated (kernel namespaces)
-2. **Resource Limits**: How Docker limits CPU/memory (kernel cgroups)
-3. **Security**: Why containers are secure yet fast (kernel features)
-4. **Shared Kernel**: Why all containers share one kernel
-5. **Lightweight**: Why containers are lighter than VMs (no duplicate kernels)
-
-### 12.2 Preview: Containers Use Kernel Features
-
-```
-Docker Container Technology Uses:
-┌──────────────────────────────────────┐
-│  Kernel Features:                    │
-│  • Namespaces (isolation)            │
-│  • cgroups (resource limits)         │
-│  • System calls (for operations)     │
-│  • File systems (container storage)  │
-│                                      │
-│  All provided by THE KERNEL!         │
-└──────────────────────────────────────┘
-```
-
-We'll explore these in upcoming chapters!
-
----
-
-## 13. Common Misconceptions Clarified
-
-### Misconception 1: "Kernel = OS"
-
-**Wrong**: Kernel is the **core** of the OS  
-**Correct**: OS = Kernel + Utilities + User Interface
-
-### Misconception 2: "Apps can access hardware"
-
-**Wrong**: Apps never touch hardware directly  
-**Correct**: Apps → System Calls → Kernel → Hardware
-
-### Misconception 3: "User space and kernel space are physical"
-
-**Wrong**: They're not physical locations  
-**Correct**: They're logical divisions in memory with different privilege levels
-
-### Misconception 4: "System calls are function calls"
-
-**Wrong**: System calls are special!  
-**Correct**: System calls switch CPU mode and jump to kernel code
-
----
-
-## 14. Key Takeaways
-
-### 14.1 Core Concepts
-
-**Kernel Definition**:
-✅ The brain of the operating system  
-✅ Core part that controls everything  
-✅ Has exclusive hardware access  
-
-**Two Spaces**:
-✅ User Space: Where apps run (limited privileges)  
-✅ Kernel Space: Where kernel runs (full privileges)  
-
-**Two CPU Modes**:
-✅ User Mode: When executing user space code  
-✅ Kernel Mode: When executing kernel code  
-
-**System Calls**:
-✅ Bridge between user space and kernel space  
-✅ Only way for apps to access hardware  
-✅ Enable security and isolation  
-
-**Five Kernel Responsibilities**:
-1. Process Management
-2. Memory Management
-3. Device Management
-4. File System Management
-5. System Call Interface
-
-### 14.2 Why Security Matters
-
-**Without Kernel Protection**:
-- Apps could corrupt each other
-- Hackers could steal your data
-- System would be unstable
-- No isolation possible
-
-**With Kernel Protection**:
-✅ Permission-based access  
-✅ Process isolation  
-✅ Secure hardware access  
-✅ Stable system operation  
-
----
-
-## 15. Practical Exercises
-
-### Exercise 1: Identify the Space
-
-**Question**: Where do these run - User Space or Kernel Space?
-
-1. Google Chrome browser
-2. Device driver for WiFi
-3. Python script you wrote
-4. System call handler
-5. File system code
-
-**Answers**:
-1. User Space
-2. Kernel Space
-3. User Space
-4. Kernel Space
-5. Kernel Space
-
----
-
-### Exercise 2: Trace the Path
-
-**Question**: Your Node.js app wants to write to a file. Trace the complete path from app to hard disk.
-
-**Answer**:
-```
-1. Node.js app (User Space, User Mode)
-2. Makes write() system call
-3. CPU switches to Kernel Mode
-4. Kernel receives system call
-5. Kernel checks permissions
-6. If allowed: Kernel writes to hard disk
-7. Kernel returns success/error
-8. CPU switches to User Mode
-9. Node.js app continues
-```
-
----
-
-### Exercise 3: Security Scenario
-
-**Question**: Why can't a malicious app directly change your bank account file?
-
-**Answer**:
-- Apps run in User Space (limited privileges)
-- Cannot access hardware directly
-- Must use system calls
-- Kernel checks permissions
-- File protected with access controls
-- Kernel denies unauthorized access
-- Security maintained!
-
----
-
-## 16. Connection to Next Chapters
-
-### 16.1 What's Coming
-
-Now that you understand the kernel, you're ready for:
-
-**Chapter 10: Virtual Machines**
-- How VMs have their own kernels
-- Why VMs are "heavier" than containers
-- VM architecture
-
-**Chapter 11: Containers**
-- How containers share the host kernel
-- Kernel namespaces for isolation
-- Why containers are lightweight
-
-**Chapter 12: Container vs VM**
-- Kernel differences explained
-- Performance comparisons
-- When to use each
-
-### 16.2 Building Block Analogy
-
-```
-Your Learning Path:
-┌──────────────────────────────────┐
-│  Chapter 5: What is Docker?      │  ← Foundation
-│  (Understanding the problem)     │
-└────────────┬─────────────────────┘
-             ↓
-┌──────────────────────────────────┐
-│  Chapter 9: Kernel (YOU ARE HERE)│  ← Core Concept
-│  (Brain of OS, hardware control) │
-└────────────┬─────────────────────┘
-             ↓
-┌──────────────────────────────────┐
-│  Chapter 10: Virtual Machines    │  ← Context
-│  (Full OS with kernel per VM)    │
-└────────────┬─────────────────────┘
-             ↓
-┌──────────────────────────────────┐
-│  Chapter 11: Containers          │  ← Docker Core
-│  (Shared kernel, lightweight)    │
-└──────────────────────────────────┘
-```
-
----
-
-## 17. Final Thoughts
-
-### 17.1 The Critical Foundation
-
-The instructor's emphasis:
-> "Kernel is MAIN. Kernel is the operating system's MAIN thing. If you don't understand the kernel, you can NEVER understand Docker. NEVER."
-
-**Why This Chapter Matters**:
-- Docker containers **share the host kernel**
-- Container isolation uses **kernel features**
-- Understanding kernel = Understanding Docker's foundation
-- Skip this, and Docker will remain confusing
-
-### 17.2 The Big Picture
-
-```
-Complete Understanding Path:
-┌─────────────────────────────────┐
-│  Kernel (Brain)                 │
-│      ↓                          │
-│  Controls Hardware              │
-│      ↓                          │
-│  Enables Processes              │
-│      ↓                          │
-│  Allows Containers              │
-│      ↓                          │
-│  Docker Possible!               │
-└─────────────────────────────────┘
-```
-
-### 17.3 Remember These Key Points
-
-**The Three Critical Concepts**:
-1. **Kernel = Brain**: Controls everything
-2. **Two Spaces**: User (apps) and Kernel (OS core)
-3. **System Calls**: Only way to access hardware
-
-**The Security Model**:
-- User space apps have limited privileges
-- Kernel acts as gatekeeper
-- System calls enable controlled access
-- Isolation prevents interference
-
-**The Docker Connection**:
-- Containers share the host kernel
-- Kernel provides isolation features
-- Understanding kernel = Understanding containers
-- This knowledge is non-negotiable!
-
----
-
-## 18. Chapter Summary
-
-You now understand:
-
-✅ What the kernel is (brain of OS)  
-✅ Kernel vs Operating System distinction  
-✅ User Space vs Kernel Space architecture  
-✅ User Mode vs Kernel Mode (CPU modes)  
-✅ Why apps can't access hardware directly  
-✅ What system calls are and why they exist  
-✅ Kernel's five core responsibilities  
-✅ How security and isolation work  
-✅ Why kernel knowledge is essential for Docker  
-
-**Next Step**: Chapter 10 will introduce Virtual Machines and show you how VMs differ from containers at the kernel level. You'll finally understand why containers are "lightweight" compared to VMs!
-
----
-
-**End of Chapter 9: Understanding the Kernel**
-
-*You've completed a critical foundation chapter. The kernel is the key to understanding everything that follows. With this knowledge, Docker's architecture will make perfect sense. Let's continue to Virtual Machines!*
+**Next:** [Chapter 3 – Virtual Machine](03_virtual_machine.md), the older way to isolate software, which will make the container idea clearer by contrast.

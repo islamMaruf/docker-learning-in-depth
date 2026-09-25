@@ -1,1189 +1,477 @@
-# Chapter 13: Managing Users, Groups, and Permissions
+# Chapter 13: Users, Groups and Permissions
 
-## Overview
+> **In one sentence:** Linux decides who may read, change or run every file using three ideas: **users** (who you are), **groups** (teams you belong to) and **permissions** (`r`, `w`, `x` for the owner, the group, and everyone else). Docker containers use the exact same system, and getting it wrong is behind many "permission denied" errors and security problems.
 
-Welcome to one of the most critical chapters in your Linux journey! Understanding users, groups, and permissions is fundamental to Linux system administration and security. These concepts form the backbone of Linux's multi-user design and its robust security model.
+**Level:** 🟢 Beginner → 🟡 Intermediate → 🔴 Expert (Docker section) · **Reading time:** ~50 minutes
 
-In this chapter, we'll explore the Linux permission system from the ground up. You'll learn how to create and manage users, organize them into groups, and control exactly who can read, write, or execute files and directories. These skills are essential not just for Docker and containers, but for any work you'll do with Linux systems.
+**Prerequisites:** [Chapter 12](12_linux_basic_commands.md). Practice safely in a container: `docker run -it --rm ubuntu:24.04 bash`
 
-Think of Linux permissions as a sophisticated access control system for your files. Just as you wouldn't want anyone walking into your home and rearranging your belongings, Linux ensures that users can only access and modify files they're authorized to work with. By the end of this chapter, you'll be the master of your Linux domain, deciding precisely who gets to do what.
+---
 
-## Understanding Users in Linux
+## What you will learn
 
-### The Two Types of Users
+- What users and groups are, and how Linux stores them (`/etc/passwd`, `/etc/group`, `/etc/shadow`)
+- Create, inspect, modify, lock and delete users and groups
+- Read and set **permissions** with `chmod` (symbolic and numeric) and change owners with `chown`
+- Directories vs files: what `r`, `w`, `x` really mean
+- `umask`, `sudo`, and the special bits (setuid, setgid, sticky)
+- **Docker specifics:** why containers run as root by default, how to run as non-root, and how to fix permission errors with volumes
 
-Linux fundamentally has two types of users:
+---
 
-1. **Root User (Superuser)**: The all-powerful administrator with unrestricted access to everything
-2. **Normal Users**: Regular users with limited permissions
+## 1. Users
 
-**Why this distinction matters:**
-- **Root user** can do absolutely anything: install software, modify system files, access anyone's data, even accidentally delete the entire system
-- **Normal users** work in a protected environment where they can't accidentally (or maliciously) harm the system
+Every process and every file belongs to a **user**. The kernel identifies users by number, the **UID**; names are just labels.
 
-### The Root User Philosophy
+| Kind | UID | Purpose |
+|---|---|---|
+| **root** (superuser) | **0** | The administrator. The kernel skips most permission checks for UID 0 |
+| **System users** | usually 1–999 | Accounts for services (`www-data`, `postgres`, `nobody`) that shouldn't log in |
+| **Regular users** | usually 1000+ | People |
 
-When you set up a typical Ubuntu system, you get two user accounts:
-1. An administrator account (root or similar)
-2. Your personal account (like "habiburrahman")
+**Why not work as root?** A typo (`rm -rf /`), a malicious script, or a hacked program running as root can destroy or take over the whole system. The **principle of least privilege**: every program and person should have only the rights they need. That principle applies double inside containers (section 9).
 
-**Best Practice**: Always work as a normal user, not root. Why?
-- Security: If your account is compromised, damage is limited
-- Safety: You can't accidentally delete critical system files
-- Audit trail: Actions are traceable to specific users
+### Inspect users
 
-Think of it like driving: even though you have a driver's license (root access), you don't drive recklessly just because you can. You follow rules to keep everyone safe.
-
-## Creating and Managing Users
-
-### Creating a New User
-
-The `useradd` command creates new user accounts. Let's start with the basics:
-
-**Basic user creation:**
-```bash
-# Run inside a Docker container or as root
-$ docker run -it ubuntu:22.04 bash
-root@container:/#
-
-# Create a new user named "habib"
-root@container:/# useradd -m habib
-```
-
-The `-m` flag is crucial:
-- **With `-m`**: Creates a home directory for the user at `/home/habib`
-- **Without `-m`**: User is created but has no home directory
-
-**Why the home directory matters:**
-Every user needs a personal space to store their files, configurations, and data. Without it, the user has nowhere to call "home."
-
-### Viewing User Information
-
-The `id` command displays comprehensive user information:
-
-```bash
-root@container:/# id habib
-uid=1001(habib) gid=1001(habib) groups=1001(habib)
-```
-
-This output tells you:
-- **uid=1001(habib)**: User ID is 1001, username is "habib"
-- **gid=1001(habib)**: Primary group ID is 1001, group name is "habib"
-- **groups=1001(habib)**: User belongs to group 1001 (habib)
-
-**What's a UID and GID?**
-- **UID** (User ID): A unique number identifying each user
-- **GID** (Group ID): A unique number identifying each group
-- Linux uses these numbers internally; names are for human convenience
-
-### Listing All Users
-
-All user information is stored in the `/etc/passwd` file:
-
-```bash
-root@container:/# cat /etc/passwd
-root:x:0:0:root:/root:/bin/bash
-daemon:x:1:1:daemon:/usr/sbin:/usr/sbin/nologin
-...
-habib:x:1001:1001::/home/habib:/bin/sh
-```
-
-**Understanding the passwd file format:**
-Each line represents one user with seven fields separated by colons:
-
-```
-username:password:UID:GID:comment:home_directory:shell
-```
-
-Example breakdown for habib:
-- **habib**: Username
-- **x**: Password is stored in `/etc/shadow` (encrypted)
-- **1001**: User ID
-- **1001**: Primary group ID
-- **(empty)**: Comment/description field
-- **/home/habib**: Home directory
-- **/bin/sh**: Default shell
-
-### Home Directories
-
-When you create a user with `-m`, Linux automatically creates their home directory:
-
-```bash
-root@container:/# cd /home
-root@container:/home# ls
-habib
-```
-
-You can verify which home directory a user has:
-
-```bash
-# Currently as root user (in /root)
-root@container:/# pwd
-/root
-
-# The tilde (~) always represents the current user's home
-root@container:/# cd ~
-root@container:/# pwd
-/root
-```
-
-### Switching Between Users
-
-The `su` (switch user) command lets you change to another user:
-
-```bash
-# Switch to habib user
-root@container:/# su - habib
-habib@container:~$
-
-# Check current location
-habib@container:~$ pwd
-/home/habib
-
-# Notice the prompt changed:
-# $ instead of # (indicating normal user, not root)
-```
-
-**Understanding the prompt symbols:**
-- `#`: Root user (danger zone!)
-- `$`: Normal user (safe zone)
-- `%`: Zsh shell with normal user
-
-**The power of root:**
-- Root → any user: No password needed (root has all permissions)
-- Normal user → another user: Password required (security!)
-
-```bash
-# Root switching to habib (no password needed)
-root@container:/# su - habib
-habib@container:~$
-
-# Habib trying to switch to habiburhman (password required)
-habib@container:~$ su - habiburrahman
-Password: [password required]
-```
-
-### Setting User Passwords
-
-The `passwd` command manages user passwords:
-
-**As root (can set anyone's password):**
-```bash
-root@container:/# passwd habib
-New password: 12345
-Retype new password: 12345
-passwd: password updated successfully
-```
-
-**As normal user (can only change own password after providing current one):**
-```bash
-habib@container:~$ passwd
-Current password: [required!]
-New password: 
-Retype new password:
-```
-
-**Why the difference?**
-- Root bypasses security checks (administrator privilege)
-- Normal users must prove they own the account (security requirement)
-
-### Deleting Users
-
-The `userdel` command removes user accounts:
-
-**Delete user only (keep home directory):**
-```bash
-root@container:/# userdel habib
-```
-
-**Delete user and home directory:**
-```bash
-root@container:/# userdel -r habib
-```
-
-The `-r` flag removes:
-- User's home directory
-- User's mail spool
-- All files owned by the user in the home directory
-
-**⚠️ Warning**: Use `-r` carefully! Once deleted, the user's files are gone forever.
-
-### Locking and Unlocking Users
-
-Sometimes you want to temporarily disable a user account without deleting it:
-
-**Lock a user (prevent login):**
-```bash
-root@container:/# usermod -L habiburrahman
-```
-
-**Unlock a user:**
-```bash
-root@container:/# usermod -U habiburrahman
-```
-
-When locked, the user cannot log in, even with the correct password:
-```bash
-# Try to switch to locked user
-habib@container:~$ su - habiburrahman
-Password: [correct password]
-su: Authentication failure
-```
-
-**Use cases for locking:**
-- Employee on vacation (temporary)
-- Investigating security incident
-- Suspended account pending review
-
-## Understanding Groups in Linux
-
-### What Are Groups?
-
-Groups are collections of users that share common permissions. Instead of setting permissions for each user individually, you assign permissions to a group, and all members inherit those permissions.
-
-**Real-world analogy:**
-Think of groups like departments in a company:
-- "Engineering" group: access to code repositories
-- "HR" group: access to employee records  
-- "Finance" group: access to financial systems
-
-### Two Types of Groups
-
-Every Linux user belongs to two types of groups:
-
-1. **Primary Group**: Automatically created when the user is created
-2. **Secondary (Supplementary) Groups**: Additional groups the user joins
-
-**Identifying group types:**
-```bash
-root@container:/# id habib
-uid=1001(habib) gid=1001(habib) groups=1001(habib),1003(admin)
-```
-
-Breaking this down:
-- **gid=1001(habib)**: Primary group (shows in GID field)
-- **groups=1001(habib),1003(admin)**: All groups (primary first, then secondary)
-
-So habib's primary group is "habib" (1001), and he also belongs to secondary group "admin" (1003).
-
-### Creating Groups
-
-The `groupadd` command creates new groups:
-
-```bash
-root@container:/# groupadd admin
-```
-
-Verify it was created:
-
-```bash
-root@container:/# cat /etc/group
-root:x:0:
-daemon:x:1:
-...
-admin:x:1003:
-```
-
-**Understanding the group file format:**
-Each line in `/etc/group` has four fields:
-
-```
-groupname:password:GID:member_list
-```
-
-Example:
-```
-admin:x:1003:habib,rahman
-```
-- **admin**: Group name
-- **x**: Password (rarely used, stored in `/etc/gshadow` if set)
-- **1003**: Group ID
-- **habib,rahman**: Comma-separated list of members
-
-### Adding Users to Groups
-
-The `usermod` command modifies user accounts:
-
-**Add user to a group:**
-```bash
-root@container:/# usermod -aG admin habib
-```
-
-Flags explained:
-- **-a**: Append (add to group without removing from others)
-- **-G**: Supplementary groups
-
-**⚠️ Critical**: Always use `-aG` together!
-```bash
-# WRONG - removes user from all other groups
-$ usermod -G admin habib
-
-# CORRECT - adds to admin while keeping other groups
-$ usermod -aG admin habib
-```
-
-**Verify the user was added:**
-```bash
-root@container:/# id habib
-uid=1001(habib) gid=1001(habib) groups=1001(habib),1003(admin)
-```
-
-**Check from the user's perspective:**
-```bash
-root@container:/# su - habib
-habib@container:~$ groups
-habib admin
-```
-
-The `groups` command shows all groups the current user belongs to.
-
-### Removing Users from Groups
-
-The `gpasswd` command manages group membership:
-
-**Remove user from a group:**
-```bash
-root@container:/# gpasswd -d habib faltu
-Removing user habib from group faltu
-```
-
-**Verify removal:**
-```bash
-root@container:/# id habib
-uid=1001(habib) gid=1001(habib) groups=1001(habib),1003(admin)
-# Notice "faltu" group is gone
-```
-
-### Deleting Groups
-
-The `groupdel` command removes groups:
-
-```bash
-root@container:/# groupadd faltu
-root@container:/# groupdel faltu
-```
-
-**Note**: You cannot delete a group if it's the primary group of any user. You must first delete the user or change their primary group.
-
-## Understanding File Permissions
-
-### The Permission Model
-
-Every file and directory in Linux has permissions that control:
-- **Who** can access it (user, group, others)
-- **What** they can do (read, write, execute)
-
-This is the foundation of Linux security.
-
-### The Permission Display
-
-When you run `ls -l`, you see detailed file information:
-
 ```bash
-habib@container:~/documents$ ls -l
-drwxr-xr-x  2 habib  habib  4096 Dec 31 10:30 files
--rw-r--r--  1 habib  habib    12 Dec 31 10:25 a.txt
-```
-
-Let's break down each component:
-
+whoami                 # current user name
+id                     # uid=0(root) gid=0(root) groups=0(root)
+id alice               # info about another user
+who                    # who is logged in (may be empty in a container)
+cat /etc/passwd | head -5
 ```
--rw-r--r--  1  habib  habib    12  Dec 31 10:25  a.txt
-│  │ │  │   │    │      │      │      │          │
-│  │ │  │   │    │      │      │      │          └─ Filename
-│  │ │  │   │    │      │      │      └─ Date modified
-│  │ │  │   │    │      │      └─ Size (bytes)
-│  │ │  │   │    │      └─ Group owner
-│  │ │  │   │    └─ User owner
-│  │ │  │   └─ Number of hard links
-│  │ │  └─ Others permissions (read only)
-│  │ └─ Group permissions (read only)
-│  └─ User permissions (read, write)
-└─ File type (- = file, d = directory)
-```
-
-### The Permission String Breakdown
 
-The permission string has 10 characters:
+### The user database: three files
 
-```
--rw-r--r--
-│└┬┘└┬┘└┬┘
-│ │  │  └─ Others permissions (3 chars)
-│ │  └─ Group permissions (3 chars)
-│ └─ User/Owner permissions (3 chars)
-└─ File type (1 char)
-```
+| File | Holds | Readable by |
+|---|---|---|
+| `/etc/passwd` | Accounts: name, UID, GID, description, home, shell | Everyone |
+| `/etc/shadow` | **Password hashes** and expiry settings | root only |
+| `/etc/group` | Groups and their members | Everyone |
 
-**First character - File type:**
-- `-`: Regular file
-- `d`: Directory
-- `l`: Symbolic link
-- `b`: Block device
-- `c`: Character device
+A line of `/etc/passwd` has **7 colon-separated fields**:
 
-**Next 9 characters - Permissions (in sets of 3):**
-
 ```
-rwx  rwx  rwx
-│││  │││  │││
-│││  │││  └┴┴─ Others: read, write, execute
-│││  └┴┴─ Group: read, write, execute
-└┴┴─ User/Owner: read, write, execute
+alice:x:1001:1001:Alice Smith:/home/alice:/bin/bash
+│     │ │    │    │           │           └ login shell (/usr/sbin/nologin = cannot log in)
+│     │ │    │    │           └ home directory
+│     │ │    │    └ comment (full name)
+│     │ │    └ primary group ID (GID)
+│     │ └ user ID (UID)
+│     └ "x" = the password hash is in /etc/shadow
+└ user name
 ```
-
-Each position can be:
-- **r**: Read permission (4)
-- **w**: Write permission (2)
-- **x**: Execute permission (1)
-- **-**: Permission not granted (0)
 
-### Permission Meanings
+---
 
-**For files:**
-- **r (read)**: View file contents
-- **w (write)**: Modify file contents
-- **x (execute)**: Run file as a program/script
+## 2. Managing users
 
-**For directories:**
-- **r (read)**: List directory contents (`ls`)
-- **w (write)**: Create/delete files in directory
-- **x (execute)**: Enter directory (`cd`)
+You need root (or `sudo`) for these. In a container you already are root.
 
-**Practical examples:**
+### Create
 
 ```bash
-# File with read and write for owner, read-only for others
--rw-r--r--  a.txt
-# Owner: read + write
-# Group: read only
-# Others: read only
-
-# Directory with full permissions for owner, read+execute for others
-drwxr-xr-x  files/
-# Owner: read + write + execute (full access)
-# Group: read + execute (can list and enter, but not create files)
-# Others: read + execute (can list and enter, but not create files)
-
-# Script file with execute permission
--rwxr-xr-x  script.sh
-# Owner: read + write + execute (can run the script)
-# Group: read + execute (can run, but not modify)
-# Others: read + execute (can run, but not modify)
+useradd -m -s /bin/bash alice     # -m create /home/alice, -s login shell
+passwd alice                      # set a password (interactive)
+id alice                          # uid=1001(alice) gid=1001(alice) groups=1001(alice)
+ls -la /home/alice                # home directory was created (with -m)
 ```
 
-### The Three Permission Categories
+- Without `-m`, `useradd` creates the account but **no home directory**.
+- Without `-s`, Debian/Ubuntu's `useradd` gives a plain `/bin/sh`.
+- **`adduser`** (Debian/Ubuntu only) is a friendlier wrapper: `adduser alice` asks questions and creates home, group and password. `useradd` is the portable low-level tool and is preferred in Dockerfiles and scripts.
+- For non-interactive password setting in scripts, use `echo 'alice:secret' | chpasswd`. Never bake real passwords into images or scripts you share.
+- For service accounts: `useradd --system --no-create-home --shell /usr/sbin/nologin appuser`.
 
-**1. User (u)**: The file owner
-```bash
-# Create a file as habib user
-habib@container:~/documents$ touch myfile.txt
-habib@container:~/documents$ ls -l myfile.txt
--rw-r--r--  1 habib  habib  0 Dec 31 10:30 myfile.txt
-              ^^^^^^
-              User owner
-```
-
-**2. Group (g)**: Users in the file's group
-```bash
-# Same example - group is also "habib"
--rw-r--r--  1 habib  habib  0 Dec 31 10:30 myfile.txt
-                     ^^^^^^
-                     Group owner
-```
+### Switch users
 
-**3. Others (o)**: Everyone else on the system
 ```bash
-# Users who are neither the owner nor in the group
--rw-r--r--  1 habib  habib  0 Dec 31 10:30 myfile.txt
-        ^^^
-        Others permissions (last 3 characters)
+su - alice          # start a login shell as alice ("-" loads her environment, goes to her home)
+whoami
+exit                # back to root
 ```
-
-## Changing File Permissions
-
-### The chmod Command
-
-The `chmod` (change mode) command modifies file permissions. There are two ways to use it:
 
-1. **Symbolic method**: Use letters (u, g, o, a) and symbols (+, -, =)
-2. **Numeric method**: Use numbers (octal notation)
+Root can `su` to anyone without a password; others must enter the target's password.
 
-### Symbolic Method
+### Modify, lock, delete
 
-**Syntax:**
 ```bash
-chmod [who][operation][permission] filename
+usermod -s /bin/zsh alice         # change shell
+usermod -L alice                  # LOCK the password (can't log in with it)
+usermod -U alice                  # unlock
+userdel alice                     # delete the account, KEEP home files
+userdel -r alice                  # delete the account AND home directory and mail spool (permanent!)
 ```
 
-**Who:**
-- `u`: User (owner)
-- `g`: Group
-- `o`: Others
-- `a`: All (user + group + others)
+Note: `usermod -L` locks the *password*. Other ways to log in (such as SSH keys) may still work; disabling the shell or expiring the account (`usermod --expiredate 1`) is stronger.
 
-**Operations:**
-- `+`: Add permission
-- `-`: Remove permission
-- `=`: Set exact permissions
+Passwords: a normal user changes their own with `passwd` (asks for the current one); root can set anyone's. Choose strong passwords in real life.
 
-**Permissions:**
-- `r`: Read
-- `w`: Write
-- `x`: Execute
+---
 
-**Practical examples:**
+## 3. Groups
 
-**1. Add execute permission for user:**
-```bash
-habib@container:~/documents$ ls -l a.txt
--rw-r--r--  1 habib habib  12 Dec 31 10:25 a.txt
-
-habib@container:~/documents$ chmod u+x a.txt
-
-habib@container:~/documents$ ls -l a.txt
--rwxr--r--  1 habib habib  12 Dec 31 10:25 a.txt
-   ^
-   Added execute permission for user
-```
-
-**2. Remove write permission from user:**
-```bash
-habib@container:~/documents$ chmod u-w a.txt
-habib@container:~/documents$ ls -l a.txt
--r-xr--r--  1 habib habib  12 Dec 31 10:25 a.txt
-  ^
-  Write permission removed
-```
+A **group** is a named set of users. Instead of granting a permission to ten people one by one, you grant it to a group and put the ten people in it.
 
-**3. Add read permission for group:**
-```bash
-habib@container:~/documents$ chmod g+r a.txt
-```
+Each user has:
 
-**4. Remove read permission from group:**
-```bash
-habib@container:~/documents$ chmod g-r a.txt
-habib@container:~/documents$ ls -l a.txt
--r-x---r--  1 habib habib  12 Dec 31 10:25 a.txt
-     ^^
-     Group has no permissions now
-```
+- exactly one **primary group** (the `gid` in `id`). By default `useradd` creates a group with the same name as the user. New files the user creates are owned by this group.
+- zero or more **supplementary (secondary) groups**.
 
-**5. Add execute permission for others:**
 ```bash
-habib@container:~/documents$ chmod o+x a.txt
+id alice        # uid=1001(alice) gid=1001(alice) groups=1001(alice),1003(developers)
+groups alice    # alice : alice developers
 ```
 
-**6. Remove all permissions from others:**
-```bash
-habib@container:~/documents$ chmod o-rwx a.txt
-habib@container:~/documents$ ls -l a.txt
--r-x------  1 habib habib  12 Dec 31 10:25 a.txt
-       ^^^
-       Others have no permissions
-```
+A line of `/etc/group` has 4 fields: `developers:x:1003:alice,bob` = name, password placeholder, GID, comma-separated members.
 
-**7. Set exact permissions:**
-```bash
-# Set user to read+write, group to read, others to nothing
-habib@container:~/documents$ chmod u=rw,g=r,o= a.txt
-habib@container:~/documents$ ls -l a.txt
--rw-r-----  1 habib habib  12 Dec 31 10:25 a.txt
-```
+### Manage groups
 
-**8. Add permissions to multiple categories:**
 ```bash
-# Add execute to user and group
-habib@container:~/documents$ chmod ug+x a.txt
-
-# Add read to all (user, group, others)
-habib@container:~/documents$ chmod a+r a.txt
+groupadd developers                 # create
+usermod -aG developers alice        # ADD alice to developers  (-a append, -G supplementary groups)
+gpasswd -d alice developers         # remove alice from the group
+groupdel developers                 # delete the group (not allowed while it is someone's primary group)
+getent group developers             # look up a group (works with network directories too)
 ```
-
-### Common Permission Patterns
 
-**Read-only for everyone:**
-```bash
-$ chmod a-w file.txt   # Remove write from all
-$ chmod 444 file.txt   # Numeric method (explained below)
-```
+> ⚠️ **Always use `-aG` together.** `usermod -G developers alice` (without `-a`) **replaces** all of alice's supplementary groups with only `developers`, which can silently remove her `sudo` membership.
 
-**Full access for owner, read-only for others:**
-```bash
-$ chmod u=rwx,go=r file.txt
-$ chmod 744 file.txt
-```
+**Group changes apply to new logins.** A user who is already logged in must log out and back in (or run `newgrp developers`) for a new group to take effect.
 
-**Private file (owner access only):**
-```bash
-$ chmod u=rw,go= private.txt
-$ chmod 600 private.txt
-```
+---
 
-**Executable script:**
-```bash
-$ chmod u+x script.sh
-$ chmod 755 script.sh   # Standard for scripts
-```
+## 4. Permissions
 
-### Understanding the Effects
+Every file and directory has:
 
-Let's see how permissions affect file operations:
+- an **owner** (a user) and a **group**,
+- three permission sets: for the **owner (u)**, for the **group (g)**, and for **others (o)**, everyone else,
+- in each set, three switches: **read (r)**, **write (w)**, **execute (x)**.
 
-```bash
-# Create a file and remove write permission
-habib@container:~/documents$ echo "Hello World" > a.txt
-habib@container:~/documents$ chmod u-w a.txt
-
-# Try to write to it
-habib@container:~/documents$ echo "Goodbye" > a.txt
-bash: a.txt: Permission denied
-
-# Restore write permission
-habib@container:~/documents$ chmod u+w a.txt
-habib@container:~/documents$ echo "Goodbye" > a.txt
-# Success!
 ```
-
-## Changing File Ownership
-
-### The chown Command
-
-The `chown` (change owner) command changes file ownership. However, only the root user can change ownership (security feature).
-
-**Syntax:**
-```bash
-chown [user]:[group] filename
+ -  rw-  r--  r--   1  alice  developers   220 Jan 10 12:00  notes.txt
+ │  │    │    │         │     │
+ │  │    │    │         │     └ group owner
+ │  │    │    │         └ owner
+ │  │    │    └ others:  read only
+ │  │    └ group:   read only
+ │  └ owner:   read + write
+ └ type: - file, d directory, l symlink
 ```
 
-**Examples:**
+### What each letter means
 
-**Change user owner:**
-```bash
-root@container:/home/habib/documents# chown habiburrahman a.txt
-```
-
-**Change group owner:**
-```bash
-root@container:/home/habib/documents# chown :admin a.txt
-```
+| | On a **file** | On a **directory** |
+|---|---|---|
+| **r** (4) | View contents (`cat`) | **List** names inside (`ls`) |
+| **w** (2) | Modify contents | **Create, delete or rename** entries inside (needs `x` too) |
+| **x** (1) | **Run** it as a program or script | **Enter** it (`cd`) and access items inside by name |
 
-**Change both user and group:**
-```bash
-root@container:/home/habib/documents# chown habiburrahman:admin a.txt
-```
+Two consequences that surprise people:
 
-**Why only root can do this:**
-```bash
-# As normal user habib
-habib@container:~/documents$ chown habiburrahman a.txt
-chown: changing ownership of 'a.txt': Operation not permitted
-```
+1. To read `/a/b/c.txt` you need **`x` on every directory** on the path (`/a` and `/a/b`), plus `r` on the file.
+2. **Deleting a file depends on the *directory's* `w`+`x`, not on the file's own permissions.** You can delete a read-only file if you can write to its directory.
 
-**Security reasoning**: Imagine if any user could give their files to someone else:
-1. User Alice creates a malicious file
-2. Alice gives it to Bob (by changing ownership)
-3. When Bob runs it, the virus activates
-4. Bob gets blamed, not Alice!
+### How Linux decides
+When you access a file, the kernel checks **only one** of the three sets: if you're the **owner**, the owner set applies (even if it is more restrictive than the group's); else if you're in the **group**, the group set applies; else the **others** set. **Root** bypasses these read/write checks (though not "execute" on files that have no execute bit at all).
 
-By restricting `chown` to root, Linux prevents this social engineering attack.
+---
 
-## Advanced Permission Concepts
+## 5. Changing permissions with `chmod`
 
-### The Number in ls -l Output
+### 5.1 Symbolic mode: `chmod [who][+-=][what] file`
 
-When you see `ls -l`, notice the number after permissions:
+| Who | Operator | What |
+|---|---|---|
+| `u` owner, `g` group, `o` others, `a` all | `+` add, `-` remove, `=` set exactly | `r`, `w`, `x` |
 
 ```bash
-drwxr-xr-x  3  habib  habib  4096  Dec 31  files/
--rw-r--r--  1  habib  habib    12  Dec 31  a.txt
-            ^
-            This number
+touch a.txt
+ls -l a.txt                 # -rw-r--r--
+chmod u+x a.txt             # owner may execute        → -rwxr--r--
+chmod g+w a.txt             # group may write          → -rwxrw-r--
+chmod o-r a.txt             # others lose read         → -rwxrw----
+chmod a-x a.txt             # nobody may execute       → -rw-rw----
+chmod u=rw,g=r,o= a.txt     # set exactly              → -rw-r-----
+chmod -R g+rX project/      # recursive; capital X = add execute only on directories (and already-executable files)
 ```
-
-**For files**: Always `1` (number of hard links)
-
-**For directories**: Number of subdirectories + 2
-
-Why +2?
-- `.` (current directory)
-- `..` (parent directory)
 
-**Example:**
-```bash
-habib@container:~/documents/files$ ls -la
-total 12
-drwxr-xr-x  3  habib  habib  4096  Dec 31  .
-drwxr-xr-x  3  habib  habib  4096  Dec 31  ..
-drwxr-xr-x  2  habib  habib  4096  Dec 31  newdir/
-
-# Directory has 3 links:
-# 1. . (itself)
-# 2. .. (parent reference)
-# 3. newdir/ (subdirectory)
-```
+### 5.2 Numeric (octal) mode
+Add up the values `r=4`, `w=2`, `x=1` for each set:
 
-### File Size Display
+| Digit | Bits | Meaning |
+|---|---|---|
+| 7 | 4+2+1 | rwx |
+| 6 | 4+2 | rw- |
+| 5 | 4+1 | r-x |
+| 4 | 4 | r-- |
+| 0 | 0 | --- |
 
-```bash
--rw-r--r--  1  habib  habib    12  Dec 31  a.txt
-drwxr-xr-x  3  habib  habib  4096  Dec 31  files/
-                              ^^^^
-                              Size in bytes
-```
+Three digits = owner, group, others:
 
-**For files**: Actual content size
-```bash
-habib@container:~/documents$ echo "Hello World" > a.txt
-habib@container:~/documents$ ls -l a.txt
--rw-r--r--  1  habib  habib  12  Dec 31  a.txt
-                             ^^
-# "Hello World" + newline = 12 bytes
 ```
-
-**For directories**: Always 4096 bytes (or multiples)
-- This is the size of the directory structure itself
-- Not the total size of files inside
-- Standard block size on most filesystems
-
-**To see total size of directory contents:**
-```bash
-$ du -sh files/
-128K    files/
+chmod 755 script.sh     # rwxr-xr-x   owner all; others read+run     (programs, directories)
+chmod 644 notes.txt     # rw-r--r--   owner edits; others read       (normal files)
+chmod 600 id_rsa        # rw-------   owner only                     (private keys, secrets)
+chmod 700 private/      # rwx------   owner only                     (private directory)
+chmod 664 shared.txt    # rw-rw-r--   owner+group edit
+chmod 770 team_dir/     # rwxrwx---   owner+group only
+chmod 444 readonly.txt  # r--r--r--   nobody writes (root still can!)
 ```
 
-### Permission Inheritance
+### 5.3 See the effect
 
-**Important**: Permissions don't inherit automatically!
-
-When you create a new file, it gets default permissions:
 ```bash
-habib@container:~/documents$ touch newfile.txt
-habib@container:~/documents$ ls -l newfile.txt
--rw-r--r--  1  habib  habib  0  Dec 31  newfile.txt
+echo hello > a.txt
+chmod u-w a.txt
+echo bye > a.txt         # bash: a.txt: Permission denied   (as a normal user)
+chmod u+w a.txt
 ```
-
-Default permissions are controlled by `umask` (covered in advanced topics).
 
-## Practical Permission Scenarios
+> ⚠️ **Root ignores read/write permission bits.** As root, the `echo bye > a.txt` above would **succeed** even on a `444` file. Permissions protect users from each other, not from root. (This is why running as root, in a container or not, is riskier.) To truly block writes even for root, file-system flags such as `chattr +i` exist.
 
-### Scenario 1: Shared Project Directory
+### 5.4 Running a script
 
-**Goal**: Create a directory where team members can collaborate
-
 ```bash
-# As root
-root@container:/# groupadd developers
-root@container:/# useradd -m -G developers alice
-root@container:/# useradd -m -G developers bob
-
-# Create shared directory
-root@container:/# mkdir /projects
-root@container:/# chown :developers /projects
-root@container:/# chmod 770 /projects
-
-# Result
-root@container:/# ls -ld /projects
-drwxrwx---  2  root  developers  4096  Dec 31  /projects
+printf '#!/bin/sh\necho "Hello, World!"\n' > hello.sh
+./hello.sh               # bash: ./hello.sh: Permission denied  (no x bit)
+chmod +x hello.sh
+./hello.sh               # Hello, World!
 ```
 
-**What this achieves:**
-- Owner (root): Full access
-- Group (developers): Full access
-- Others: No access
-- Alice and Bob can both create/modify files in /projects
-- Non-developers can't even see what's inside
+`sh hello.sh` also works without `x`, because you are running `sh`, and `sh` merely *reads* the file.
 
-### Scenario 2: Read-Only Configuration File
+---
 
-**Goal**: Prevent accidental modification of important config
+## 6. Changing owners with `chown` and `chgrp`
 
 ```bash
-# Create config file
-root@container:/etc# echo "SERVER=production" > app.conf
-root@container:/etc# chmod 444 app.conf
-
-# Result
-root@container:/etc# ls -l app.conf
--r--r--r--  1  root  root  18  Dec 31  app.conf
-
-# Even root can't accidentally overwrite it
-root@container:/etc# echo "SERVER=dev" > app.conf
-bash: app.conf: Permission denied
-
-# Must explicitly change permissions first
-root@container:/etc# chmod 644 app.conf
-root@container:/etc# echo "SERVER=dev" > app.conf
-# Success!
+chown alice a.txt              # change owner
+chown alice:developers a.txt   # owner and group
+chown :developers a.txt        # group only  (same as: chgrp developers a.txt)
+chown -R alice:alice /home/alice/project   # recursive
 ```
-
-### Scenario 3: Private User Files
 
-**Goal**: Keep sensitive files private
+- Only **root** can give a file to a different user. If normal users could, they could dump their files onto someone else (for example to exhaust that user's disk quota or to make files look like someone else's).
+- A regular user can change the **group** of their own file only to a group they belong to.
 
-```bash
-# As habib
-habib@container:~$ mkdir private
-habib@container:~$ chmod 700 private
-
-habib@container:~$ ls -ld private
-drwx------  2  habib  habib  4096  Dec 31  private
-```
+---
 
-**What this achieves:**
-- Only habib can access this directory
-- Other users can't even list contents
-- Perfect for sensitive documents, SSH keys, etc.
+## 7. More concepts (intermediate)
 
-### Scenario 4: Executable Script
+### `umask`: default permissions for new files
+New files start from `666` and new directories from `777`, minus the `umask`. The common umask is `022`, giving files **644** and directories **755**. (`umask` alone prints the current value; `umask 077` makes new files private for the rest of the session.)
 
-**Goal**: Make a script runnable
+### `sudo`: run one command as root
 
 ```bash
-# Create script
-habib@container:~$ echo '#!/bin/bash' > script.sh
-habib@container:~$ echo 'echo "Hello, World!"' >> script.sh
-
-# Try to run it
-habib@container:~$ ./script.sh
-bash: ./script.sh: Permission denied
-
-# Add execute permission
-habib@container:~$ chmod u+x script.sh
-habib@container:~$ ls -l script.sh
--rwxr--r--  1  habib  habib  33  Dec 31  script.sh
-   ^
-   Execute bit set
-
-# Now it works
-habib@container:~$ ./script.sh
-Hello, World!
+sudo apt update          # as a normal user: run this ONE command with root rights
+sudo -l                  # what am I allowed to run?
+sudo -u postgres psql    # run as another specific user
 ```
 
-## Permission Best Practices
+Who may use `sudo` is defined in `/etc/sudoers` (edit only with `visudo`) or by membership of the `sudo` group (Debian/Ubuntu) or `wheel` group (Red Hat family). Minimal Docker images usually don't include `sudo` because they run as root already.
 
-### 1. Principle of Least Privilege
+### Special permission bits
 
-Give users/groups only the minimum permissions they need:
+| Bit | Numeric | On | Effect |
+|---|---|---|---|
+| **setuid** | 4xxx | executable | Runs with the **file owner's** privileges (e.g. `/usr/bin/passwd` runs as root so you can change your own password). Powerful, so a favourite target for attackers |
+| **setgid** | 2xxx | directory | New files inherit the **directory's group**, ideal for shared team folders |
+| **sticky** | 1xxx | directory | Only the file's owner (or root) may delete/rename files inside. `/tmp` is `drwxrwxrwt` |
 
 ```bash
-# BAD - unnecessarily permissive
-chmod 777 file.txt   # Everyone can do everything
-
-# GOOD - restrictive but functional
-chmod 644 file.txt   # Owner writes, others read
-chmod 755 script.sh  # Owner writes, everyone executes
-chmod 600 private.txt # Owner only
+ls -ld /tmp /usr/bin/passwd          # drwxrwxrwt ... /tmp    -rwsr-xr-x ... passwd
+chmod 2770 /projects                 # setgid on a shared directory
+find / -perm -4000 -type f 2>/dev/null   # audit: list setuid programs
 ```
 
-### 2. Never Use 777 Permissions
-
-```bash
-# DANGEROUS - security nightmare
-chmod 777 important_file.txt
-```
+### ACLs (just so you know)
+When user/group/other isn't fine-grained enough, POSIX ACLs (`setfacl`, `getfacl`) can grant a specific extra user access to one file.
 
-This allows:
-- Any user to read your files
-- Any user to modify your files
-- Any user to execute your files
+---
 
-Only use in temporary testing scenarios, never in production!
+## 8. Worked scenarios
 
-### 3. Protect Sensitive Files
+### 8.1 A shared team directory
 
 ```bash
-# SSH keys
-chmod 600 ~/.ssh/id_rsa
-
-# Configuration files with passwords
-chmod 600 /etc/app/database.conf
+groupadd developers
+useradd -m -G developers alice
+useradd -m -G developers bob
+mkdir /projects
+chown root:developers /projects
+chmod 2770 /projects          # rwxrws---: team read/write; new files inherit the group; others: nothing
+ls -ld /projects              # drwxrws--- 2 root developers ...
 
-# User directories
-chmod 700 ~/private/
+su - alice -c 'echo "from alice" > /projects/a.txt'
+su - bob   -c 'cat /projects/a.txt'
+su - nobody -s /bin/sh -c 'ls /projects'      # Permission denied
 ```
 
-### 4. Use Groups for Shared Access
+### 8.2 A private folder
 
-Instead of opening permissions to "others," create appropriate groups:
-
 ```bash
-# BAD
-chmod 666 shared_file.txt   # Anyone can write
-
-# GOOD
-groupadd team
-usermod -aG team alice
-usermod -aG team bob
-chown :team shared_file.txt
-chmod 660 shared_file.txt   # Only team members can write
+su - alice
+mkdir ~/private && chmod 700 ~/private
+ls -ld ~/private              # drwx------
 ```
-
-### 5. Regular Permission Audits
 
-Periodically check for overly permissive files:
+### 8.3 A protected config file (and its limits)
 
 ```bash
-# Find world-writable files (potential security risk)
-find / -type f -perm -002 2>/dev/null
-
-# Find files with SUID bit (potential privilege escalation)
-find / -perm -4000 2>/dev/null
+echo "SERVER=production" > /etc/app.conf
+chown root:root /etc/app.conf
+chmod 644 /etc/app.conf       # everyone reads, only root writes
 ```
 
-## Common Permission Errors and Solutions
+---
 
-### Error 1: Permission Denied When Reading
+## 9. Users, groups and permissions in Docker
 
-**Symptom:**
-```bash
-habib@container:~$ cat /home/habiburrahman/secret.txt
-cat: /home/habiburrahman/secret.txt: Permission denied
-```
+### 9.1 Containers run as root by default
+Unless the image says otherwise, `docker run` starts your process as **root (UID 0) inside the container**. Combined with the shared kernel (Chapter 4), that increases risk: if an attacker escapes the container, or if a bind-mounted host path is writable, root in the container can do real damage. **Best practice: run as a non-root user.**
 
-**Solution:**
-1. Check file permissions: `ls -l /home/habiburrahman/secret.txt`
-2. File needs read permission for your user/group/others
-3. Directory needs execute permission to traverse
-4. Ask owner to grant access or use root
+### 9.2 Non-root in a Dockerfile
 
-### Error 2: Permission Denied When Writing
-
-**Symptom:**
-```bash
-habib@container:~$ echo "test" > file.txt
-bash: file.txt: Permission denied
-```
+```dockerfile
+FROM ubuntu:24.04
 
-**Solution:**
-1. Check permissions: `ls -l file.txt`
-2. Need write permission: `chmod u+w file.txt`
-3. Check if directory is writable
-4. Ensure you're the owner or in the group
+# create an unprivileged user and group with fixed IDs
+RUN groupadd --gid 10001 app \
+ && useradd  --uid 10001 --gid app --create-home --shell /usr/sbin/nologin app
 
-### Error 3: Cannot Execute Script
+WORKDIR /app
+COPY --chown=app:app . /app     # files owned by the app user
 
-**Symptom:**
-```bash
-habib@container:~$ ./script.sh
-bash: ./script.sh: Permission denied
+USER app                         # every later instruction and the container's process run as "app"
+CMD ["./run.sh"]
 ```
 
-**Solution:**
-```bash
-# Add execute permission
-chmod u+x script.sh
-./script.sh  # Now works
-```
+Notes:
+- Use **numeric UIDs** (`USER 10001:10001`); orchestrators such as Kubernetes can then verify "non-root".
+- On Alpine the commands are `addgroup -g 10001 app` and `adduser -D -u 10001 -G app app`.
+- Many official images already provide a user (`nginx`, `postgres`, `node`). For example, `node` images include a user named `node`: `USER node`.
+- Non-root users **cannot bind ports below 1024** by default; use a high port (8080) and map it (`-p 80:8080`).
 
-### Error 4: Operation Not Permitted (chown)
+### 9.3 Choosing the user at run time
 
-**Symptom:**
 ```bash
-habib@container:~$ chown bob file.txt
-chown: changing ownership of 'file.txt': Operation not permitted
+docker run --rm ubuntu:24.04 id                       # uid=0(root)
+docker run --rm --user 1000:1000 ubuntu:24.04 id      # uid=1000 gid=1000 (no name: not in /etc/passwd, and that's fine)
+docker run --rm -u nobody ubuntu:24.04 id
+docker exec -u root -it mycontainer bash              # a root shell in a running container for debugging
 ```
 
-**Solution:**
-- Only root can change ownership
-- Switch to root: `su -` or `sudo chown bob file.txt`
+### 9.4 The big trap: UIDs are numbers shared with the host
+Containers share the host kernel, and **the kernel only knows numbers**. The name "alice" inside a container means nothing to the host; what matters is the UID.
 
-### Error 5: Cannot Access Directory
-
-**Symptom:**
 ```bash
-habib@container:~$ ls /home/habiburrahman
-ls: cannot access '/home/habiburrahman': Permission denied
-```
-
-**Solution:**
-- Directory needs execute permission to enter
-- Check: `ls -ld /home/habiburrahman`
-- Fix: `chmod +x /home/habiburrahman` (as root or owner)
-
-## ASCII Diagrams for Permissions
-
-### Permission Structure Visualization
-
+# on the host, as user with UID 1000:
+mkdir data
+docker run --rm -v "$PWD/data:/data" ubuntu:24.04 sh -c 'touch /data/from_container'
+ls -ln data           # from_container is owned by UID 0 on the host (root!)
 ```
--rwxr-xr--
-│││││││││└─ Others: no write
-│││││││└┴─ Others: read, execute
-││││││└──── Group: no write
-││││└┴───── Group: read, execute
-│││└──────── User: execute
-││└───────── User: write
-│└────────── User: read
-└─────────── File type (regular file)
-
-Permission Breakdown:
-┌──────────┬──────────┬──────────┬──────────┐
-│ Position │ Category │ Symbol   │ Meaning  │
-├──────────┼──────────┼──────────┼──────────┤
-│    1     │   Type   │    -     │   File   │
-│  2-4     │   User   │   rwx    │  Owner   │
-│  5-7     │  Group   │   r-x    │  Group   │
-│  8-10    │  Others  │   r--    │ Everyone │
-└──────────┴──────────┴──────────┴──────────┘
-```
 
-### User-Group-Others Hierarchy
+Consequences and fixes for **bind mounts**:
 
-```
-                    ┌─────────────────────┐
-                    │    Linux File       │
-                    │   "project.txt"     │
-                    └──────────┬──────────┘
-                               │
-         ┌─────────────────────┼─────────────────────┐
-         │                     │                     │
-    ┌────▼────┐           ┌────▼────┐          ┌────▼────┐
-    │  USER   │           │  GROUP  │          │ OTHERS  │
-    │ (owner) │           │ (team)  │          │ (world) │
-    │  habib  │           │  admin  │          │everyone │
-    └────┬────┘           └────┬────┘          └────┬────┘
-         │                     │                     │
-    ┌────▼────┐           ┌────▼────┐          ┌────▼────┐
-    │  rwx    │           │  r-x    │          │  r--    │
-    │ Read ✓  │           │ Read ✓  │          │ Read ✓  │
-    │ Write ✓ │           │ Write ✗ │          │ Write ✗ │
-    │ Exec ✓  │           │ Exec ✓  │          │ Exec ✗  │
-    └─────────┘           └─────────┘          └─────────┘
-```
+| Problem | Cause | Fix |
+|---|---|---|
+| Files created by the container are owned by root on the host | Container ran as root | Run with `--user "$(id -u):$(id -g)"` |
+| `Permission denied` writing to a mounted folder | Container user's UID differs from the folder owner's | Match UIDs (`--user`), or `chown` the folder to the UID the container uses, or use a named volume |
+| Works on Linux, fails on Docker Desktop (or vice versa) | Docker Desktop's file sharing translates ownership differently | Test on your target platform; prefer named volumes for data |
+| SELinux systems (Fedora/RHEL): `Permission denied` even with right UID | SELinux labels | Add `:z` or `:Z` to the mount: `-v ./data:/data:z` |
 
-## Command Reference Summary
+**Named volumes** are managed by Docker and are a good default for databases, and Docker copies the image's ownership of the mount point into a new empty volume the first time.
 
-### User Management Commands
+### 9.5 More hardening (expert)
 
 ```bash
-# Create user with home directory
-useradd -m username
-
-# Set user password
-passwd username
-
-# View user information
-id username
-
-# Switch to another user
-su - username
-
-# Delete user (keep home)
-userdel username
-
-# Delete user and home directory
-userdel -r username
-
-# Lock user account
-usermod -L username
-
-# Unlock user account
-usermod -U username
-
-# List all users
-cat /etc/passwd
+docker run --rm \
+  --user 10001:10001 \        # non-root
+  --read-only \               # read-only root file system
+  --tmpfs /tmp \              # writable scratch space
+  --cap-drop ALL \            # drop all Linux capabilities (add back only what is needed)
+  --security-opt no-new-privileges \   # block setuid privilege gain
+  myimage
 ```
-
-### Group Management Commands
-
-```bash
-# Create group
-groupadd groupname
 
-# Add user to group (supplementary)
-usermod -aG groupname username
+Other options: **user namespaces** (`userns-remap`) map container root to an unprivileged host UID; **rootless Docker/Podman** runs the whole engine unprivileged; **seccomp/AppArmor** profiles limit system calls. Never use `--privileged` unless you fully understand why.
 
-# Remove user from group
-gpasswd -d username groupname
+---
 
-# Delete group
-groupdel groupname
-
-# List all groups
-cat /etc/group
-
-# Show current user's groups
-groups
-
-# Show specific user's groups
-groups username
-```
-
-### Permission Management Commands
-
-```bash
-# Change permissions (symbolic)
-chmod u+rwx file     # Add all permissions for user
-chmod g-w file       # Remove write from group
-chmod o=r file       # Set others to read-only
-chmod a+x file       # Add execute for all
-
-# Change permissions (multiple)
-chmod ug+x file      # Add execute for user and group
-chmod a-w file       # Remove write from all
-
-# Change ownership (root only)
-chown user file
-chown user:group file
-chown :group file
-
-# View permissions
-ls -l file
-ls -ld directory
-```
+## 10. Common errors
 
-## Key Takeaways
+| Symptom | Cause | Fix |
+|---|---|---|
+| `Permission denied` running `./script.sh` | No execute bit | `chmod +x script.sh` |
+| `bash: ./script.sh: /bin/bash^M: bad interpreter` | Windows line endings (CRLF) | `dos2unix`, or set `.gitattributes` to LF |
+| `cat: file: Permission denied` | No `r` for your class, or no `x` on a directory in the path | `ls -ld` each directory in the path; `namei -l /path/to/file` shows all permissions along the path |
+| `chown: Operation not permitted` | Not root | Use `sudo`, or `--chown` in Docker `COPY`/`ADD` |
+| `sudo: command not found` | Minimal image | You're probably root already; else `apt-get install sudo` |
+| User can't use newly-added group | Session started before the change | Log out/in or `newgrp` |
+| `groupdel: cannot remove the primary group of user` | The group is someone's primary | Delete or change that user first |
+| Container's files owned by root on the host | Running as root with bind mounts | `--user "$(id -u):$(id -g)"` |
+| Web server can't read uploaded files | Wrong owner/group, or missing `x` on a parent directory | Fix ownership (`chown www-data`) and directory `x` bits |
 
-1. **Two user types**: Root (all-powerful) and normal users (restricted)
+---
 
-2. **Two group types**: Primary (automatically created) and secondary (added manually)
+## 11. Best practices
 
-3. **Three permission categories**:
-   - User (u): File owner
-   - Group (g): Users in file's group
-   - Others (o): Everyone else
+1. Work as a **normal user**; use `sudo` for specific tasks.
+2. **Least privilege**: give the minimum access needed.
+3. Avoid **`chmod 777`**. It hides the real problem and lets anyone modify the file. Find the correct owner/group instead.
+4. Use **groups** for shared access, not world-writable files.
+5. Private data: files `600`, directories `700` (SSH private keys **must** be `600` or SSH refuses them).
+6. **Containers:** run as non-root, use numeric IDs, use `COPY --chown`, consider `--read-only` and `--cap-drop ALL`.
+7. Audit occasionally: `find / -xdev -perm -0002 -type f` (world-writable files), `find / -xdev -perm -4000` (setuid programs).
 
-4. **Three permission types**:
-   - Read (r): View contents
-   - Write (w): Modify contents
-   - Execute (x): Run file / enter directory
+---
 
-5. **Permission format**: `drwxrwxrwx`
-   - 1st char: File type (d=directory, -=file)
-   - Next 3: User permissions
-   - Next 3: Group permissions
-   - Last 3: Others permissions
+## 12. Cheat sheet
 
-6. **Key commands**:
-   - `useradd`: Create users
-   - `groupadd`: Create groups
-   - `usermod`: Modify users (add to groups, lock/unlock)
-   - `chmod`: Change permissions
-   - `chown`: Change ownership (root only)
-   - `id`: View user/group info
+| Task | Command |
+|---|---|
+| Who am I / IDs / groups | `whoami` · `id` · `groups` |
+| Create user (home, shell) | `useradd -m -s /bin/bash NAME` |
+| Set password | `passwd NAME` |
+| Switch user | `su - NAME` |
+| Lock / unlock | `usermod -L NAME` · `usermod -U NAME` |
+| Delete (with home) | `userdel -r NAME` |
+| Create group / add user / remove user | `groupadd G` · `usermod -aG G NAME` · `gpasswd -d NAME G` |
+| Show permissions | `ls -l` · `ls -ld dir` · `stat file` |
+| Change permissions | `chmod u+x f` · `chmod 644 f` · `chmod -R g+rX d` |
+| Change owner/group | `chown user:group f` · `chown -R ...` |
+| Run as root | `sudo CMD` |
+| Docker: run as user | `docker run --user 1000:1000 ...` · `USER app` |
 
-7. **Best practices**:
-   - Work as normal user, not root
-   - Use groups for shared access
-   - Follow principle of least privilege
-   - Never use 777 permissions
-   - Protect sensitive files (600 or 700)
+---
 
-8. **Root power**: Can do anything, including switching users without passwords
+## 13. Check your understanding
 
-9. **Security model**: Permissions prevent users from accessing each other's files
+1. What does `-rwxr-x---` mean for the owner, the group and others?
+2. What is the numeric equivalent of `rw-r-----`?
+3. Why does `usermod -G` (without `-a`) risk removing someone's access?
+4. A file is `chmod 444`. Can root still overwrite it? Can a normal file owner?
+5. You can `ls` a directory but cannot `cd` into it. Which permission is missing?
+6. A file has permission `r--rw-rw-` and you are its owner. Can you write to it? Explain.
+7. Your container writes files into a bind-mounted directory, and they are owned by root on the host. Give two ways to prevent it.
 
-10. **Home directories**: Every user gets `/home/username` (except root gets `/root`)
+<details>
+<summary>Answers</summary>
 
-## Looking Ahead
+1. Owner: read, write, execute. Group: read and execute. Others: nothing.
+2. 640
+3. It *replaces* the user's supplementary groups with only the listed ones, dropping others such as `sudo`. Use `-aG`.
+4. Root: yes (permission bits don't stop root). A normal owner: no, unless they first `chmod u+w`.
+5. Execute (`x`) on the directory.
+6. No. Linux applies only the **owner** class to the owner, which is `r--` here, even though the group and others could write. (The owner could `chmod` it first.)
+7. Run the container as your own UID (`--user "$(id -u):$(id -g)"`, or a `USER` in the image), or chown the directory to the UID the container runs as, or use a named volume.
+</details>
 
-You now understand the Linux security model! This knowledge is crucial for:
-- Setting up secure Docker containers
-- Managing multi-user systems
-- Troubleshooting access issues
-- Writing secure scripts and applications
+**Practice:** create user `alice` and `bob` in a container, put both in group `team`, create `/shared` with mode `2770` owned by `root:team`, and prove that alice's files are readable and writable by bob but not by a third user.
 
-In the next chapter, we'll put your Linux knowledge to practical use with hands-on Docker exercises. You'll see how these user and permission concepts apply in containerized environments.
+---
 
-Remember: Linux permissions might seem complex at first, but they're actually quite logical once you understand the pattern. Practice with different scenarios, and soon checking and modifying permissions will become second nature! 🔒
+**Next:** [Chapter 14 – Docker Hands-On](14_docker_hands_on.md)

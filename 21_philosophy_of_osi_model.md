@@ -1,966 +1,401 @@
-# Chapter 21: Philosophy of the OSI Model
+# Chapter 21: The OSI Model: Why Networks Are Built in Layers
 
-## Overview
+> **In one sentence:** The OSI model splits "sending data over a network" into **seven layers**, each with one job, so that different vendors' hardware and software can work together and so that you can reason about (and debug) a network one layer at a time.
 
-The Open Systems Interconnection (OSI) model represents one of the most fundamental conceptual frameworks in computer networking. This chapter explores the philosophical foundations, historical context, and practical significance of the OSI seven-layer model. Understanding this model is crucial for anyone working with Docker, Kubernetes, and modern software engineering, as it provides the foundation for comprehending how data travels across networks, how containers communicate, and how distributed systems interact.
+**Level:** 🟢 Beginner → 🟡 Intermediate · **Reading time:** ~45 minutes
 
-This chapter will demystify the OSI model, showing you not just what it is, but why it exists, how it solves real-world problems, and how to apply this knowledge in your career as a software engineer. We'll move beyond rote memorization to develop a deep, intuitive understanding of network communication.
-
-## Prerequisites
-
-Before diving into this chapter, you should have:
-
-- Basic understanding of computer networks
-- Familiarity with Docker containers (from previous chapters)
-- General awareness of how applications communicate over networks
-- Understanding of the client-server model
-- Basic knowledge of IP addresses and ports (we'll deepen this understanding)
-
-## Learning Objectives
-
-By the end of this chapter, you will:
-
-- Understand the historical context and problem that led to the OSI model
-- Comprehend why the OSI model is considered a "model" or framework
-- Master all seven layers and their responsibilities
-- Remember layer numbers and names effortlessly using memory techniques
-- Understand the data transformation journey through all seven layers
-- Recognize the difference between segments, packets, frames, and bits
-- Apply OSI model knowledge to Docker networking scenarios
-- Think like a network engineer when troubleshooting connectivity issues
-
-## 1. The Historical Problem: Why OSI Model Was Created
-
-### 1.1 The Pre-OSI Chaos
-
-Before 1984, the networking world was in chaos. Each computer company developed its own proprietary networking protocols and rules. Let's understand this problem:
-
-**IBM's Approach:**
-- IBM had its own set of rules and protocols for data communication
-- Data traveled from one IBM computer to another using IBM-specific protocols
-- These rules were secret and proprietary
-
-**Other Companies:**
-- Each company (Dell, HP, etc.) created their own networking rules
-- Everyone kept their protocols secret
-- No company shared their networking standards
-
-**The Critical Problem:**
-This created a massive compatibility issue. If you wanted to send data from an IBM computer to a Dell computer, it was impossible! Why? Because the receiving computer couldn't understand the sending computer's protocol. Each company spoke a different "language."
-
-This was like having people from different countries trying to communicate with no common language—pure chaos and frustration.
-
-### 1.2 The ISO Solution
-
-In 1984, the **ISO** (International Organization for Standardization) stepped in to solve this global problem. The ISO is an international organization that provides standards for various industries worldwide.
-
-**Their Solution:**
-They introduced the **OSI Model** - a universal standard that everyone could follow. This wasn't about choosing one company's approach over another; it was about creating a neutral framework that everyone could adopt.
-
-**The Philosophy:**
-"Stop fighting. Here's a standard framework. Everyone use this, and there will be no more conflicts."
-
-This marked the beginning of interoperable networking, where devices from different manufacturers could communicate seamlessly.
-
-## 2. Understanding "OSI" - Breaking Down the Acronym
-
-### 2.1 Open Systems Interconnection Explained
-
-**OSI** stands for **Open Systems Interconnection**. Let's break this down:
-
-#### What is a "System"?
-
-A system consists of:
-- **Components**: Various parts working together
-- **Resources**: Shared materials or information
-- **Interaction**: Components share resources with each other
-
-**Examples of Systems:**
-
-1. **School System:**
-   - Components: Students, teachers
-   - Resources: Education
-   - Interaction: Teachers share knowledge with students
-
-2. **Society System:**
-   - Components: People, institutions, organizations, businesses
-   - Resources: Food, clothing, markets, services
-   - Interaction: People exchange goods and services
-
-3. **Computer System:**
-   - Components: Hardware, software, networks
-   - Resources: Data, processing power
-   - Interaction: Data flows between components
-
-#### What is an "Open System"?
-
-An **open system** is any system that:
-- Receives **input** from its environment
-- Produces **output** to its environment
-- Is not isolated or closed off
-
-**Examples:**
-
-1. **School as Open System:**
-   - Students come from outside (input)
-   - They return home daily (external interaction)
-   - Educated students graduate (output)
-
-2. **Society as Open System:**
-   - Food comes from rural areas (input)
-   - Products are distributed (internal processing)
-   - Services are provided to residents (output)
-
-3. **Computer Network as Open System:**
-   - Receives data from external sources
-   - Processes information internally
-   - Sends data to other systems
-
-#### What is "Interconnection"?
-
-**Interconnection** means systems can communicate with each other, not just internally:
-
-- **Intra** = Within the same system (internal communication)
-- **Inter** = Between different systems (external communication)
-
-**Analogy:**
-- **Intra-university sports**: Departments within one university compete
-- **Inter-university sports**: Multiple universities compete against each other
-
-In networking terms:
-- One computer system can communicate with another computer system
-- Google's servers can talk to your home computer
-- IBM systems can communicate with Dell systems
-- Facebook's servers can exchange data with your mobile device
-
-### 2.2 Why "Model"?
-
-The OSI model is called a "model" because it is:
-
-1. **A Framework**: A structural guideline, not a physical implementation
-2. **A Philosophy**: A way of thinking about networking
-3. **Conceptual**: It exists as an idea, not as tangible software or hardware
-4. **A Standard**: Rules that can be implemented in many different ways
-
-**Critical Understanding:**
-The OSI model is NOT something you directly use when sending data. It's a conceptual framework that guides how networking protocols and systems are designed.
-
-Think of it like architectural blueprints:
-- The blueprint isn't the building
-- But every building follows the blueprint's principles
-- The OSI model is the blueprint for network communication
-
-**The Gift to Humanity:**
-ISO said: "Here's the concept, the framework, the philosophy. All companies worldwide—use this framework to build your networking solutions, and everything will be compatible."
-
-This is why the OSI model succeeded—it provided a common language for all networking professionals and companies.
-
-## 3. The Seven Layers of OSI Model
-
-### 3.1 Memory Technique: Never Forget the Layers
-
-The OSI model has seven layers, and you MUST remember them. Here's a proven mnemonic device:
-
-**"Please Do Not Tell Secret Password Anyone"**
-
-Breaking it down:
-- **P**lease = **P**hysical Layer (Layer 1)
-- **D**o = **D**ata Link Layer (Layer 2)
-- **N**ot = **N**etwork Layer (Layer 3)
-- **T**ell = **T**ransport Layer (Layer 4)
-- **S**ecret = **S**ession Layer (Layer 5)
-- **P**assword = **P**resentation Layer (Layer 6)
-- **A**nyone = **A**pplication Layer (Layer 7)
-
-### 3.2 Layer Numbering
-
-Understanding layer numbering is crucial for professional communication:
-
-| Layer Number | Layer Name | Common Reference |
-|-------------|------------|-----------------|
-| L7 | Application Layer | Layer 7, L7 |
-| L6 | Presentation Layer | Layer 6, L6 |
-| L5 | Session Layer | Layer 5, L5 |
-| L4 | Transport Layer | Layer 4, L4 |
-| L3 | Network Layer | Layer 3, L3 |
-| L2 | Data Link Layer | Layer 2, L2 |
-| L1 | Physical Layer | Layer 1, L1 |
-
-**Why This Matters:**
-In professional environments, you'll hear terms like:
-- "L4 load balancer" (operates at Transport Layer)
-- "L7 proxy" (operates at Application Layer)
-- "L2 switching" (operates at Data Link Layer)
-
-If you don't immediately recognize these layer references, you'll struggle in advanced networking discussions, system design interviews, and production troubleshooting scenarios.
-
-### 3.3 Most Critical Layers
-
-While all seven layers are important, three are absolutely essential to master:
-
-1. **L2 (Data Link Layer)**: MAC addresses, switching
-2. **L4 (Transport Layer)**: TCP/UDP, ports
-3. **L7 (Application Layer)**: HTTP, HTTPS, application protocols
-
-These three layers are the most frequently referenced in software engineering, DevOps, and cloud architecture discussions.
-
-## 4. Deep Dive into Each Layer
-
-Let's explore what happens at each layer when you send a simple message "Hello" from one computer to another via Facebook Messenger.
-
-### 4.1 Scenario Setup
-
-**Sender Computer:**
-- Running Facebook Messenger
-- Wants to send "Hello" message
-
-**Receiver Computer:**
-- Also running Facebook Messenger
-- Will receive the "Hello" message
-
-**Connection:**
-- Computers connected via network (cable or wireless)
-
-### 4.2 Layer 7: Application Layer (L7)
-
-**What Happens Here:**
-- This is where YOU, the user, interact
-- You open Facebook Messenger
-- You type "Hello"
-- You click "Send"
-
-**Responsibility:**
-- Provides the interface for users to interact with the network
-- Handles user requests
-- Manages application-level protocols
-
-**Software Engineer's Domain:**
-Software engineers work primarily at this layer, creating applications like:
-- Facebook, WhatsApp, YouTube
-- Web browsers, mobile apps
-- Any software that users directly interact with
-
-**Key Protocols at L7:**
-- HTTP (HyperText Transfer Protocol)
-- HTTPS (HTTP Secure)
-- SMTP (Simple Mail Transfer Protocol) - for email
-- FTP (File Transfer Protocol)
-- DNS (Domain Name System)
-
-**Data Form:** User-readable format ("Hello")
-
-### 4.3 Layer 6: Presentation Layer (L6)
-
-**What Happens Here:**
-When "Hello" leaves the Application Layer, it needs to be in a format computers can process and transmit.
-
-**Responsibility:**
-- Data formatting and representation
-- Converts data into a presentable format
-- Encoding/decoding
-- Encryption/decryption
-- Compression/decompression
-
-**Data Formats:**
-The Presentation Layer converts your "Hello" message into formats like:
-- **JSON** (JavaScript Object Notation)
-- **XML** (eXtensible Markup Language)
-- **HTML** (for web pages)
-- **PNG, JPEG** (for images)
-- **MP4, MKV** (for videos)
-
-**Example Transformation:**
-```json
-{
-  "message": "Hello",
-  "sender": "user123",
-  "timestamp": "2025-01-01T10:00:00Z"
-}
-```
-
-**Key Protocols at L6:**
-- SSL/TLS (Secure Sockets Layer/Transport Layer Security)
-- UTF-8 encoding
-- Data compression algorithms
-
-**Data Form:** Structured format (JSON, XML, etc.)
-
-### 4.4 Layer 5: Session Layer (L5)
-
-**What Happens Here:**
-Manages the connection between sender and receiver.
-
-**Responsibility:**
-- **Establish connections** between sender and receiver
-- **Maintain connections** (keep-alive)
-- **Terminate connections** gracefully
-- **Handle reconnections** if connection drops
-
-**Real-World Example:**
-When you're chatting on Facebook:
-- Session Layer ensures you stay connected to Facebook's servers
-- If your internet drops momentarily, Session Layer attempts to reconnect automatically
-- You see "Disconnected" notifications—that's Session Layer informing you of connection status
-
-**Key Functions:**
-1. **Connection Establishment**: Setting up communication channel
-2. **Keep-Alive**: Maintaining active connection
-3. **Reconnection Handling**: Restoring lost connections
-4. **Connection Termination**: Properly closing communication channel
-
-**Note on Reality:**
-In modern implementations, the Application, Presentation, and Session layers are often handled together by the application layer. This simplification occurred as operating systems became more sophisticated. However, understanding the theoretical separation helps grasp the distinct responsibilities.
-
-**Data Form:** Still in presentable format, but with session management
-
-### 4.5 Layer 4: Transport Layer (L4)
-
-This is where things get extremely interesting and critical.
-
-**What Happens Here:**
-The Transport Layer receives the presentable data (JSON format of "Hello") and prepares it for network transmission.
-
-**Primary Responsibility: Port Management**
-
-**Understanding Ports:**
-
-Think of a computer as an apartment building:
-- The building has ONE address (IP address)
-- But it has MANY apartments (ports)
-- Each application runs on a specific apartment/port
-
-Example:
-```
-localhost:3000  ← 3000 is the port number
-localhost:5000  ← 5000 is the port number
-localhost:8080  ← 8080 is the port number
-```
-
-**Why Ports Matter:**
-A single computer can run multiple applications simultaneously:
-- WhatsApp
-- Facebook
-- LinkedIn
-- Email client
-- Web browser
-
-When data arrives at a computer, how does it know which application should receive it? **Ports!**
-
-Each application listens on a specific port:
-- WhatsApp might use port 3000
-- Facebook might use port 5000
-- LinkedIn might use port 8000
-
-**Transport Layer Process:**
-
-1. **Segmentation**: Breaks large data into smaller segments
-
-If you're sending a 100KB message or a video file, the Transport Layer divides it into manageable segments (chunks).
-
-Why? You can't send 100GB all at once! It must be broken into smaller pieces.
-
-2. **Adding Port Information**:
-
-Each segment gets wrapped with:
-- **Sender Port**: Which application is sending (e.g., port 3000)
-- **Data**: The actual message content
-- **Receiver Port**: Which application should receive it (e.g., port 5000)
-
-**Visual Representation:**
-```
-[Sender Port: 3000] [Data: Hello] [Receiver Port: 5000]
-```
-
-This entire package is called a **SEGMENT**.
-
-**Key Protocols at L4:**
-- **TCP** (Transmission Control Protocol): Reliable, ordered delivery
-- **UDP** (User Datagram Protocol): Fast, but no delivery guarantee
-
-**Critical Memory Point:**
-- **Transport Layer = Segments**
-- **Layer 4 = Segments**
-- When you hear "segment," think Transport Layer (L4)
-
-**Data Form:** Segments with port information
-
-### 4.6 Layer 3: Network Layer (L3)
-
-**What Happens Here:**
-The Network Layer receives segments from Transport Layer and adds addressing information.
-
-**Primary Responsibility: IP Address Management**
-
-**Understanding IP Addresses:**
-
-Continuing our apartment building analogy:
-- **IP Address** = Building's street address
-- **Port** = Apartment number
-
-Example IP Address: `192.168.10.50`
-
-Every device on a network has an IP address:
-- Your computer has an IP
-- Your phone has an IP  
-- Every server has an IP
-
-**Network Layer Process:**
-
-The Network Layer takes the segment and wraps it with IP information:
-
-```
-[Sender IP: 192.168.10.50] [Sender Port: 3000] [Data: Hello] [Receiver Port: 5000] [Receiver IP: 192.168.10.75]
-```
-
-This entire package is called a **PACKET**.
-
-**Why IP Addresses Matter:**
-- Ports tell which application to deliver data to
-- IP addresses tell which computer to deliver data to
-
-Without IP addresses, data wouldn't know which computer on the network to reach.
-
-**Key Protocol at L3:**
-- **IP** (Internet Protocol): The most famous L3 protocol
-- ICMP (for ping and error messages)
-- Routing protocols
-
-**Critical Memory Point:**
-- **Network Layer = Packets**
-- **Layer 3 = Packets**
-- When you hear "packet," think Network Layer (L3)
-
-**Data Form:** Packets with IP address information
-
-### 4.7 Layer 2: Data Link Layer (L2)
-
-**What Happens Here:**
-The Data Link Layer receives packets from Network Layer and adds physical addressing.
-
-**Primary Responsibility: MAC Address Management**
-
-**Understanding MAC Addresses:**
-
-**MAC Address** (Media Access Control Address):
-- A unique, permanent hardware identifier
-- Assigned by the device manufacturer
-- Cannot be changed (it's burned into the network card)
-- Format: `A1:B2:C3:D4:E5:F6` (hexadecimal)
-
-**IP vs MAC Addresses:**
-
-| Aspect | IP Address | MAC Address |
-|--------|-----------|-------------|
-| Type | Logical address | Physical address |
-| Can Change? | Yes (dynamic) | No (permanent) |
-| Assigned By | Network/DHCP | Manufacturer |
-| Example | 192.168.1.100 | A1:B2:C3:D4:E5:F6 |
-
-**Apartment Analogy:**
-- **IP Address** = Current mailing address (can change if you move)
-- **MAC Address** = Your DNA (unique, permanent, can't change)
-
-**Data Link Layer Process:**
-
-The Data Link Layer takes the packet and wraps it with MAC address information:
-
-```
-[Sender MAC: A1:B2:C3:D4:E5:F6] [Sender IP: 192.168.10.50] [Sender Port: 3000] [Data: Hello] [Receiver Port: 5000] [Receiver IP: 192.168.10.75] [Receiver MAC: F6:E5:D4:C3:B2:A1]
-```
-
-This entire package is called a **FRAME**.
-
-**Key Protocols at L2:**
-- **Ethernet**: Most common wired networking protocol
-- **Wi-Fi**: Wireless networking protocol
-- **ARP** (Address Resolution Protocol): Maps IP addresses to MAC addresses
-
-**Critical Memory Point:**
-- **Data Link Layer = Frames**
-- **Layer 2 = Frames**
-- When you hear "frame," think Data Link Layer (L2)
-
-**Data Form:** Frames with MAC address information
-
-### 4.8 Layer 1: Physical Layer (L1)
-
-**What Happens Here:**
-The Physical Layer converts frames into actual electrical signals that can travel through physical media.
-
-**Primary Responsibility: Bit Transmission**
-
-**Understanding Bits:**
-
-Everything becomes **binary** (0s and 1s):
-- **1** = Electricity present (voltage high)
-- **0** = No electricity (voltage low)
-
-**The Final Transformation:**
-
-The frame gets converted to:
-```
-101001001011010010110...
-```
-
-These bits travel through:
-- **Ethernet cables** (as electrical signals)
-- **Fiber optic cables** (as light pulses)
-- **Wireless** (as radio waves)
-
-**How It Actually Travels:**
-
-Imagine a wire between two computers:
-```
-Computer A ----[Wire]---- Computer B
-```
-
-**Sending "1 1 0":**
-- First 1: Send electricity through wire
-- Second 1: Keep electricity flowing
-- Zero: Stop electricity
-
-The receiving computer detects these electrical changes and converts them back to binary data.
-
-**Key Protocols at L1:**
-- Physical cable standards (Cat5e, Cat6, fiber optic)
-- Wireless standards (Wi-Fi frequencies, Bluetooth)
-- Signal encoding techniques
-
-**Critical Memory Point:**
-- **Physical Layer = Bits**
-- **Layer 1 = Bits**
-- When you hear "bits" or "physical transmission," think Physical Layer (L1)
-
-**Data Form:** Binary bits (0s and 1s as electrical/light/radio signals)
-
-## 5. The Complete Data Journey: Sender to Receiver
-
-Now let's trace the complete journey of "Hello" from sender to receiver through all seven layers.
-
-### 5.1 Sending Process (Top to Bottom)
-
-**Layer 7 (Application):**
-- User types "Hello" in Facebook Messenger
-- User clicks "Send"
-- Data: `"Hello"`
-
-**Layer 6 (Presentation):**
-- Converts to JSON format
-- Possibly encrypts the data
-- Data: `{"message": "Hello"}`
-
-**Layer 5 (Session):**
-- Ensures connection exists between sender and receiver
-- Maintains session state
-- Data: Still in presentable format
-
-**Layer 4 (Transport):**
-- Divides data into segments
-- Adds sender port (3000) and receiver port (5000)
-- Data: `[Port 3000][Hello][Port 5000]` ← **SEGMENT**
-
-**Layer 3 (Network):**
-- Adds sender IP and receiver IP
-- Data: `[IP: 192.168.10.50][Port 3000][Hello][Port 5000][IP: 192.168.10.75]` ← **PACKET**
-
-**Layer 2 (Data Link):**
-- Adds sender MAC and receiver MAC addresses
-- Data: `[MAC: A1:B2...][IP: 192.168.10.50][Port 3000][Hello][Port 5000][IP: 192.168.10.75][MAC: F6:E5...]` ← **FRAME**
-
-**Layer 1 (Physical):**
-- Converts everything to bits (0s and 1s)
-- Sends electrical signals through cable
-- Data: `101001110010...` ← **BITS**
-
-### 5.2 Receiving Process (Bottom to Top)
-
-The receiver computer performs the reverse process:
-
-**Layer 1 (Physical):**
-- Receives electrical signals
-- Converts to bits
-- Passes bits up to Data Link Layer
-
-**Layer 2 (Data Link):**
-- Converts bits to frame
-- **Checks receiver MAC address**: "Is this for me?"
-- If MAC matches, removes MAC addresses
-- Passes packet up to Network Layer
-
-**Layer 3 (Network):**
-- **Checks receiver IP address**: "Is this for me?"
-- If IP matches, removes IP addresses
-- Passes segment up to Transport Layer
-
-**Layer 4 (Transport):**
-- **Checks receiver port**: "Which application should get this?"
-- Sees port 5000 → Facebook Messenger
-- Removes port information
-- Passes data up to Session/Presentation Layer
-
-**Layer 6 (Presentation):**
-- Decrypts if necessary
-- Converts from JSON back to readable format
-- Passes to Application Layer
-
-**Layer 7 (Application):**
-- Facebook Messenger receives "Hello"
-- Displays message to user
-
-**The user sees:** "Hello" in their Facebook Messenger chat!
-
-### 5.3 Visual Summary
-
-```
-SENDING (Sender Computer)              RECEIVING (Receiver Computer)
-=======================                ==========================
-
-Application Layer (L7)                 Application Layer (L7)
-"Hello" →                              → Displays "Hello"
-    ↓                                      ↑
-Presentation Layer (L6)                Presentation Layer (L6)
-{"message": "Hello"} →                 → Converts back to text
-    ↓                                      ↑
-Session Layer (L5)                     Session Layer (L5)
-Maintains connection →                 → Maintains connection
-    ↓                                      ↑
-Transport Layer (L4)                   Transport Layer (L4)
-[Port][Data][Port] →                   → Identifies application
-SEGMENT                                by port
-    ↓                                      ↑
-Network Layer (L3)                     Network Layer (L3)
-[IP][Port][Data][Port][IP] →           → Identifies computer by IP
-PACKET                                 
-    ↓                                      ↑
-Data Link Layer (L2)                   Data Link Layer (L2)
-[MAC][IP][...][IP][MAC] →              → Identifies device by MAC
-FRAME                                  
-    ↓                                      ↑
-Physical Layer (L1)                    Physical Layer (L1)
-10101010... →                          → Receives electrical signals
-BITS                                   
-
-        ========[WIRE/NETWORK]========
-```
-
-## 6. Key Terminology Summary
-
-| Term | Layer | Description | Think of it as... |
-|------|-------|-------------|-------------------|
-| **Bits** | L1 (Physical) | Binary 0s and 1s as electrical signals | The raw transmission |
-| **Frame** | L2 (Data Link) | Data with MAC addresses | Physical device addressing |
-| **Packet** | L3 (Network) | Data with IP addresses | Logical computer addressing |
-| **Segment** | L4 (Transport) | Data with port numbers | Application addressing |
-| **Data** | L5-L7 (Upper Layers) | Presentable format | What users interact with |
-
-**Memory Aid:**
-- **Segment = L4 Transport = Ports**
-- **Packet = L3 Network = IP addresses**
-- **Frame = L2 Data Link = MAC addresses**
-- **Bits = L1 Physical = 0s and 1s**
-
-## 7. Protocol Overview by Layer
-
-### 7.1 Application Layer (L7) Protocols
-- **HTTP/HTTPS**: Web browsing
-- **FTP/SFTP**: File transfer
-- **SMTP**: Sending email
-- **POP3/IMAP**: Receiving email
-- **DNS**: Domain name resolution
-- **SSH**: Secure remote access
-
-### 7.2 Presentation Layer (L6) Protocols
-- **SSL/TLS**: Encryption
-- **UTF-8**: Text encoding
-- **JPEG/PNG**: Image formats
-- **MP4/MKV**: Video formats
-- **Compression algorithms**
-
-### 7.3 Session Layer (L5)
-- Connection management
-- Session establishment/termination
-- Keep-alive mechanisms
-
-### 7.4 Transport Layer (L4) Protocols
-- **TCP**: Reliable, ordered, connection-oriented
-- **UDP**: Fast, connectionless, no guarantee
-
-### 7.5 Network Layer (L3) Protocols
-- **IP (IPv4/IPv6)**: Internet Protocol
-- **ICMP**: Error messages, ping
-- **Routing protocols**: BGP, OSPF, RIP
-
-### 7.6 Data Link Layer (L2) Protocols
-- **Ethernet**: Wired LAN
-- **Wi-Fi (802.11)**: Wireless LAN
-- **ARP**: IP to MAC address mapping
-- **PPP**: Point-to-Point Protocol
-
-### 7.7 Physical Layer (L1)
-- Cable specifications (Cat5e, Cat6, fiber)
-- Wireless frequencies
-- Electrical signal standards
-
-## 8. OSI Model in Modern Context
-
-### 8.1 Real-World Simplification
-
-In practice, modern operating systems and applications often collapse the upper three layers:
-
-**Theoretical OSI:**
-- Layer 7: Application
-- Layer 6: Presentation
-- Layer 5: Session
-
-**Practical Implementation:**
-- All three handled as "Application Layer"
-
-This happened because:
-- Modern operating systems became more sophisticated
-- Kernels handle transport, network, and data link responsibilities efficiently
-- Applications handle presentation and session management internally
-
-### 8.2 Docker and Container Networking
-
-Understanding the OSI model is crucial for Docker networking:
-
-**Container Communication:**
-- Containers have IP addresses (L3)
-- Services listen on ports (L4)
-- Data exchanges use HTTP/HTTPS (L7)
-
-**Docker Networking Modes:**
-- **Bridge networking**: L2/L3 concepts
-- **Host networking**: Bypasses some layers
-- **Overlay networking**: Multi-host L2 networks
-
-**Load Balancers:**
-- **L4 load balancer**: Routes based on IP and port
-- **L7 load balancer**: Routes based on HTTP headers, URLs, cookies
-
-## 9. Professional Communication
-
-### 9.1 Common Industry Terms
-
-When working in professional environments, you'll encounter:
-
-**"We need an L4 load balancer"**
-- Meaning: Load balancer operating at Transport Layer
-- Works with: TCP/UDP connections, port numbers
-
-**"This is an L7 proxy"**
-- Meaning: Proxy operating at Application Layer
-- Works with: HTTP headers, URLs, content
-
-**"L2 switching issue"**
-- Meaning: Problem at Data Link Layer
-- Related to: MAC addresses, switch configuration
-
-**"L3 routing problem"**
-- Meaning: Issue at Network Layer
-- Related to: IP addresses, routing tables
-
-### 9.2 System Design Interviews
-
-OSI model knowledge is essential for system design discussions:
-
-**Example Question:**
-"Design a globally distributed messaging system like WhatsApp."
-
-**Your Answer Should Include:**
-- **L7**: HTTP/HTTPS APIs, WebSockets for real-time messaging
-- **L4**: TCP for reliability, load balancing strategies
-- **L3**: Global IP routing, CDN considerations
-- **L2**: Data center network topology
-
-## 10. Why This Matters for Software Engineers
-
-### 10.1 Debugging Network Issues
-
-Understanding layers helps isolate problems:
-
-**Connection refused:**
-- Could be firewall blocking (L3/L4)
-- Could be service not running on port (L4)
-- Could be wrong IP address (L3)
-
-**Slow performance:**
-- Could be network congestion (L1/L2)
-- Could be inefficient routing (L3)
-- Could be protocol overhead (L4/L7)
-
-### 10.2 Optimizing Application Performance
-
-**Reducing Latency:**
-- Minimize L7 round trips (HTTP keep-alive)
-- Use UDP instead of TCP when possible (L4)
-- Optimize routing paths (L3)
-
-**Security Considerations:**
-- Encryption at L6 (SSL/TLS)
-- Firewall rules at L3/L4 (IP and port filtering)
-- Application-level authentication at L7
-
-## 11. Advanced Topics (Preview)
-
-In the upcoming chapters, we'll dive deeper into:
-
-### Chapter 29: TCP/IP Model
-- How OSI maps to the practical TCP/IP model
-- Why the internet uses TCP/IP instead of pure OSI
-- Four-layer vs seven-layer models
-
-### Chapter 30: TCP in Details
-- Three-way handshake
-- Flow control and congestion control
-- TCP vs UDP deep dive
-- When to use each protocol
-
-### Networking in Docker
-- Container networking modes
-- Service discovery
-- Load balancing in Docker Swarm
-- Kubernetes networking model
-
-## 12. Practical Exercises
-
-### Exercise 1: Layer Identification
-
-Identify which layer each scenario involves:
-
-1. Your browser displays an HTTPS error certificate warning
-2. Ping command fails to reach a remote server
-3. A switch forwards a frame to the wrong port
-4. Video streaming buffers frequently
-5. SSH connection keeps disconnecting
-
-**Answers:**
-1. L6 (Presentation) - SSL/TLS certificate issue
-2. L3 (Network) - IP routing problem
-3. L2 (Data Link) - MAC address table issue
-4. L4 (Transport) - TCP congestion or UDP packet loss
-5. L5 (Session) - Session management problem
-
-### Exercise 2: Data Transformation Trace
-
-Trace how an email message "Meeting at 3 PM" travels from your email client to recipient:
-
-1. What happens at each layer?
-2. What gets added at each layer?
-3. What protocol is used at each layer?
-4. What is the data called at each layer?
-
-### Exercise 3: Docker Networking
-
-Given a Docker container running a web application:
-
-1. What layer is the container's IP address?
-2. What layer is the exposed port (e.g., 8080)?
-3. What layer handles the HTTP requests?
-4. What layer manages the connection between client and container?
-
-**Answers:**
-1. L3 (Network Layer)
-2. L4 (Transport Layer)
-3. L7 (Application Layer)
-4. L5 (Session Layer), though often handled by L4 in practice
-
-## 13. Common Misconceptions
-
-### Misconception 1: "OSI Model is Used in Real Networks"
-**Reality:** OSI is a conceptual model. Real networks use TCP/IP protocol suite, which is based on OSI principles but simplified.
-
-### Misconception 2: "All Seven Layers Are Always Used"
-**Reality:** Some protocols skip layers. For example, UDP is simpler than TCP and provides fewer guarantees.
-
-### Misconception 3: "Layers Are Separate Programs"
-**Reality:** In modern systems, operating system kernels handle multiple layers simultaneously. Application Layer is your code.
-
-### Misconception 4: "You Need to Implement All Layers"
-**Reality:** As a software engineer, you mainly work at L7. Operating systems and network hardware handle lower layers.
-
-## 14. Troubleshooting with OSI Model
-
-### Systematic Approach
-
-When debugging network issues, work bottom-up:
-
-**Step 1: Physical Layer (L1)**
-- Are cables connected?
-- Is Wi-Fi enabled?
-- Are network interfaces up?
-
-**Step 2: Data Link Layer (L2)**
-- Is the MAC address correct?
-- Is the switch configured properly?
-- Are there VLAN issues?
-
-**Step 3: Network Layer (L3)**
-- Can you ping the destination IP?
-- Is routing configured correctly?
-- Are firewall rules blocking traffic?
-
-**Step 4: Transport Layer (L4)**
-- Is the port open?
-- Is the service listening?
-- Are there port conflicts?
-
-**Step 5: Application Layer (L7)**
-- Is the application running?
-- Are credentials correct?
-- Is the protocol supported?
-
-## 15. Key Takeaways
-
-1. **OSI Model is a Framework**: It's a conceptual model, not a physical implementation
-
-2. **Seven Layers, Each with Purpose:**
-   - L7 Application: User interaction
-   - L6 Presentation: Data formatting
-   - L5 Session: Connection management
-   - L4 Transport: Port-based delivery
-   - L3 Network: IP-based routing
-   - L2 Data Link: MAC-based switching
-   - L1 Physical: Bit transmission
-
-3. **Memory Technique**: "Please Do Not Tell Secret Password Anyone"
-
-4. **Terminology Matters:**
-   - Segment = L4 Transport
-   - Packet = L3 Network
-   - Frame = L2 Data Link
-   - Bits = L1 Physical
-
-5. **Professional Usage**: You'll frequently hear L2, L3, L4, L7 in industry discussions about load balancers, proxies, switches, and routers
-
-6. **Practical Application**: Understanding OSI helps with:
-   - Debugging network issues
-   - Designing distributed systems
-   - Optimizing application performance
-   - Securing applications
-   - Working with Docker and Kubernetes networking
-
-7. **Foundation for Advanced Topics**: OSI model understanding is prerequisite for:
-   - TCP/IP protocol suite
-   - Network security
-   - Cloud networking
-   - Container orchestration
-   - Service meshes
-
-## Conclusion
-
-The OSI model represents more than just seven layers—it embodies a philosophy of standardization and interoperability that revolutionized computer networking. By providing a common framework, it enabled the explosive growth of the internet and modern networked applications.
-
-For software engineers, DevOps practitioners, and cloud architects, understanding the OSI model is not about memorizing definitions. It's about developing intuition for how data flows through networks, how to troubleshoot connectivity issues, and how to design robust distributed systems.
-
-As you continue with Docker, Kubernetes, and microservices architecture, you'll constantly encounter concepts rooted in the OSI model. Load balancers, service meshes, ingress controllers, network policies—all of these technologies operate at different OSI layers, and understanding those layers gives you the power to use these tools effectively.
-
-In the next chapter, we'll explore the TCP/IP model, which is the practical implementation used by the internet. You'll see how the theoretical OSI seven layers map to the practical four layers of TCP/IP, and why this simplification made sense for real-world implementation.
-
-Remember: A solid understanding of networking fundamentals separates good software engineers from great ones. Master these concepts, and you'll have the foundation to excel in modern software engineering.
+**Prerequisites:** none for the theory. The hands-on commands (section 9) run on any Linux/macOS terminal, or inside a container (Chapter 10), e.g. `docker run -it --rm ubuntu:24.04 bash` after `apt-get update && apt-get install -y iproute2 iputils-ping curl`.
 
 ---
 
-**Next Chapter Preview:** In Chapter 29, we'll dive into the TCP/IP Model, exploring how the internet actually implements networking, the relationship between OSI and TCP/IP, and why TCP/IP became the dominant networking standard. We'll also start exploring the transport layer protocols (TCP and UDP) in greater depth.
+## What you will learn
 
-**Keep Learning, Keep Building!**
+- The problem the OSI model solved, and what "model" really means
+- The **seven layers**, their jobs, their data units, and their real-world examples
+- How **encapsulation** works: data being wrapped on the way down and unwrapped on the way up
+- Which addresses live at which layer (MAC, IP, port) and who reads them
+- Why the real internet uses the simpler **TCP/IP** model (next chapter), and how the two relate
+- How to use layers to **troubleshoot** and to understand phrases like "L4 load balancer"
+- How this applies to Docker and Kubernetes networking
+- Commands to *see* each layer on your own machine
+
+---
+
+## 1. Why a model? The problem of the 1970s and 80s
+
+Early computer networks were built by individual vendors. IBM had its own architecture (SNA), Digital Equipment had DECnet, and other companies had their own. Each had its own rules ("protocols") for how bits become messages. A computer from one vendor typically **could not talk** to another's, which is like two people who speak different languages and have no translator.
+
+Two standards efforts appeared: the **ISO** (International Organization for Standardization) published the **OSI reference model** (1984), while, in parallel, the internet community built the **TCP/IP** protocols. The OSI *protocols* themselves were mostly never adopted, but the OSI **model** became the universal vocabulary of networking. It is a *shared language for describing networks*.
+
+### What does the name mean?
+**O**pen **S**ystems **I**nterconnection:
+
+- **System**: a computer or device with its own software.
+- **Open**: its rules are publicly specified (as opposed to secret, proprietary ones), so anyone can implement them.
+- **Interconnection**: making *different* systems ("inter") talk to one another.
+
+### What is a "model"?
+A model is a **framework for thinking**, not a program you install or a wire you plug in. Like a building blueprint, no layer is a physical thing you can point to; real protocols and devices are **implementations** that fit into the framework.
+
+### The big idea: layering
+Split a huge problem into layers where:
+
+1. Each layer has **one clear job**.
+2. Each layer **uses the services** of the layer below, and **provides services** to the layer above.
+3. A layer can be **replaced** without changing the others. (You can switch from Wi-Fi to a cable, and your web browser doesn't care. You can switch from HTTP/1.1 to HTTP/2, and your cable doesn't care.)
+
+This is the same reason a postal system works: you write a letter (content), put it in an envelope with an address (routing), and the postal truck drivers don't care what is inside.
+
+---
+
+## 2. The seven layers at a glance
+
+```
+ Layer  Name           Job (in one line)                          Data unit    Examples
+ ─────  ─────────────  ─────────────────────────────────────────  ───────────  ──────────────────────────
+  7     Application    What the user's program speaks             Data         HTTP, DNS, SMTP, SSH, FTP
+  6     Presentation   Formatting, encoding, encryption, compress Data         TLS*, UTF-8, JPEG, JSON
+  5     Session        Start/keep/end conversations               Data         (RPC sessions, NetBIOS)*
+  4     Transport      Process-to-process delivery: ports,        Segment (TCP) TCP, UDP
+                       reliability, ordering                      Datagram(UDP)
+  3     Network        Host-to-host delivery across networks:     Packet       IP, ICMP, routers
+                       IP addresses, routing
+  2     Data Link      Delivery inside ONE network: MAC           Frame        Ethernet, Wi-Fi, ARP*,
+                       addresses, switches, error detection                    switches
+  1     Physical       Bits as electrical/light/radio signals     Bit          Cables, fiber, radio, hubs
+```
+
+*Layer placement of a few protocols is debated, see section 6.
+
+### Memory aids
+Top to bottom (7→1): **A**ll **P**eople **S**eem **T**o **N**eed **D**ata **P**rocessing. Bottom to top (1→7): **P**lease **D**o **N**ot **T**hrow **S**ausage **P**izza **A**way, or the one this series used: **P**lease **D**o **N**ot **T**ell **S**ecret **P**asswords to **A**nyone. Any works: pick one and keep it.
+
+Professionals use **numbers**: "L2 switch", "L3 router", "L4 load balancer", "L7 proxy". Learn the numbers.
+
+---
+
+## 3. The layers one by one
+
+We follow a chat message, "Hello", sent from your phone to a friend's laptop.
+
+### Layer 7: Application
+- **Job:** the protocols that applications speak to each other and to users. It is where *your* software lives (browser, chat app, `curl`, an API server).
+- **Examples:** **HTTP/HTTPS** (web), **DNS** (names → IPs), **SMTP/IMAP** (email), **SSH** (remote login), **FTP**, **MQTT**, gRPC.
+- **Our example:** the chat app decides to send `{"text":"Hello"}` with an HTTP request `POST /messages`.
+
+### Layer 6: Presentation
+- **Job:** agree on how data is *represented*: character encoding (UTF-8), serialization (JSON, XML, protobuf), image/video formats, **compression** and **encryption**.
+- **Real world:** these things are usually done inside the application or by a library (a JSON library, a TLS library). **TLS** encrypts application data and is often *described* at L6 (or L5), but it actually runs on top of TCP and below HTTP, so it doesn't fit cleanly (Chapter 29).
+
+### Layer 5: Session
+- **Job:** set up, maintain and tear down *conversations* between applications; checkpoints and resuming.
+- **Real world:** rarely a separate layer today. Login sessions, cookies, WebSocket connections, RPC sessions and TLS sessions are handled by applications and libraries. Treat L5-L7 together as "the application side" (which is exactly what the TCP/IP model does).
+
+### Layer 4: Transport
+- **Job:** deliver data between **processes** (applications) on two hosts, identified by **port numbers**. Optionally add **reliability**: acknowledgements, retransmission, ordering, flow control and congestion control.
+- **Protocols:** **TCP** (reliable stream, connection-oriented; web, email, SSH) and **UDP** (fast, no guarantees; DNS queries, video calls, games). QUIC (HTTP/3) is built over UDP.
+- **Ports:** a computer has **one IP address but 65,535 ports** per protocol; the port says *which program* gets the data. **Servers listen on well-known ports** (80 HTTP, 443 HTTPS, 22 SSH, 53 DNS, 5432 PostgreSQL). **Clients use a temporary ("ephemeral") source port** picked by the OS (typically 32768-60999 on Linux). Your browser doesn't have "port 3000"; each connection gets a fresh random source port.
+- **Data unit:** a **segment** (TCP) or a **datagram** (UDP): the application data plus a **transport header** (source port, destination port, and for TCP sequence numbers, flags, and so on).
+- **Our example:** the message is split (if large) into segments, from source port 51724 to destination port 443.
+
+### Layer 3: Network
+- **Job:** get a packet from **any host to any other host**, possibly across many networks, using **IP addresses** and **routing**.
+- **Protocols:** **IP** (IPv4/IPv6), **ICMP** (ping, error messages), routing protocols (BGP, OSPF).
+- **Devices:** **routers** (they read the IP header and choose the next hop).
+- **Data unit:** a **packet**: the segment plus an **IP header** (source IP, destination IP, TTL, protocol number...).
+- **Address analogy:** an IP is like a *street address* and can change when you move (or as your network changes).
+- **Our example:** from your phone's IP `192.168.1.23` (private, behind NAT) to the chat server's public IP.
+
+### Layer 2: Data Link
+- **Job:** deliver a **frame** between two devices that are directly connected on the **same local network** (same "link"), using **MAC addresses**; detect corrupted frames (a checksum called the **FCS**).
+- **Technologies:** **Ethernet**, **Wi-Fi (802.11)**, PPP; **switches** and **bridges** work here; **ARP** helps find the MAC that owns an IP on the local network. VLANs also live here.
+- **MAC address:** a 48-bit hardware address like `a4:83:e7:1c:9b:02`, assigned at manufacture (the first half identifies the vendor). It is only meaningful **on the local network**, and **it is not truly unchangeable**: operating systems can change or randomize it (phones do, for privacy), and virtual machines and containers get generated ones.
+- **Data unit:** a **frame**: the packet wrapped by a **header** (destination MAC, source MAC, type) and a **trailer** (FCS).
+- **Key point:** **MAC addresses change at every hop**, while IP addresses stay the same end to end. The frame from your phone to your router has the router's MAC as destination; the router builds a *new* frame for the next link.
+
+### Layer 1: Physical
+- **Job:** move raw **bits** as voltage, light pulses or radio waves. Connectors, cable types, frequencies, signal encoding.
+- **Devices/media:** copper (Cat5e/6), fiber, radio (Wi-Fi, 5G), **hubs** and repeaters.
+- **Data unit:** the bit.
+
+---
+
+## 4. Encapsulation: how data travels down and up
+
+On the sending side, each layer takes what the layer above gave it and **adds its own header** (and at L2, a trailer). This is **encapsulation**. The receiver reverses it (**decapsulation**), each layer reading and removing *its own* header.
+
+```
+Sender                                                           Receiver
+┌───────────────────────────────────────┐                        ┌─────────────────────────────────┐
+│ L7 Application:      "Hello"          │                        │ L7  "Hello"                     │
+│        ▼                              │                        │        ▲                        │
+│ L4: [TCP hdr | Hello]      SEGMENT    │                        │ L4  strip TCP hdr, deliver to   │
+│        ▼                              │                        │     the app listening on port   │
+│ L3: [IP hdr | TCP hdr | Hello] PACKET │                        │ L3  IP dest is me? strip IP hdr │
+│        ▼                              │                        │        ▲                        │
+│ L2: [Eth hdr | IP | TCP | Hello | FCS]│                        │ L2  MAC dest is me? FCS ok?    │
+│                                FRAME  │                        │     strip Eth hdr + FCS         │
+│        ▼                              │      ── bits ──►       │        ▲                        │
+│ L1: 1010011101...                     │ ═══════════════════════│ L1  signals → bits              │
+└───────────────────────────────────────┘                        └─────────────────────────────────┘
+```
+
+Read the frame **from the outside in**. The order on the wire is:
+
+```
+| Ethernet header (dst MAC, src MAC, type) | IP header (src IP, dst IP, ...) | TCP header (src port, dst port, ...) | DATA | Ethernet trailer (FCS) |
+```
+
+(Many simplified diagrams place "sender info" on the left and "receiver info" on the right of the payload. In reality each layer's header goes in **front of** its payload, and only the Ethernet layer has a trailer.)
+
+Typical sizes: Ethernet header 14 bytes, IPv4 header 20 bytes (min), TCP header 20 bytes (min), Ethernet's maximum payload (the **MTU**) 1500 bytes, so a full frame carries at most about 1460 bytes of TCP data.
+
+### The receiver's questions
+Each layer answers one question and then hands the data upward:
+
+| Layer | Question | If "no" |
+|---|---|---|
+| L2 | Is this frame **addressed to my MAC** (or broadcast), and is it intact (FCS)? | Ignore or drop |
+| L3 | Is this **IP addressed to me**? (A router instead forwards it.) | Drop, or forward |
+| L4 | **Which application** (port) wants this? Is anyone listening? | Send "port unreachable" or a TCP reset |
+| L7 | Is it a valid request for this app? | The app replies with an error, e.g. HTTP 400 |
+
+### Which device looks at which layer?
+
+| Device | Highest layer it reads | Decision it makes |
+|---|---|---|
+| Hub / repeater | L1 | Copies bits to all ports |
+| **Switch** | L2 | Forwards a frame by destination MAC |
+| **Router** | L3 | Forwards a packet by destination IP (rewrites the L2 header at each hop) |
+| Firewall | L3–L4 (stateful), up to L7 (next-gen/WAF) | Allow/deny by IP, port, connection state, or content |
+| **L4 load balancer** | L4 | Spreads TCP/UDP connections by IP + port (doesn't read HTTP) |
+| **L7 load balancer / reverse proxy** | L7 | Routes by HTTP host, path, header, cookie (nginx, Envoy, HAProxy, ingress controllers) |
+| Your OS kernel | L2-L4 (network stack) | Also implements ARP, IP, TCP, UDP |
+
+---
+
+## 5. Data-unit vocabulary (PDU)
+
+| Layer | Name | Contains |
+|---|---|---|
+| 7-5 | **Data** / message | Application payload |
+| 4 | **Segment** (TCP) / **Datagram** (UDP) | Payload + ports (+ TCP details) |
+| 3 | **Packet** (IP datagram) | Segment + IP addresses |
+| 2 | **Frame** | Packet + MAC addresses + FCS |
+| 1 | **Bits** | Signals |
+
+People often say "packet" loosely for any of these. In an interview or a design review it's worth using them precisely.
+
+### Three address types, three jobs
+
+| Address | Layer | Scope | Example | Changes hop by hop? |
+|---|---|---|---|---|
+| **MAC** | 2 | One local network (link) | `a4:83:e7:1c:9b:02` | **Yes** |
+| **IP** | 3 | Whole internet | `192.168.1.23`, `2001:db8::1` | No (except NAT) |
+| **Port** | 4 | One computer's processes | `443` | No (except NAT/PAT) |
+
+A full "address" of a connection is the **5-tuple**: protocol, source IP, source port, destination IP, destination port. Firewalls, NAT and load balancers track connections with it.
+
+---
+
+## 6. OSI vs TCP/IP: the model versus the real thing
+
+The internet was built with the **TCP/IP** protocol suite, which has **four** (sometimes five) layers. The OSI model is used as a *teaching and vocabulary* framework:
+
+```
+   OSI (7 layers)              TCP/IP (4 layers)          Examples
+┌─────────────────┐
+│ 7 Application   │
+│ 6 Presentation  │ ──────►  Application               HTTP, DNS, TLS, SSH, SMTP
+│ 5 Session       │
+├─────────────────┤
+│ 4 Transport     │ ──────►  Transport                 TCP, UDP, QUIC
+├─────────────────┤
+│ 3 Network       │ ──────►  Internet                  IP, ICMP
+├─────────────────┤
+│ 2 Data Link     │ ──────►  Link (Network Access)     Ethernet, Wi-Fi, ARP
+│ 1 Physical      │
+└─────────────────┘
+```
+
+Chapter 22 covers TCP/IP in detail. Points to remember:
+
+- Real protocols **don't respect the layer boundaries perfectly**: ARP sits between L2 and L3, TLS between L4 and L7, MPLS is "L2.5", QUIC merges transport, encryption and session setup, VPNs put entire packets inside other packets (**tunneling**).
+- Some protocols place **layers inside layers**: an HTTP request is inside TLS inside TCP inside IP inside Ethernet.
+- "Layer 8" is a joke about the user.
+
+---
+
+## 7. Layers and Docker / Kubernetes
+
+| Concept | Layer | What it means for containers |
+|---|---|---|
+| Container's `eth0` and its **MAC** | L2 | Each container has a virtual Ethernet interface (one end of a **veth pair**) attached to a **Linux bridge** (`docker0`), which behaves like a virtual **switch** |
+| Container's **IP** (e.g. `172.17.0.2`) | L3 | Assigned from the Docker network's subnet; the host **routes** between the bridge and the outside world |
+| **NAT / port publishing** `-p 8080:80` | L3–L4 | Docker installs firewall/NAT rules (iptables/nftables) that translate host `IP:8080` → container `IP:80` |
+| **Ports** the app listens on | L4 | `EXPOSE 80`, `-p`, `ss -tlnp` |
+| **Docker's embedded DNS** (container names → IPs) | L7 (DNS) | Service discovery on user-defined networks |
+| **Reverse proxy / Ingress** (nginx, Traefik) | L7 | Route by host/path |
+| **Kubernetes Service** (kube-proxy) | L4 | Virtual IP load-balancing connections |
+| **Ingress / Gateway** | L7 | HTTP routing, TLS termination |
+| **NetworkPolicy** | L3–L4 | Which pods may talk to which, on which ports |
+| **Service mesh** (Istio, Linkerd) | L7 (and mTLS) | Per-request routing, retries, encryption between services |
+| **Network namespace** | L2–L4 | Each container has its own interfaces, IPs, routing table, port space (Chapter 4) |
+
+Docker network drivers: **bridge** (default: virtual switch on one host), **host** (share the host's network stack), **none**, **overlay** (multi-host virtual network, encapsulating L2 frames inside UDP packets: VXLAN), **macvlan** (containers appear as separate devices with their own MAC on the physical LAN).
+
+---
+
+## 8. Troubleshooting with layers
+
+Work **bottom-up** (or use divide and conquer: start in the middle with a ping or a connection test):
+
+| Layer | Question | Command / clue |
+|---|---|---|
+| **1 Physical** | Is the link up? Cable, Wi-Fi, interface enabled? | `ip link show` (look for `UP`, `LOWER_UP`); link lights; `ethtool eth0` |
+| **2 Data Link** | Right VLAN/switch? Can I see the neighbor's MAC? | `ip neigh` (ARP table); `arp -a`; `bridge fdb` |
+| **3 Network** | Do I have an IP, a route, a gateway? Can I ping the destination IP? | `ip addr`, `ip route`, `ping 192.168.1.1`, `ping 8.8.8.8`, `traceroute` / `mtr` |
+| **3 (names)** | Does the name resolve? | `getent hosts example.com`, `dig example.com`, `nslookup` |
+| **4 Transport** | Is anything listening? Is the port reachable/filtered? | `ss -tlnp` (server side), `nc -vz host 443`, `curl -v telnet://host:443` |
+| **5-6** | TLS/certificates OK? | `openssl s_client -connect host:443 -servername host`, `curl -v https://...` |
+| **7 Application** | Does the app answer correctly? | `curl -i https://host/path`, logs, HTTP status codes |
+
+Typical symptoms and where to look:
+
+| Symptom | Likely layer |
+|---|---|
+| "Network cable unplugged", no Wi-Fi | 1 |
+| Can ping the router but not other LAN hosts; duplicate IP | 2 |
+| `Network is unreachable`, no default route; ping by IP fails | 3 |
+| `Temporary failure in name resolution`, ping by IP works | 7 (DNS) |
+| `Connection refused` (instant): host is reachable but nothing listens on that port | 4 |
+| `Connection timed out`: packets dropped, usually a firewall or a wrong route | 3/4 |
+| `certificate verify failed`, `SSL_ERROR...` | TLS (6/7) |
+| HTTP 404/500 | 7 |
+
+`refused` vs `timeout` is one of the most useful distinctions in networking: **refused** = you reached the machine and it said no; **timeout** = you got no answer at all.
+
+---
+
+## 9. Hands-on: see the layers on your machine
+
+Use Linux (or WSL2, or a container with `iproute2 iputils-ping curl tcpdump` installed).
+
+**Layer 1/2: interfaces and MACs**
+
+```bash
+ip -br link
+# lo    UNKNOWN  00:00:00:00:00:00 <LOOPBACK,UP,LOWER_UP>
+# eth0  UP       02:42:ac:11:00:02 <BROADCAST,MULTICAST,UP,LOWER_UP>     ← 02:42:... is a Docker-generated MAC
+```
+
+**Layer 2 ↔ 3: IP addresses and the neighbor (ARP) table**
+
+```bash
+ip -br addr             # IP per interface
+ip neigh                # IP → MAC entries your machine has learned
+```
+
+**Layer 3: routing**
+
+```bash
+ip route                # "default via 172.17.0.1 dev eth0": where packets to the internet go
+ping -c 3 172.17.0.1    # L3 reachability of the gateway
+traceroute -n 8.8.8.8   # each router (hop) along the way; (apt-get install traceroute)
+```
+
+**Layer 4: ports and connections**
+
+```bash
+ss -tlnp                # TCP listening sockets (which ports have servers)
+ss -tn                  # established TCP connections (local ip:port ↔ remote ip:port = the 5-tuple)
+nc -vz example.com 443  # can I open a TCP connection to port 443?
+```
+
+**Layer 7 with all the layers underneath**
+
+```bash
+curl -v https://example.com 2>&1 | head -30
+# * Trying 93.184.x.x:443...           ← L3/L4: resolved IP, connecting
+# * Connected to example.com port 443  ← L4: TCP handshake done
+# * TLSv1.3 (OUT), TLS handshake ...   ← TLS
+# > GET / HTTP/2                       ← L7: your request
+# < HTTP/2 200                         ← L7: response
+```
+
+**Watching real frames (needs root):** in one terminal run `sudo tcpdump -i any -nn -e -c 20 port 80`, then in another `curl -s http://example.com >/dev/null`. The `-e` flag shows **MAC addresses (L2)**, and the lines show **IPs (L3)** and **ports and TCP flags (L4)**. **Wireshark** displays each layer's header as an expandable tree; it is the best way to make encapsulation real.
+
+**Docker view:**
+
+```bash
+docker network ls
+docker run -d --name web nginx:1.27-alpine
+docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}} {{.MacAddress}}{{end}}' web   # its L3 and L2 addresses
+ip -br link | grep -E 'docker0|veth'         # the virtual switch and the container's veth end (on the host)
+docker exec web ip addr                      # container's own eth0
+docker exec web netstat -tln 2>/dev/null || docker exec web ss -tln     # L4: listening on :80
+```
+
+---
+
+## 10. Common misconceptions
+
+| Misconception | Reality |
+|---|---|
+| "The internet uses the OSI model" | It uses TCP/IP. OSI is a reference model and vocabulary |
+| "Each layer is a separate program" | Layers are roles. The kernel implements L2–L4; libraries and apps handle L5–L7; hardware does L1–L2 |
+| "The receiver adds nothing; only the sender wraps the data" | Both do: sender adds headers going down; the receiver strips them going up. And routers rewrite L2 headers at every hop |
+| "MAC addresses are permanent and unique forever" | Usually assigned once, but can be changed, spoofed, or randomized, and only matter on the local link |
+| "IP addresses identify a device forever" | They are assigned (often by DHCP) and change; many devices share one public IP through NAT |
+| "A port belongs to an application forever, e.g. WhatsApp is port 3000" | Servers use well-known/configured ports; **clients get random ephemeral source ports** |
+| "Packet, frame and segment all mean the same" | They are layer-specific names (L3, L2, L4) |
+| "HTTPS is layer 6/7 only" | TLS sits between TCP and HTTP. Categorization is fuzzy |
+| "Presentation = JSON/HTML" | Those are application-level formats; L6 is about representation concerns. In practice, applications handle it |
+| "Layer numbers tell the order of a request" | Data is processed from 7 down to 1 on the sender and 1 up to 7 on the receiver |
+
+---
+
+## 11. Summary
+
+- OSI = a **seven-layer reference model**: 7 Application, 6 Presentation, 5 Session, 4 Transport, 3 Network, 2 Data Link, 1 Physical.
+- Each layer has one job and offers a service to the layer above; that makes networks **interchangeable, testable and debuggable**.
+- **Encapsulation:** headers are added going down, removed coming up: data → segment/datagram (ports) → packet (IPs) → frame (MACs + FCS) → bits.
+- **MAC** = link-local, **IP** = end-to-end, **port** = which process. MACs change at every hop; IPs don't.
+- Real networks run **TCP/IP**; OSI numbers (L2 switch, L3 router, L4/L7 load balancer) are the industry vocabulary.
+- Docker: veth + bridge (L2), container IPs and NAT (L3), ports (L4), DNS/proxies (L7).
+- Troubleshoot by layer: link → IP/route → port → TLS → application; **refused** vs **timeout** narrows it fast.
+
+---
+
+## 12. Check your understanding
+
+1. Name the seven layers from 7 to 1 and the data unit at layers 4, 3 and 2.
+2. Which layer are `ping`'s ICMP messages, an Ethernet switch, a router and a TCP port at?
+3. As a packet crosses three routers, which addresses change: source/destination MAC, source/destination IP?
+4. What is the difference between "connection refused" and "connection timed out"?
+5. Why do we say a browser doesn't "use port 3000"? Which port does it use to connect to an HTTPS site, and which on its own side?
+6. A team says "we need an L7 load balancer". What can it do that an L4 load balancer can't?
+7. Where do Docker's `-p 8080:80` rules operate, and why isn't it just a port "opening"?
+
+<details>
+<summary>Answers</summary>
+
+1. Application, Presentation, Session, Transport, Network, Data Link, Physical. Segment (datagram for UDP) at 4, packet at 3, frame at 2.
+2. ICMP: L3. Switch: L2. Router: L3. TCP port: L4.
+3. The MAC addresses (a new L2 frame per hop). Source and destination IP stay the same (barring NAT).
+4. Refused: the host answered, but nothing listens on that port (or it sent a reset). Timeout: no response at all, typically a firewall drop, wrong route, or host down.
+5. Servers use well-known ports; clients get a random ephemeral source port. HTTPS server side: 443; client side: a random high port.
+6. It can read the HTTP request (host, path, headers, cookies) and route/modify based on it; an L4 balancer only sees IPs and ports.
+7. At L3/L4: NAT rules in iptables/nftables translate host `IP:8080` to container `IP:80`; a forwarding rule, not just an opened port.
+</details>
+
+**Practice**
+
+1. On your machine, run `ip -br addr`, `ip route`, `ip neigh`, `ss -tlnp`. For each line of output, write down its OSI layer and which addresses (MAC/IP/port) it contains.
+2. Start a container, and from the host, find its IP (`docker inspect`) and its MAC; ping it; find it in `ip neigh` on the host. Which layers did you just touch?
+3. Run `sudo tcpdump -i any -nn -e port 80` while you `curl` an HTTP site. Identify in one captured line each layer's information.
+4. Draw the encapsulation of `curl http://example.com` as a nested set of boxes, with the header fields you found in step 3.
+
+---
+
+**Next:** [Chapter 22 – The TCP/IP Model](22_tcp_ip_model.md)

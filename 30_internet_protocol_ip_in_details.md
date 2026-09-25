@@ -1,1889 +1,635 @@
-# Chapter 30: Internet Protocol (IP) In Details
+# Chapter 30: The Internet Protocol (IP) in Detail
 
-## Overview
+> **In one sentence:** IP gives every network interface an **address** and delivers **packets** hop by hop from the sender to the destination across many networks, using each router's **routing table**, with no promises about delivery (it is *best effort*); TCP and UDP build reliability and ports on top.
 
-The Internet Protocol (IP) is the foundation of modern networking—the protocol that makes the Internet possible. When you send a message from Bangladesh to someone in America, when you load a website hosted on servers across the ocean, when your mobile phone communicates with a server on another continent, IP is the protocol routing your data through dozens of routers, switches, and networks to reach its destination.
+**Level:** 🟢 Beginner → 🟡 Intermediate · **Reading time:** ~65 minutes
 
-IP operates at Layer 3 (the Network Layer) of the OSI model. While TCP and UDP at Layer 4 handle reliable delivery and port-based addressing, while HTTP and DNS at Layer 7 handle application-level communication, IP at Layer 3 handles the fundamental question: **How do we route data from one IP address to another across a complex, interconnected global network?**
-
-Understanding IP is not optional for mastering networking. Without understanding how IP packets are structured, how routers make forwarding decisions, how IPv4 addresses work versus IPv6, how subnetting divides networks, and how routing tables determine paths—you cannot claim to understand networking. You might memorize patterns, you might follow tutorials, but you won't have the foundational knowledge required to troubleshoot network issues, design network architectures, or understand why your application behaves differently across different network topologies.
-
-This chapter provides the complete technical foundation of IP: What is a packet versus a segment versus a frame? What fields exist in the IP header and why? How do routers use destination IP addresses to forward packets? What's the difference between IPv4's 32-bit addresses and IPv6's 128-bit addresses? How does IP fragmentation work? How do TTL (Time to Live) values prevent infinite routing loops? How do options extend IP functionality?
-
-After completing this chapter, you'll visualize exactly what happens when you type `ping google.com` and press Enter—understanding how your operating system constructs an IP packet with source and destination addresses, how routers examine the destination IP and consult routing tables, how the packet traverses multiple networks (home WiFi → ISP → Internet backbone → Google's network), and how the response packet follows a potentially different path back to you.
-
-**IP is the heart of networking. Master this, and the entire networking stack becomes comprehensible.**
+**Prerequisites:** [Chapter 21](21_philosophy_of_osi_model.md) (layers, encapsulation), [Chapter 22](22_tcp_ip_model.md), and binary/hex basics (explained as needed).
 
 ---
 
-## The Network Layer: Layer 3 in the OSI Model
+## What you will learn
 
-### OSI Model Review
-
-Recall the seven layers of the OSI model:
-
-```
-┌─────────────────────────────────────────┐
-│  Layer 7: Application Layer             │  ← HTTP, DNS, FTP, SMTP
-├─────────────────────────────────────────┤
-│  Layer 6: Presentation Layer            │  ← TLS/SSL (encryption)
-├─────────────────────────────────────────┤
-│  Layer 5: Session Layer                 │  ← Session management
-├─────────────────────────────────────────┤
-│  Layer 4: Transport Layer               │  ← TCP, UDP (segments)
-├─────────────────────────────────────────┤
-│  Layer 3: Network Layer (IP)            │  ← IP routing (packets) ★
-├─────────────────────────────────────────┤
-│  Layer 2: Data Link Layer               │  ← Ethernet, WiFi (frames)
-├─────────────────────────────────────────┤
-│  Layer 1: Physical Layer                │  ← Cables, radio waves
-└─────────────────────────────────────────┘
-```
-
-**Layer 3 (Network Layer) is where IP operates.**
+- What IP does at Layer 3 and what it explicitly does **not** do
+- The **IPv4 header**, every field, decoded from real bytes, including the checksum
+- **IPv4 addresses**: binary and dotted decimal, classes (historical), private, loopback, link-local, CGNAT, multicast
+- **IPv6**: why it exists, address format and types, the simpler header, SLAAC, and how it differs from IPv4
+- How a packet travels: **routing tables, default gateway, longest-prefix match, next hops** and how the L2 header changes at each hop
+- **TTL / hop limit** and how `traceroute` uses it
+- **MTU, fragmentation and Path MTU Discovery** (and their real-world failure modes)
+- **ICMP**: ping, unreachable, time exceeded
+- **NAT** (and why it is not a firewall), **routing protocols** (static, RIP, OSPF, **BGP**)
+- IP in **Docker** and **Kubernetes**: bridge subnets, container IPs, address overlap problems
+- Hands-on: `ip`, `ping`, `traceroute`, `tracepath`, `mtr`, `tcpdump`, Python's `ipaddress`, and Docker networks
 
 ---
 
-### What Each Layer Produces
+## 1. What IP is, and what it is not
 
-**Layer 7 (Application):**
-- Produces: **Application Data**
-- Example: HTTP request `GET / HTTP/1.1`
+The Internet Protocol lives at **Layer 3 (Network layer)**. Its job is **host-to-host delivery across networks**, answering: *"How does this packet get from that computer over there to this one, across dozens of networks I don't control?"*
 
-**Layer 4 (Transport):**
-- Produces: **Segment**
-- TCP segment or UDP segment
-- Adds source port and destination port
-- Example: HTTP data + TCP header (port 80, port 54321)
+| IP provides | IP does *not* provide |
+|---|---|
+| **Addressing**: an address per interface | **Reliability**: packets may be lost, duplicated, reordered, corrupted (TCP fixes it) |
+| **Routing**: hop-by-hop forwarding by destination address | **Ports** / delivery to a program (TCP/UDP) |
+| **Encapsulation** of transport data into packets | **Flow/congestion control** (TCP) |
+| **Fragmentation** support (IPv4) | **Security or privacy** (use IPsec/TLS) |
+| An error-reporting companion protocol: **ICMP** | **Sequencing, guaranteed timing** |
 
-**Layer 3 (Network):**
-- Produces: **Packet**
-- IP packet
-- Adds source IP address and destination IP address
-- Example: TCP segment + IP header (192.168.1.10 → 142.250.185.206)
+This is the *end-to-end principle* behind the internet: keep the network core simple and dumb (IP just forwards packets), and put intelligence at the ends (TCP, applications).
 
-**Layer 2 (Data Link):**
-- Produces: **Frame**
-- Ethernet frame or WiFi frame
-- Adds source MAC address and destination MAC address
-- Example: IP packet + Ethernet header (AA:BB:CC:DD:EE:FF → 11:22:33:44:55:66)
-
-**Layer 1 (Physical):**
-- Produces: **Bits**
-- Electrical signals, light pulses, radio waves
-- Example: Binary 1010101... transmitted over copper wire or fiber optic cable
-
----
-
-### Naming Convention
+### Names of the data units (recap)
+| Layer | Unit |
+|---|---|
+| L4 | Segment (TCP) / datagram (UDP) |
+| **L3** | **Packet** (IP packet, also called an IP datagram) |
+| L2 | Frame |
 
 ```
-Transport Layer (L4) → Segment
-Network Layer (L3)   → Packet
-Data Link Layer (L2) → Frame
-```
-
-**Why different names?**
-- Each layer wraps the previous layer's data with its own header
-- Different layers have different responsibilities and addressing schemes
-- Naming makes it clear which layer you're discussing
-
-**Example Flow:**
-
-```
-Application creates HTTP request:
-"GET / HTTP/1.1\r\nHost: google.com\r\n\r\n"
-         ↓
-Transport Layer (TCP) creates segment:
-[TCP Header: Port 443 → Port 54321] + [HTTP Data]
-         ↓
-Network Layer (IP) creates packet:
-[IP Header: 192.168.1.10 → 142.250.185.206] + [TCP Segment]
-         ↓
-Data Link Layer (Ethernet) creates frame:
-[Ethernet Header: MAC_source → MAC_dest] + [IP Packet]
-         ↓
-Physical Layer transmits bits
+Application data ─► [TCP/UDP header | data] segment ─► [IP header | segment] PACKET ─► [Ethernet hdr | packet | FCS] frame ─► bits
 ```
 
 ---
 
-## What Is the Internet Protocol (IP)?
+## 2. A packet's journey (the big picture)
 
-### Definition
+You send a message from Dhaka to a friend in New York. Every hop works the same way:
 
-**Internet Protocol (IP):**
-A network layer protocol responsible for addressing and routing packets of data from source to destination across interconnected networks.
+```
+Your PC (192.168.1.50)
+   │  "destination 72.21.91.29 is not on my subnet → send to my default gateway 192.168.1.1"
+   ▼   Ethernet frame: dst MAC = gateway's MAC     IP packet: 192.168.1.50 → 72.21.91.29
+Home router (NAT)      rewrites the source to its public IP; looks up 72.21.91.29 → forwards to the ISP
+   ▼   new frame (new MACs), same destination IP; TTL 64 → 63
+ISP router → ... → submarine cable → ... → US backbone → destination ISP → destination network
+   ▼   each router: strip the L2 header, read the destination IP, decrement TTL, choose the next hop, build a NEW L2 header
+Friend's phone           IP dst matches me → hand the payload to TCP/UDP (by protocol number and port)
+```
 
-**Full Form:**
-- **I**nternet **P**rotocol
-- Often called "IP Protocol" (technically redundant, like "ATM machine")
-- Also called "IP" for short
+Rules to remember:
+
+1. **The destination IP address stays the same** all the way (except when NAT rewrites it).
+2. **The L2 (MAC) addresses change at every hop.** Each link uses its own frame addressed to the *next* device.
+3. **Routers look only at the IP header** (mostly the destination address and TTL). They forward packets independently, so packets of one connection may take different paths, and the return path may differ from the outgoing path (**asymmetric routing**).
+4. Each router only needs to know **the next hop**, not the whole path.
 
 ---
 
-### IP Address
+## 3. The IPv4 header
 
-**IP Address:**
-- Full form: **Internet Protocol Address**
-- A unique numerical identifier assigned to each device on a network
-- Enables routing of packets to the correct destination
-
-**Two Versions:**
-
-1. **IPv4 (IP Version 4):**
-   - 32-bit address
-   - Example: `192.168.1.1`
-   - Format: Four octets separated by dots (dotted-decimal notation)
-   - Total addresses: ~4.3 billion (2^32)
-
-2. **IPv6 (IP Version 6):**
-   - 128-bit address
-   - Example: `2001:0db8:85a3:0000:0000:8a2e:0370:7334`
-   - Format: Eight groups of hexadecimal separated by colons
-   - Total addresses: ~340 undecillion (2^128)
-
----
-
-### Why IP Exists: The Routing Problem
-
-**Problem Without IP:**
-
-Imagine you want to send a message from your computer in Dhaka, Bangladesh to your friend's computer in New York, USA.
-
-```
-Your Computer (Dhaka) → ??? → Friend's Computer (New York)
-```
-
-**Questions:**
-- How does the message know where to go?
-- Which routers should forward the message?
-- How do routers decide the next hop?
-- What if multiple paths exist?
-
-**Solution: IP Addressing and Routing**
-
-```
-Your Computer:    IP = 103.4.145.50   (Bangladesh)
-Friend's Computer: IP = 72.21.91.29   (USA)
-
-Your Computer → Router 1 (Dhaka ISP) → Router 2 (Submarine Cable) →
-Router 3 (USA Backbone) → Router 4 (New York ISP) → Friend's Computer
-
-Each router examines destination IP (72.21.91.29) and forwards packet
-to the next router that's "closer" to the destination.
-```
-
-**Key Insight:**
-IP provides a **hierarchical addressing system** and **routing mechanism** that enables global-scale communication across millions of interconnected networks.
-
----
-
-## Real-World Example: Sending "I Love You" Across Continents
-
-### Scenario
-
-**Setup:**
-- You're in Dhaka, Bangladesh (using computer or mobile phone)
-- Your girlfriend is in New York, USA (using mobile phone)
-- You send her a message: "I love you"
-
-**Physical Network:**
-```
-Bangladesh                            USA
-┌──────────────┐                     ┌──────────────┐
-│ Your Computer│                     │Her Mobile    │
-│  (or Mobile) │                     │              │
-└──────┬───────┘                     └───────┬──────┘
-       │                                     │
-┌──────▼────────┐                   ┌───────▼──────┐
-│ WiFi Router   │                   │ Cell Tower   │
-│  (Home)       │                   │              │
-└──────┬────────┘                   └──────┬───────┘
-       │                                   │
-┌──────▼────────┐                  ┌──────▼───────┐
-│  ISP Router   │                  │  ISP Router  │
-│ (Bangladesh)  │                  │   (USA)      │
-└──────┬────────┘                  └──────┬───────┘
-       │                                  │
-       └────────► Submarine Cable ◄───────┘
-              (Crosses Atlantic Ocean)
-```
-
----
-
-### Step-by-Step Journey
-
-**Step 1: Application Layer**
-You type "I love you" and press Send.
-
-```
-Application creates data:
-Message: "I love you"
-```
-
-**Step 2: Transport Layer (TCP Segment)**
-TCP wraps the message with source port and destination port.
-
-```
-TCP Segment:
-┌─────────────────────────────────┐
-│ Source Port: 54321              │
-│ Destination Port: 443 (HTTPS)   │
-│ Data: "I love you" (encrypted)  │
-└─────────────────────────────────┘
-```
-
-**Step 3: Network Layer (IP Packet)**
-IP wraps the TCP segment with source IP and destination IP.
-
-```
-IP Packet:
-┌────────────────────────────────────────┐
-│ Source IP: 103.4.145.50 (Your IP)     │
-│ Destination IP: 72.21.91.29 (Her IP)  │
-│ Data: [TCP Segment]                   │
-└────────────────────────────────────────┘
-```
-
-**Step 4: Data Link Layer (Ethernet/WiFi Frame)**
-Ethernet wraps the IP packet with MAC addresses.
-
-```
-Ethernet Frame:
-┌──────────────────────────────────────────────┐
-│ Source MAC: Your Computer's MAC              │
-│ Destination MAC: Router's MAC                │
-│ Data: [IP Packet]                            │
-└──────────────────────────────────────────────┘
-```
-
-**Step 5: Physical Layer**
-Bits transmitted over WiFi as radio waves.
-
----
-
-### Routing Through Multiple Networks
-
-**At Your WiFi Router:**
-
-```
-Router receives Ethernet frame:
-1. Strips Ethernet header (Layer 2)
-2. Examines IP packet (Layer 3)
-3. Reads destination IP: 72.21.91.29
-4. Checks routing table: "Not local network, forward to ISP"
-5. Wraps IP packet in new Ethernet frame (router's MAC → ISP router's MAC)
-6. Sends to ISP router
-```
-
-**At ISP Router (Bangladesh):**
-
-```
-ISP Router receives frame:
-1. Strips Ethernet header
-2. Examines IP packet
-3. Reads destination IP: 72.21.91.29
-4. Checks routing table: "USA address, forward via submarine cable route"
-5. Wraps IP packet in new frame
-6. Sends to next-hop router (submarine cable endpoint)
-```
-
-**Through Internet Backbone:**
-
-```
-Packet traverses multiple routers:
-Router 1 → Router 2 → Router 3 → ... → Router N
-
-Each router:
-1. Receives packet
-2. Examines destination IP
-3. Consults routing table
-4. Forwards to next-hop router "closer" to destination
-```
-
-**At USA ISP Router:**
-
-```
-USA ISP Router receives packet:
-1. Examines destination IP: 72.21.91.29
-2. Routing table says: "This IP belongs to our customer network"
-3. Forwards to cell tower serving that IP address
-```
-
-**At Cell Tower:**
-
-```
-Cell Tower receives packet:
-1. Examines destination IP: 72.21.91.29
-2. Knows this IP is assigned to her mobile phone
-3. Transmits packet via radio waves to her phone
-```
-
-**At Her Mobile Phone:**
-
-```
-Her phone receives packet:
-1. Physical Layer: Receives radio waves, converts to bits
-2. Data Link Layer: Strips WiFi/cellular header
-3. Network Layer: Strips IP header, confirms destination IP matches
-4. Transport Layer: Strips TCP header, confirms destination port 443
-5. Application Layer: TLS decrypts, displays "I love you"
-```
-
----
-
-### Critical Role of IP
-
-**Without IP addresses:**
-- Routers wouldn't know where to forward packets
-- No hierarchical addressing (can't route efficiently)
-- Every device would need direct physical connection to every other device (impossible at scale)
-
-**With IP addresses:**
-- Every device has unique address
-- Routers make forwarding decisions based on destination IP
-- Packets can traverse any path (multiple routes possible)
-- Global connectivity with billions of devices
-
----
-
-## IP Packet Structure: The Complete Header
-
-### Overview
-
-An IP packet consists of:
-1. **IP Header** (20-60 bytes)
-2. **Payload** (TCP segment, UDP segment, or other data)
-
-**IP Header Breakdown:**
+An IPv4 packet is a header of **20 to 60 bytes** plus the payload. Each row below is 32 bits:
 
 ```
  0                   1                   2                   3
  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-|Version|  IHL  |Type of Service|          Total Length         |
-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-|         Identification        |Flags|      Fragment Offset    |
-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-|  Time to Live |    Protocol   |         Header Checksum       |
-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-|                       Source IP Address                       |
-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-|                    Destination IP Address                     |
-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-|                    Options (if IHL > 5)                       |
-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-|                             Data                              |
-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+┌───────┬───────┬───────────────┬───────────────────────────────┐
+│Version│  IHL  │  DSCP  │ ECN  │         Total Length          │
+├───────┴───────┴───────────────┼─────┬─────────────────────────┤
+│        Identification         │Flags│     Fragment Offset     │
+├───────────────┬───────────────┼─────┴─────────────────────────┤
+│  Time to Live │   Protocol    │        Header Checksum        │
+├───────────────┴───────────────┴───────────────────────────────┤
+│                       Source IP Address                       │
+├───────────────────────────────────────────────────────────────┤
+│                    Destination IP Address                     │
+├───────────────────────────────────────────────────────────────┤
+│                     Options (if IHL > 5)                      │
+└───────────────────────────────────────────────────────────────┘
 ```
 
-**Each row is 32 bits (4 bytes).**
+| Field | Bits | Meaning |
+|---|---|---|
+| **Version** | 4 | `4` for IPv4 (`6` for IPv6). Tells the receiver how to parse the rest |
+| **IHL** (Internet Header Length) | 4 | Header length in **32-bit words**: bytes = IHL × 4. Minimum **5** (20 bytes), maximum **15** (60 bytes) |
+| **DSCP** | 6 | *Differentiated Services Code Point*: traffic class for QoS (0 = best effort, 46 = EF, used for voice; 34 = AF41, video). Formerly the "Type of Service" field |
+| **ECN** | 2 | *Explicit Congestion Notification*: `00` not ECN-capable, `01`/`10` capable, `11` congestion experienced (routers mark instead of dropping) |
+| **Total Length** | 16 | Whole packet (header + data) in bytes. Max **65,535** |
+| **Identification** | 16 | Identifies which original packet a **fragment** belongs to |
+| **Flags** | 3 | bit 0 reserved (0); **DF** (Don't Fragment); **MF** (More Fragments) |
+| **Fragment Offset** | 13 | Position of this fragment's data in the original packet, in **8-byte units** |
+| **TTL** (Time To Live) | 8 | Hop counter, decremented by each router; at 0 the packet is dropped (section 8) |
+| **Protocol** | 8 | Which protocol is in the payload: **1** ICMP, **6** TCP, **17** UDP, 41 IPv6-in-IPv4, 47 GRE, 50 ESP (IPsec), 89 OSPF, ... |
+| **Header Checksum** | 16 | 16-bit one's-complement checksum of the **header only** (recomputed at every hop because TTL changes) |
+| **Source / Destination Address** | 32 each | The sender's and receiver's IPv4 addresses |
+| **Options** | 0–40 bytes | Rarely used today (record route, timestamp, source routing); most routers drop or slow-path packets with options for security/performance reasons |
 
----
+### 3.1 Decode a real header
 
-### Field-by-Field Breakdown
+A sample header in hex (20 bytes):
 
----
-
-#### 1. Version (4 bits)
-
-**Purpose:** Indicates the IP version.
-
-**Values:**
-- `0100` (binary) = 4 (decimal) = **IPv4**
-- `0110` (binary) = 6 (decimal) = **IPv6**
-
-**Why Only 4 Bits?**
-With 4 bits, you can represent 2^4 = 16 different versions (0-15).
-
-**Binary Examples:**
 ```
-IPv4: 0100
-IPv6: 0110
+45 00 00 73  00 00 40 00  40 11 b8 61  c0 a8 00 01  c0 a8 00 c7
 ```
 
-**Usage:**
-When a router receives a packet, it first checks the Version field to determine how to parse the rest of the header (IPv4 and IPv6 have completely different header structures).
+| Bytes | Value | Meaning |
+|---|---|---|
+| `4` `5` | 0x45 | Version 4, IHL 5 → 20-byte header |
+| `00` | 0x00 | DSCP 0, ECN 0 (best effort) |
+| `00 73` | 115 | Total length 115 bytes → payload 95 bytes |
+| `00 00` | 0 | Identification 0 |
+| `40 00` | 0x4000 | Flags `010` = **DF set**, MF clear; Fragment offset 0 |
+| `40` | 64 | **TTL = 64** |
+| `11` | 17 | Protocol = **UDP** |
+| `b8 61` | | Header checksum |
+| `c0 a8 00 01` | 192.168.0.1 | **Source** (192=0xc0, 168=0xa8, 0, 1) |
+| `c0 a8 00 c7` | 192.168.0.199 | **Destination** (0xc7 = 199) |
 
-**IPv4 vs IPv6 Detection:**
+**Checksum check:** add all ten 16-bit words including the checksum: `4500 + 0073 + 0000 + 4000 + 4011 + b861 + c0a8 + 0001 + c0a8 + 00c7 = 0x2FFFD`; fold the carry (`0x2` + `0xFFFD` = `0xFFFF`) → **`0xFFFF`** ✓. A valid header always sums to `0xFFFF`. To *compute* the checksum, set the field to 0, sum the header, fold carries, and take the bitwise complement.
+
+### 3.2 Try it: decode with Python
+
 ```python
-# Pseudocode for router
-packet_version = read_first_4_bits(packet)
-
-if packet_version == 4:
-    parse_as_ipv4_packet()
-elif packet_version == 6:
-    parse_as_ipv6_packet()
-else:
-    drop_packet()  # Unknown version
+import struct, socket
+hdr = bytes.fromhex("45000073000040004011b861c0a80001c0a800c7")
+ver_ihl, tos, total_len, ident, flags_frag, ttl, proto, csum, src, dst = struct.unpack("!BBHHHBBH4s4s", hdr)
+print("version", ver_ihl >> 4, "IHL", ver_ihl & 0xF, "len", total_len, "TTL", ttl, "proto", proto)
+print("DF" if flags_frag & 0x4000 else "", "MF" if flags_frag & 0x2000 else "", "offset", (flags_frag & 0x1FFF) * 8)
+print(socket.inet_ntoa(src), "->", socket.inet_ntoa(dst))
 ```
+(You can also capture real packets: `sudo tcpdump -i any -nn -v -c 3 icmp` prints `ttl`, `id`, `flags [DF]`, `proto`, `length` for each packet.)
 
 ---
 
-#### 2. IHL (Internet Header Length) - 4 bits
+## 4. IPv4 addresses
 
-**Purpose:** Specifies the length of the IP header in 32-bit words (4-byte chunks).
-
-**Values:**
-- Minimum: `5` (5 × 4 bytes = 20 bytes) — header without options
-- Maximum: `15` (15 × 4 bytes = 60 bytes) — header with maximum options
-
-**Why Needed?**
-The IP header can include optional fields, so its length is not fixed. IHL tells the receiver where the header ends and the data begins.
-
-**Calculation:**
-```
-Header Length (bytes) = IHL × 4
-
-Example:
-IHL = 5 → Header Length = 5 × 4 = 20 bytes (no options)
-IHL = 6 → Header Length = 6 × 4 = 24 bytes (4 bytes of options)
-IHL = 15 → Header Length = 15 × 4 = 60 bytes (40 bytes of options)
-```
-
-**Binary Example:**
-```
-IHL = 5 (decimal) = 0101 (binary)
-```
-
----
-
-#### 3. Type of Service (ToS) / Differentiated Services (DS) - 8 bits
-
-**Purpose:** Specifies how the packet should be handled (priority, delay, throughput, reliability).
-
-**Modern Usage: DSCP (Differentiated Services Code Point)**
+An IPv4 address is **32 bits**, written as four **octets** in dotted decimal:
 
 ```
-┌─────────────────────────────────────┐
-│  6 bits: DSCP  │  2 bits: ECN       │
-└─────────────────────────────────────┘
+192      .  168      .  1        .  10
+11000000 . 10101000 .  00000001 .  00001010     (each octet 0–255)
 ```
+**2³² ≈ 4.3 billion** addresses in total.
 
-**DSCP (6 bits):**
-- Defines Quality of Service (QoS) classes
-- Routers use this to prioritize packets
+### 4.1 Network part and host part
+Every address has a **network prefix** (which network) and a **host part** (which device on it). The split is given by the **prefix length** (CIDR, `/24`) or equivalently a **subnet mask** (`255.255.255.0`):
 
-**Common DSCP Values:**
-
-| DSCP | Binary  | Name | Usage |
-|------|---------|------|-------|
-| 0    | 000000  | Best Effort (BE) | Regular internet traffic |
-| 46   | 101110  | Expedited Forwarding (EF) | Voice calls (VoIP) |
-| 34   | 100010  | Assured Forwarding (AF41) | Video streaming |
-| 18   | 010010  | Assured Forwarding (AF21) | Bulk data transfer |
-
-**ECN (Explicit Congestion Notification) - 2 bits:**
-- `00`: Not ECN-capable
-- `01` or `10`: ECN-capable (willing to receive congestion notifications)
-- `11`: Congestion experienced (router marked packet due to congestion)
-
-**Example:**
 ```
-DSCP = 46 (EF for VoIP)
-ECN = 01 (ECN-capable)
-
-Binary: 101110 01 = 10111001 (0xB9 in hex)
+192.168.1.10/24   →   network 192.168.1.0    host .10
+mask 255.255.255.0 = 11111111.11111111.11111111.00000000   (24 ones)
 ```
+A device decides "is the destination on my local network?" by comparing the **network parts** (`(my_ip AND mask) == (dst_ip AND mask)`). Subnetting and CIDR have their own chapters (33 and 34), so only the essentials here:
 
-**Real-World:**
-- ISPs prioritize VoIP packets (DSCP=46) over file downloads (DSCP=0)
-- Prevents voice call stuttering during network congestion
+| Prefix | Mask | Addresses | Usable hosts |
+|---|---|---|---|
+| /8 | 255.0.0.0 | 16,777,216 | 16,777,214 |
+| /16 | 255.255.0.0 | 65,536 | 65,534 |
+| /24 | 255.255.255.0 | 256 | 254 |
+| /30 | 255.255.255.252 | 4 | 2 (point-to-point links) |
+| /31 | 255.255.255.254 | 2 | 2 (point-to-point, RFC 3021) |
+| /32 | 255.255.255.255 | 1 | a single host route |
+
+In a normal subnet the **first address** (host bits all 0) is the **network address** and the **last** (all 1) is the **directed broadcast**; neither can be assigned to a host, hence "− 2".
+
+### 4.2 Historical classes
+Originally addresses were split into fixed **classes** by their first bits:
+
+| Class | First bits | First octet | Default prefix | Notes |
+|---|---|---|---|---|
+| A | `0` | 1–126 | /8 | 127 is loopback; 0 is reserved |
+| B | `10` | 128–191 | /16 | |
+| C | `110` | 192–223 | /24 | |
+| D | `1110` | 224–239 | | Multicast |
+| E | `1111` | 240–255 | | Reserved/experimental |
+
+**Classful addressing is obsolete** (wasteful: a company needing 300 addresses had to take a /16 with 65,534). Since 1993 the internet uses **CIDR** (classless), with arbitrary prefix lengths and route aggregation. You'll still see the class names in old material and exams.
+
+### 4.3 Special-purpose IPv4 addresses
+
+| Range | Purpose |
+|---|---|
+| **10.0.0.0/8**, **172.16.0.0/12** (172.16–172.31), **192.168.0.0/16** | **Private** (RFC 1918): reusable inside any network, **not routable on the public internet**. Need NAT to reach it |
+| **127.0.0.0/8** (usually `127.0.0.1`) | **Loopback**: packets never leave the host; `localhost` |
+| **169.254.0.0/16** | **Link-local / APIPA**: self-assigned when DHCP fails (also `169.254.169.254` = cloud metadata service) |
+| **100.64.0.0/10** | **Carrier-grade NAT** shared space (RFC 6598): ISPs' internal use; Tailscale also uses it |
+| **0.0.0.0** | "This host / any address" (e.g. a server bound to `0.0.0.0` listens on all interfaces; a client with no address yet); `0.0.0.0/0` = the **default route** |
+| **255.255.255.255** | Limited broadcast (this local network only; used by DHCP discover) |
+| **224.0.0.0/4** | **Multicast** (`224.0.0.251` mDNS, `224.0.0.1` all hosts) |
+| **240.0.0.0/4** | Reserved |
+| **192.0.2.0/24**, **198.51.100.0/24**, **203.0.113.0/24** | **Documentation** (TEST-NET-1/2/3): safe for examples |
+| **198.18.0.0/15** | Benchmark testing |
+
+Everything else is (in principle) **public**, globally unique, and allocated by **IANA → five Regional Internet Registries (ARIN, RIPE NCC, APNIC, LACNIC, AFRINIC) → ISPs and organizations**. The free pool of IPv4 addresses ran out: IANA allocated its last blocks in **2011**, and the regional registries followed. Addresses are now traded and rented, and shared via NAT.
 
 ---
 
-#### 4. Total Length (16 bits)
+## 5. IPv6
 
-**Purpose:** Specifies the total length of the IP packet (header + data) in bytes.
+### 5.1 Why
+IPv4's 4.3 billion addresses can't cover billions of people and tens of billions of devices. **IPv6** (RFC 8200) uses **128-bit** addresses: 2¹²⁸ ≈ 3.4 × 10³⁸. That is about **4 × 10²⁸ addresses for every person on Earth**, enough that every device can have a globally unique address with **end-to-end connectivity**, and no NAT is needed.
 
-**Range:**
-- Minimum: 20 bytes (header only, no data)
-- Maximum: 65,535 bytes (2^16 - 1)
+### 5.2 Address format
+Eight groups of four hexadecimal digits (16 bits each), separated by colons:
 
-**Calculation:**
-```
-Total Length = IP Header Length + Data Length
-
-Example:
-IP Header = 20 bytes
-TCP Segment = 500 bytes
-Total Length = 20 + 500 = 520 bytes
-```
-
-**Why 16 Bits?**
-With 16 bits, maximum value = 2^16 = 65,536 bytes (~64 KB).
-
-**Limitation:**
-IP packets cannot exceed 65,535 bytes due to this field size. For larger data, fragmentation is required.
-
-**Binary Example:**
-```
-Total Length = 520 bytes (decimal)
-Binary: 0000 0010 0000 1000
-Hex: 0x0208
-```
-
----
-
-#### 5. Identification (16 bits)
-
-**Purpose:** Uniquely identifies fragments of an original IP packet.
-
-**Usage:**
-When a large IP packet is fragmented into smaller packets (due to MTU limitations), all fragments share the same Identification value so the receiver can reassemble them.
-
-**Example:**
-```
-Original packet: 3000 bytes
-MTU (Maximum Transmission Unit): 1500 bytes
-
-Fragmented into 3 packets:
-- Fragment 1: ID = 12345, Length = 1500 bytes
-- Fragment 2: ID = 12345, Length = 1500 bytes
-- Fragment 3: ID = 12345, Length = 20 bytes
-
-Receiver sees ID = 12345 and reassembles all three fragments.
-```
-
-**Range:** 0 to 65,535
-
----
-
-#### 6. Flags (3 bits)
-
-**Purpose:** Control fragmentation behavior.
-
-**Bit Layout:**
-```
-Bit 0: Reserved (always 0)
-Bit 1: DF (Don't Fragment)
-Bit 2: MF (More Fragments)
-```
-
-**DF (Don't Fragment) - Bit 1:**
-- `0`: Fragmentation allowed
-- `1`: Do NOT fragment this packet
-
-**Use Case:**
-- Path MTU Discovery: Send packet with DF=1, if too large, router sends ICMP error, sender reduces packet size
-- Prevents fragmentation overhead
-
-**MF (More Fragments) - Bit 2:**
-- `0`: This is the last (or only) fragment
-- `1`: More fragments follow
-
-**Example:**
-```
-Original packet fragmented into 3 pieces:
-
-Fragment 1: DF=0, MF=1 (more fragments coming)
-Fragment 2: DF=0, MF=1 (more fragments coming)
-Fragment 3: DF=0, MF=0 (last fragment)
-```
-
----
-
-#### 7. Fragment Offset (13 bits)
-
-**Purpose:** Specifies the position of this fragment in the original unfragmented packet.
-
-**Unit:** 8-byte blocks
-
-**Calculation:**
-```
-Offset (bytes) = Fragment Offset × 8
-
-Example:
-Fragment Offset = 185 (decimal)
-Actual byte offset = 185 × 8 = 1480 bytes
-```
-
-**Why 8-byte blocks?**
-Reduces the field size while allowing large packets to be fragmented.
-
-**Reassembly Example:**
-```
-Original packet: 3000 bytes
-
-Fragment 1:
-- Offset = 0 (bytes 0-1479)
-- MF = 1
-
-Fragment 2:
-- Offset = 185 (185 × 8 = 1480, bytes 1480-2959)
-- MF = 1
-
-Fragment 3:
-- Offset = 370 (370 × 8 = 2960, bytes 2960-2999)
-- MF = 0 (last fragment)
-
-Receiver reassembles using offsets.
-```
-
-**Range:** 0 to 8191 (13 bits)
-
----
-
-#### 8. Time to Live (TTL) - 8 bits
-
-**Purpose:** Prevents packets from circulating indefinitely in routing loops.
-
-**Mechanism:**
-- Sender sets TTL to a value (e.g., 64, 128, 255)
-- Each router decrements TTL by 1
-- If TTL reaches 0, router discards packet and sends ICMP "Time Exceeded" error back to sender
-
-**Common Initial TTL Values:**
-
-| OS / Device | Default TTL |
-|-------------|-------------|
-| Linux       | 64          |
-| Windows     | 128         |
-| Cisco Router| 255         |
-| macOS       | 64          |
-
-**Example:**
-```
-Your computer sends packet with TTL=64
-
-Hop 1 (Home Router): TTL = 64 - 1 = 63
-Hop 2 (ISP Router): TTL = 63 - 1 = 62
-Hop 3 (Backbone Router): TTL = 62 - 1 = 61
-...
-Hop 64 (Some Router): TTL = 1 - 1 = 0 → Packet dropped
-```
-
-**Why TTL Exists:**
-Prevents infinite loops in case of routing misconfiguration.
-
-```
-Scenario: Routing Loop
-
-Router A: "Send packets for 10.0.0.1 to Router B"
-Router B: "Send packets for 10.0.0.1 to Router A"
-
-Without TTL:
-Packet bounces forever: A → B → A → B → A → ...
-
-With TTL:
-After 64 hops, packet dropped, preventing network congestion.
-```
-
-**Traceroute Tool:**
-Uses TTL to map network path:
-```bash
-$ traceroute google.com
-
-Send packet with TTL=1 → First router responds
-Send packet with TTL=2 → Second router responds
-Send packet with TTL=3 → Third router responds
-...
-Map entire path to destination
-```
-
----
-
-#### 9. Protocol (8 bits)
-
-**Purpose:** Identifies the protocol used in the data portion of the IP packet.
-
-**Common Protocol Numbers:**
-
-| Number | Protocol | Description |
-|--------|----------|-------------|
-| 1      | ICMP     | Internet Control Message Protocol (ping, traceroute) |
-| 6      | TCP      | Transmission Control Protocol |
-| 17     | UDP      | User Datagram Protocol |
-| 41     | IPv6     | IPv6 encapsulation |
-| 47     | GRE      | Generic Routing Encapsulation |
-| 50     | ESP      | Encapsulating Security Payload (IPsec) |
-| 89     | OSPF     | Open Shortest Path First (routing protocol) |
-
-**Usage:**
-When a router or destination receives an IP packet, it checks the Protocol field to determine how to process the data.
-
-**Example:**
-```
-IP Packet:
-┌────────────────────────────┐
-│ IP Header                  │
-│ ...                        │
-│ Protocol: 6 (TCP)          │
-├────────────────────────────┤
-│ TCP Segment                │
-│ (Source Port, Dest Port)   │
-└────────────────────────────┘
-
-Receiver sees Protocol=6 → Pass data to TCP handler
-```
-
-**Code Example:**
-```python
-# Pseudocode for packet processing
-protocol_number = ip_packet.header.protocol
-
-if protocol_number == 1:
-    handle_icmp(ip_packet.data)
-elif protocol_number == 6:
-    handle_tcp(ip_packet.data)
-elif protocol_number == 17:
-    handle_udp(ip_packet.data)
-else:
-    log_unknown_protocol(protocol_number)
-```
-
----
-
-#### 10. Header Checksum (16 bits)
-
-**Purpose:** Error detection for the IP header only (not the data).
-
-**Mechanism:**
-1. Sender calculates checksum of IP header (treating it as series of 16-bit words)
-2. Sender stores checksum in Header Checksum field
-3. Each router recalculates checksum to verify header integrity
-4. If checksum doesn't match, packet is corrupted → discard packet
-
-**Why Only Header?**
-- Transport layer (TCP/UDP) has its own checksum for data integrity
-- IP only verifies header correctness (TTL, addresses, flags, etc.)
-
-**Checksum Calculation (Simplified):**
-```
-1. Set Header Checksum field to 0
-2. Divide header into 16-bit words
-3. Sum all 16-bit words
-4. Add any carry bits to the sum
-5. Take one's complement of the sum
-6. Store result in Header Checksum field
-```
-
-**Important:**
-Every router must recalculate checksum because TTL changes at each hop.
-
-```
-Router receives packet:
-1. Calculate checksum, verify header not corrupted
-2. Decrement TTL by 1 (header modified!)
-3. Recalculate checksum (TTL changed)
-4. Forward packet with updated checksum
-```
-
----
-
-#### 11. Source IP Address (32 bits)
-
-**Purpose:** IP address of the sender.
-
-**Format: IPv4 Dotted-Decimal**
-```
-Binary: 11000000 10101000 00000001 00001010
-Decimal: 192.168.1.10
-```
-
-**Range:** 0.0.0.0 to 255.255.255.255
-
-**Example:**
-```
-Your computer IP: 192.168.1.50
-Server IP: 142.250.185.206
-
-IP Packet:
-Source IP: 192.168.1.50
-Destination IP: 142.250.185.206
-```
-
-**Why 32 Bits?**
-IPv4 uses 32-bit addresses = 2^32 = ~4.3 billion possible addresses.
-
-**Address Exhaustion:**
-With ~8 billion people and multiple devices per person, IPv4 addresses ran out → IPv6 adoption.
-
----
-
-#### 12. Destination IP Address (32 bits)
-
-**Purpose:** IP address of the intended recipient.
-
-**Format:** Same as Source IP (IPv4 dotted-decimal)
-
-**Usage:**
-- Every router examines Destination IP to determine next-hop forwarding decision
-- Final destination device compares Destination IP with its own IP to accept packet
-
-**Routing Decision:**
-```
-Router receives packet with Destination IP: 142.250.185.206
-
-Router checks routing table:
-- 142.250.0.0/16 → Forward to Next-Hop Router A
-- 192.168.0.0/16 → Forward to Local Network
-- 0.0.0.0/0 (default route) → Forward to Default Gateway
-
-Match found: 142.250.0.0/16
-Action: Forward packet to Next-Hop Router A
-```
-
----
-
-#### 13. Options (Variable Length, 0-40 bytes)
-
-**Purpose:** Extend IP functionality with optional features.
-
-**Usage:**
-Rarely used in modern networks due to:
-- Processing overhead (routers must parse variable-length options)
-- Security concerns (some options can be exploited)
-
-**Common Options:**
-
-1. **Record Route:** Records IP addresses of routers traversed
-2. **Source Routing:** Sender specifies exact path through network
-3. **Timestamp:** Records timestamps at each router
-4. **Security:** Classification level (military networks)
-
-**Option Format:**
-```
-┌────────────────────────────────┐
-│ Option Type (8 bits)           │
-│ Option Length (8 bits)         │
-│ Option Data (variable)         │
-└────────────────────────────────┘
-```
-
-**Why IHL Exists:**
-Options make header length variable. IHL field tells receiver where options end and data begins.
-
----
-
-## IPv4 Address Structure
-
-### Dotted-Decimal Notation
-
-**Format:**
-```
-xxx.xxx.xxx.xxx
-
-Where xxx is 0-255 (one octet = 8 bits)
-```
-
-**Examples:**
-```
-192.168.1.1
-10.0.0.1
-172.16.0.0
-8.8.8.8 (Google DNS)
-1.1.1.1 (Cloudflare DNS)
-```
-
----
-
-### Binary Representation
-
-**Each octet is 8 bits:**
-
-```
-192     .   168     .   1       .   1
-11000000.10101000.00000001.00000001
-
-Total: 32 bits
-```
-
-**Conversion Example:**
-
-```
-Decimal: 192.168.1.10
-
-Binary conversion:
-192 = 128 + 64 = 2^7 + 2^6 = 11000000
-168 = 128 + 32 + 8 = 10101000
-1 = 00000001
-10 = 8 + 2 = 00001010
-
-Full binary: 11000000.10101000.00000001.00001010
-```
-
----
-
-### Address Classes (Historical)
-
-**IPv4 addresses were originally divided into classes:**
-
-| Class | First Octet | Network Bits | Host Bits | Range |
-|-------|-------------|--------------|-----------|-------|
-| A     | 1-126       | 8            | 24        | 1.0.0.0 - 126.255.255.255 |
-| B     | 128-191     | 16           | 16        | 128.0.0.0 - 191.255.255.255 |
-| C     | 192-223     | 24           | 8         | 192.0.0.0 - 223.255.255.255 |
-| D     | 224-239     | Multicast    | -         | 224.0.0.0 - 239.255.255.255 |
-| E     | 240-255     | Reserved     | -         | 240.0.0.0 - 255.255.255.255 |
-
-**Class Identification (Binary):**
-```
-Class A: 0xxxxxxx.xxxxxxxx.xxxxxxxx.xxxxxxxx
-Class B: 10xxxxxx.xxxxxxxx.xxxxxxxx.xxxxxxxx
-Class C: 110xxxxx.xxxxxxxx.xxxxxxxx.xxxxxxxx
-Class D: 1110xxxx.xxxxxxxx.xxxxxxxx.xxxxxxxx
-Class E: 1111xxxx.xxxxxxxx.xxxxxxxx.xxxxxxxx
-```
-
-**Modern Usage:**
-Classful addressing is obsolete. Modern networks use **CIDR (Classless Inter-Domain Routing)** with subnet masks.
-
----
-
-### Special IPv4 Addresses
-
-**Private Address Ranges (RFC 1918):**
-```
-10.0.0.0        - 10.255.255.255    (10.0.0.0/8)    - 16 million addresses
-172.16.0.0      - 172.31.255.255    (172.16.0.0/12) - 1 million addresses
-192.168.0.0     - 192.168.255.255   (192.168.0.0/16)- 65,536 addresses
-```
-
-**Not routable on public Internet. Used for internal networks (home, office).**
-
-**Loopback:**
-```
-127.0.0.0 - 127.255.255.255 (127.0.0.0/8)
-Most commonly: 127.0.0.1 (localhost)
-```
-
-**Packets sent to loopback never leave the computer.**
-
-**Broadcast:**
-```
-255.255.255.255 (limited broadcast)
-192.168.1.255 (directed broadcast for 192.168.1.0/24 network)
-```
-
-**APIPA (Automatic Private IP Addressing):**
-```
-169.254.0.0 - 169.254.255.255 (169.254.0.0/16)
-```
-
-**Assigned when DHCP fails (Windows, macOS).**
-
-**Documentation/Example:**
-```
-192.0.2.0/24 (TEST-NET-1)
-198.51.100.0/24 (TEST-NET-2)
-203.0.113.0/24 (TEST-NET-3)
-```
-
-**Reserved for documentation, not routable.**
-
----
-
-## IPv6: The Future of Internet Addressing
-
-### Why IPv6 Exists
-
-**IPv4 Exhaustion:**
-```
-Total IPv4 addresses: 2^32 = 4,294,967,296 (~4.3 billion)
-
-World population: ~8 billion people
-Devices per person: ~3-5 (phone, laptop, tablet, IoT devices)
-Total devices: 24-40 billion
-
-IPv4 addresses ran out by 2011.
-```
-
-**IPv6 Solution:**
-```
-Total IPv6 addresses: 2^128 = 340,282,366,920,938,463,463,374,607,431,768,211,456
-
-~340 undecillion addresses
-~48 quadrillion addresses per person on Earth
-```
-
----
-
-### IPv6 Address Format
-
-**Structure:**
-```
-Eight groups of 4 hexadecimal digits, separated by colons
-
-Example: 2001:0db8:85a3:0000:0000:8a2e:0370:7334
-```
-
-**Shorthand Rules:**
-
-1. **Leading zeros can be omitted:**
 ```
 2001:0db8:85a3:0000:0000:8a2e:0370:7334
-↓
-2001:db8:85a3:0:0:8a2e:370:7334
 ```
 
-2. **Consecutive groups of zeros can be replaced with `::`** (only once)
-```
-2001:db8:85a3:0:0:8a2e:370:7334
-↓
-2001:db8:85a3::8a2e:370:7334
-```
+Two shorthand rules:
+1. **Drop leading zeros** in each group: `2001:db8:85a3:0:0:8a2e:370:7334`
+2. Replace **one** run of consecutive all-zero groups with `::` (only once per address): `2001:db8:85a3::8a2e:370:7334`
 
-**Loopback Address:**
-```
-Full: 0000:0000:0000:0000:0000:0000:0000:0001
-Short: ::1
-```
+Special: **`::1`** = loopback, **`::`** = unspecified. In URLs, put IPv6 in brackets: `http://[2001:db8::1]:8080/`. Prefix notation is the same as CIDR: `2001:db8:abcd:12::/64`.
 
-**Unspecified Address:**
+### 5.3 Address types
+
+| Prefix | Type | Notes |
+|---|---|---|
+| `2000::/3` | **Global unicast** | Public, routable (currently allocated from `2000::/3`) |
+| `fe80::/10` | **Link-local** | Automatically configured on every interface; valid only on the local link (used by neighbor discovery and routing protocols); written with a zone like `fe80::1%eth0` |
+| `fc00::/7` (in practice `fd00::/8`) | **Unique local (ULA)** | The private-network equivalent (RFC 4193), not routed on the internet |
+| `ff00::/8` | **Multicast** | Replaces broadcast (`ff02::1` all nodes, `ff02::2` all routers) |
+| `::1/128` | Loopback | |
+| `2001:db8::/32` | Documentation | For examples |
+| `::ffff:0:0/96` | IPv4-mapped | Represents IPv4 addresses inside IPv6 sockets |
+
+Typical allocation: an ISP gives a home a **/56** or **/48**, and each LAN uses a **/64** (64 bits of network + 64 bits of interface ID). There is **no broadcast**; it uses multicast.
+
+### 5.4 The IPv6 header (simpler: fixed 40 bytes)
+
 ```
-Full: 0000:0000:0000:0000:0000:0000:0000:0000
-Short: ::
+┌───────┬───────────────┬───────────────────────────────────────┐
+│Version│ Traffic Class │              Flow Label               │
+├───────┴───────────────┼───────────────┬───────────────────────┤
+│     Payload Length    │  Next Header  │       Hop Limit       │
+├───────────────────────┴───────────────┴───────────────────────┤
+│                      Source Address (128 bits)                │
+├───────────────────────────────────────────────────────────────┤
+│                   Destination Address (128 bits)              │
+└───────────────────────────────────────────────────────────────┘
 ```
+- **Hop Limit** replaces TTL; **Next Header** replaces Protocol and chains **extension headers** (routing, fragment, hop-by-hop, ...) instead of IPv4 Options.
+- **No header checksum** (link layers and TCP/UDP checksums cover it; UDP's checksum is mandatory over IPv6): less work per hop.
+- **No fragmentation by routers**: only the *sender* fragments (with a Fragment extension header), relying on **Path MTU Discovery**. The minimum IPv6 MTU is **1280 bytes**.
+
+### 5.5 Configuration and neighbors
+- **SLAAC** (Stateless Address Autoconfiguration): a host builds its own address from the **prefix advertised by the router** (Router Advertisements, ICMPv6) plus an interface identifier (random "privacy addresses" by default). **DHCPv6** is optional for extra settings or stateful assignment.
+- **NDP (Neighbor Discovery Protocol)** over ICMPv6 replaces ARP (Chapter 39) and also does router discovery and duplicate address detection.
+- **IPsec is not mandatory** in IPv6 (an older claim); it is supported, like in IPv4.
+
+### 5.6 IPv4 vs IPv6
+
+| | IPv4 | IPv6 |
+|---|---|---|
+| Address | 32 bits, dotted decimal | 128 bits, hex with colons |
+| Header | 20–60 bytes (options) | 40 bytes fixed (+ extension headers) |
+| Checksum in header | Yes | No |
+| Fragmentation | Sender **and** routers | Sender only (PMTUD required) |
+| Broadcast | Yes | No (multicast) |
+| Address configuration | DHCP / manual | SLAAC (+ DHCPv6) |
+| ARP | Yes | NDP (ICMPv6) |
+| NAT | Ubiquitous | Not needed (though NPTv6 exists) |
+| Adoption | Universal | Large and growing (national and per-service adoption varies widely; check e.g. Google's IPv6 statistics) |
+
+Most systems run **dual stack** (both IPv4 and IPv6), and clients use **Happy Eyeballs** (RFC 8305): try IPv6 first, fall back to IPv4 within milliseconds if it's slow. IPv6 is not inherently faster; the gains are end-to-end connectivity, no CGNAT, and simpler forwarding.
 
 ---
 
-### IPv6 Header Structure
+## 6. Routing: how routers choose
 
-**Simpler than IPv4:**
+### 6.1 The routing table
+Every host and router has a **routing table**: a list of `destination prefix → next hop / interface`. See yours:
 
-```
-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-|Version| Traffic Class |           Flow Label                  |
-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-|         Payload Length        |  Next Header  |   Hop Limit   |
-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-|                                                               |
-+                         Source Address                        +
-|                           (128 bits)                          |
-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-|                                                               |
-+                      Destination Address                      +
-|                           (128 bits)                          |
-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+```bash
+ip route          # Linux (modern);  also:  route -n / netstat -rn
+# default via 192.168.1.1 dev wlan0 proto dhcp metric 600
+# 192.168.1.0/24 dev wlan0 proto kernel scope link src 192.168.1.50 metric 600
+# 172.17.0.0/16 dev docker0 proto kernel scope link src 172.17.0.1
+ip -6 route
 ```
 
-**Improvements over IPv4:**
-- **Fixed header size:** Always 40 bytes (no options in main header)
-- **No checksum:** Relies on link-layer and transport-layer checksums (faster routing)
-- **No fragmentation by routers:** Only sender can fragment (reduces router burden)
-- **Flow Label:** QoS support built-in
-- **Hop Limit:** Replaces TTL (same concept, clearer name)
+- `192.168.1.0/24 dev wlan0` is a **connected route**: "this subnet is directly reachable on that interface; deliver by ARP."
+- `default via 192.168.1.1` (`0.0.0.0/0`) is the **default route** / **default gateway**: "for anything not matched more specifically, send it to this router."
+
+### 6.2 Longest-prefix match
+When several routes match a destination, the router picks the **most specific one**: the one with the **longest prefix**. (Ties broken by administrative distance/metric.)
+
+```
+Destination 192.168.1.50; routes:
+  0.0.0.0/0         → router C   (matches everything, /0)
+  192.168.0.0/16    → router A   (matches, /16)
+  192.168.1.0/24    → router B   (matches, /24)   ← longest → chosen
+```
+This rule lets the internet **aggregate** millions of networks into compact tables (an ISP advertises one big prefix), while still allowing specific exceptions.
+
+### 6.3 Direct vs indirect delivery
+For each outgoing packet the sender does:
+
+1. Is the destination in a **directly connected** subnet? → **ARP** for the destination's MAC (IPv6: NDP) and send the frame straight to it.
+2. Otherwise → look up the route; the packet goes to the **next-hop router's MAC** (the destination IP is unchanged).
+
+Try `ip route get 8.8.8.8` (shows which route, interface, next hop and source address would be used) and `ip route get 192.168.1.20`.
+
+### 6.4 Learning routes
+| Method | How | Where |
+|---|---|---|
+| **Connected** | Automatic, from interface addresses | everywhere |
+| **Static** | `ip route add 10.0.0.0/8 via 192.168.1.254` | small networks, hosts, containers |
+| **Dynamic** routing protocols | Routers exchange information and compute paths | larger networks |
+
+Dynamic protocols: **RIP** (distance-vector, hop count ≤ 15; old), **OSPF** (link-state, shortest path by cost; common inside organizations), **IS-IS** (link-state; ISPs), **EIGRP** (Cisco), and **BGP** (**Border Gateway Protocol**), the routing protocol of the internet: it exchanges reachability between **Autonomous Systems (ASes)**, the independently managed networks, each with an **AS number** (ISPs, cloud providers, large companies). BGP is *policy-based* (business relationships: customers, peers, transit providers), not just shortest path. A misconfigured or hijacked BGP announcement can redirect or black-hole traffic for large parts of the internet, which has happened several times. Private ASNs (64512–65534) are used inside organizations and in examples.
+
+### 6.5 Anycast
+Many servers can announce the **same** IP prefix from different places (DNS root servers, CDNs, `1.1.1.1`, `8.8.8.8`); routing delivers each client's packets to the **nearest** instance.
 
 ---
 
-## How Routing Works: From Source to Destination
+## 7. What a router does to a packet
 
-### Routing Tables
+1. Receive the frame, check the FCS, **strip the L2 header**.
+2. Check the IP header (version, length, checksum). **Drop** if invalid.
+3. **Decrement TTL**. If it reaches 0, drop the packet and send **ICMP Time Exceeded** to the source.
+4. **Look up** the destination in the routing table (longest prefix); pick the next hop and outgoing interface.
+5. **Recompute the header checksum** (TTL changed).
+6. If the packet is **larger than the outgoing link's MTU** → fragment it (IPv4, if DF=0) or drop it and send **ICMP Fragmentation Needed** (DF=1).
+7. Build a **new L2 frame** (source = router's MAC on that link, destination = next hop's MAC via ARP) and transmit.
 
-**Every router maintains a routing table:**
-
-```
-Destination Network    Next Hop Router    Interface    Metric
------------------------------------------------------------
-192.168.1.0/24         192.168.1.1        eth0         1
-10.0.0.0/8             10.0.0.1           eth1         1
-142.250.0.0/16         203.0.113.5        eth2         10
-0.0.0.0/0 (default)    203.0.113.1        eth2         100
-```
-
-**Fields:**
-- **Destination Network:** IP address range (CIDR notation)
-- **Next Hop Router:** IP address of next router in path
-- **Interface:** Physical network interface to use
-- **Metric:** Cost of route (lower is better)
+Also: forwarding may apply **ACLs/firewall rules**, **QoS by DSCP**, **NAT**, or **policy routing**.
 
 ---
 
-### Longest Prefix Match
+## 8. TTL and traceroute
 
-**Routers use longest prefix matching to select best route:**
+**TTL** (IPv4) / **Hop Limit** (IPv6) stops packets from circulating forever in a routing loop. Senders choose an initial value (commonly **64** on Linux/macOS/Android/iOS, **128** on Windows, **255** on some routers); each router subtracts 1. You can guess the hop count and the remote OS family from a received TTL (e.g. TTL 117 → started at 128 → 11 hops away).
+
+**traceroute** exploits this to map the path:
 
 ```
-Packet destination: 192.168.1.50
-
-Routing table:
-1. 192.168.0.0/16 → Router A
-2. 192.168.1.0/24 → Router B
-3. 0.0.0.0/0 (default) → Router C
-
-Match:
-192.168.0.0/16 matches (first 16 bits)
-192.168.1.0/24 matches (first 24 bits) ← Longest prefix!
-0.0.0.0/0 matches (default route)
-
-Action: Forward to Router B (longest prefix match)
-```
-
----
-
-### Routing Example: Ping google.com
-
-**Scenario:**
-```
-Your Computer: 192.168.1.50
-Home Router: 192.168.1.1
-ISP Router: 203.0.113.1
-Google Server: 142.250.185.206
-```
-
-**Step 1: Your Computer**
-```
-Application: ping google.com
-DNS resolves: 142.250.185.206
-Create ICMP packet (Protocol=1)
-Create IP packet: Source=192.168.1.50, Dest=142.250.185.206
-
-Routing decision:
-Check: Is 142.250.185.206 on local network (192.168.1.0/24)?
-Answer: No
-Action: Send to default gateway (192.168.1.1)
-
-Create Ethernet frame:
-Source MAC: Your computer's MAC
-Dest MAC: Router's MAC (192.168.1.1)
-Data: IP packet
-
-Send over WiFi
-```
-
-**Step 2: Home Router (192.168.1.1)**
-```
-Receive Ethernet frame
-Strip Ethernet header
-Examine IP packet: Dest=142.250.185.206
-
-Routing table:
-192.168.1.0/24 → Local (eth0)
-0.0.0.0/0 → 203.0.113.1 (ISP Router)
-
-Match: 0.0.0.0/0 (default route)
-Action: Forward to 203.0.113.1
-
-Decrement TTL: 64 → 63
-Recalculate checksum
-Create new Ethernet frame (Router MAC → ISP Router MAC)
-Send to ISP
-```
-
-**Step 3: ISP Router (203.0.113.1)**
-```
-Receive frame
-Strip Ethernet header
-Examine IP packet: Dest=142.250.185.206
-
-Routing table:
-142.250.0.0/16 → Next-Hop Router @ 198.51.100.5
+send probe with TTL=1 → the first router drops it and replies ICMP "Time Exceeded" (revealing its address)
+send probe with TTL=2 → the second router replies
 ...
-
-Match: 142.250.0.0/16
-Action: Forward to 198.51.100.5
-
-Decrement TTL: 63 → 62
-Forward packet
+until the destination replies (Echo Reply / port unreachable)
 ```
-
-**Steps 4-N: Internet Backbone Routers**
+```bash
+traceroute -n 8.8.8.8            # UDP probes by default on Linux; -I for ICMP, -T for TCP
+tracepath 8.8.8.8                # also discovers the path MTU
+mtr -n -c 20 --report 8.8.8.8    # traceroute + ping statistics per hop (loss, latency)
 ```
-Packet traverses 10-15 routers:
-Each router:
-1. Examines Dest IP
-2. Consults routing table
-3. Forwards to next-hop
-4. Decrements TTL
-```
-
-**Step N: Google's Router**
-```
-Receive packet
-Examine Dest IP: 142.250.185.206
-
-Routing table:
-142.250.185.0/24 → Local network
-
-Match: Local network
-Action: Forward to server with IP 142.250.185.206
-
-Google server receives packet
-Processes ICMP Echo Request
-Sends ICMP Echo Reply (reverses Source/Dest IPs)
-```
-
-**Return Path:**
-```
-Google → Internet → ISP → Home Router → Your Computer
-
-Source: 142.250.185.206
-Dest: 192.168.1.50
-
-(May take different routers on return path!)
-```
+Reading results: `* * *` at a hop may only mean that router doesn't answer probes (rate-limited or filtered), not that traffic stops there; **latency at an intermediate hop** can be misleading (routers deprioritize replying to probes); look at loss/latency from the **destination** backward.
 
 ---
 
-## IP Fragmentation: Handling Large Packets
+## 9. MTU, fragmentation and Path MTU Discovery
 
-### MTU (Maximum Transmission Unit)
+**MTU** (Maximum Transmission Unit) = the largest L3 packet a link can carry: **Ethernet 1500**, PPPoE 1492, many VPN/tunnels ~1400–1450, jumbo frames 9000. Overheads matter: an IPv4/TCP segment of **1460 bytes** of data = 1500 with headers (**MSS** 1460).
 
-**MTU:** Maximum size of a packet that can be transmitted on a network link.
+### 9.1 IPv4 fragmentation
+If a packet is bigger than the next link's MTU **and DF = 0**, the router splits it:
 
-**Common MTU Values:**
 ```
-Ethernet: 1500 bytes
-WiFi: 1500 bytes
-PPPoE (DSL): 1492 bytes
-VPN (with overhead): 1400 bytes
-Jumbo Frames: 9000 bytes
+Original: 3020 bytes of payload (+20 header) over a link with MTU 1500
+  Fragment 1: header + 1480 data, ID=12345, MF=1, offset=0
+  Fragment 2: header + 1480 data, ID=12345, MF=1, offset=185     (1480 ÷ 8)
+  Fragment 3: header +   60 data, ID=12345, MF=0, offset=370     (2960 ÷ 8)
 ```
+Rules: all fragments carry the **same Identification**; data sizes (except the last) are **multiples of 8** because the offset is in 8-byte units; **only the destination reassembles** (routers don't). Problems: **losing one fragment loses the whole packet**; the extra load, firewalls that drop fragments, and security issues. Fragmentation is therefore avoided.
+
+### 9.2 Path MTU Discovery (PMTUD)
+The sender sets **DF = 1** and sends full-sized packets. If a router can't forward it, it drops the packet and returns **ICMP "Destination Unreachable, Fragmentation Needed (type 3, code 4)"** stating the next-hop MTU; the sender lowers its packet size. (IPv6: ICMPv6 "Packet Too Big".) TCP also negotiates **MSS** and adapts to PMTU.
+
+**The classic failure: PMTU black holes.** If a firewall blocks ICMP (a common but harmful practice), the sender never learns that packets are too big, so small packets work but **large ones hang forever** (a website loads its header but the page stalls; SSH logs in but `ls` of a big directory hangs; a VPN "connects" but big transfers stall). Fixes: **allow the needed ICMP types**, **clamp the MSS** on the tunnel/router (`iptables ... -j TCPMSS --clamp-mss-to-pmtu`), or lower the MTU on the interface.
 
 ---
 
-### Fragmentation Process
-
-**Problem:**
-```
-Application sends 3000 bytes of data
-TCP adds 20-byte header → 3020 bytes
-IP adds 20-byte header → 3040 bytes
-
-Network MTU: 1500 bytes
-
-3040 bytes > 1500 bytes → Cannot send as single packet!
-```
-
-**Solution: Fragment into smaller packets**
-
-```
-Original IP Packet: 3040 bytes (20 header + 3020 data)
-
-Fragment 1:
-- IP Header: 20 bytes
-- Data: 1480 bytes (1500 - 20 = 1480)
-- ID: 12345
-- MF: 1 (more fragments)
-- Offset: 0
-
-Fragment 2:
-- IP Header: 20 bytes
-- Data: 1480 bytes
-- ID: 12345
-- MF: 1 (more fragments)
-- Offset: 185 (1480 / 8 = 185)
-
-Fragment 3:
-- IP Header: 20 bytes
-- Data: 60 bytes (3020 - 1480 - 1480 = 60)
-- ID: 12345
-- MF: 0 (last fragment)
-- Offset: 370 (2960 / 8 = 370)
-```
-
----
-
-### Reassembly at Destination
-
-**Destination receives three fragments:**
-
-```
-Fragment 1: ID=12345, Offset=0, MF=1
-Fragment 3: ID=12345, Offset=370, MF=0
-Fragment 2: ID=12345, Offset=185, MF=1
-
-(May arrive out of order!)
-
-Reassembly:
-1. Buffer all fragments with ID=12345
-2. Sort by offset: 0, 185, 370
-3. Check MF: Fragment at offset 370 has MF=0 → last fragment
-4. Concatenate data from all fragments
-5. Deliver to transport layer
-```
-
----
-
-### Path MTU Discovery (PMTUD)
-
-**Modern Approach:** Don't fragment at all.
-
-**Mechanism:**
-```
-1. Sender sets DF (Don't Fragment) flag = 1
-2. Sender sends packet with maximum size (1500 bytes)
-3. If packet too large for a router's link:
-   Router drops packet
-   Router sends ICMP "Fragmentation Needed" error
-   Error includes MTU of the link
-4. Sender receives error, reduces packet size
-5. Repeat until packet fits all links in path
-
-Result: Sender discovers smallest MTU in path, sends optimally-sized packets
-```
-
-**Why Better?**
-- Fragmentation at routers is slow (router CPU overhead)
-- Lost fragment forces retransmission of entire original packet
-- PMTUD avoids fragmentation entirely
-
----
-
-## Routing Protocols: How Routers Learn Routes
-
-### Static vs Dynamic Routing
-
-**Static Routing:**
-```
-Administrator manually configures routes:
-$ ip route add 10.0.0.0/8 via 192.168.1.1
-
-Advantages:
-- Simple for small networks
-- Predictable
-
-Disadvantages:
-- Doesn't adapt to failures
-- Doesn't scale to large networks
-```
-
-**Dynamic Routing:**
-```
-Routers automatically discover routes using routing protocols
-
-Advantages:
-- Adapts to network changes
-- Scales to large networks
-- Automatic failover
-
-Disadvantages:
-- More complex
-- Uses bandwidth for route advertisements
-```
-
----
-
-### Common Routing Protocols
-
-**RIP (Routing Information Protocol):**
-- Distance-vector protocol
-- Metric: Hop count (max 15 hops)
-- Simple but slow convergence
-- Mostly obsolete
-
-**OSPF (Open Shortest Path First):**
-- Link-state protocol
-- Metric: Cost (typically based on bandwidth)
-- Fast convergence
-- Widely used in enterprises
-- Supports large networks
-
-**BGP (Border Gateway Protocol):**
-- Path-vector protocol
-- Used between ISPs and organizations (Internet backbone)
-- Policy-based routing (not just shortest path)
-- The routing protocol of the Internet
-
-**Example:**
-```
-ISP A (AS 65001) peers with ISP B (AS 65002):
-
-BGP advertisement from ISP A:
-"I can reach 103.0.0.0/8 via AS 65001"
-
-BGP advertisement from ISP B:
-"I can reach 72.0.0.0/8 via AS 65002"
-
-Routers exchange routes, build global Internet routing table
-```
-
----
-
-## NAT (Network Address Translation)
-
-### The Private IP Problem
-
-**Scenario:**
-```
-Your home network: 192.168.1.0/24 (private)
-All devices:
-- Computer: 192.168.1.50
-- Phone: 192.168.1.60
-- Tablet: 192.168.1.70
-
-ISP assigns one public IP: 203.0.113.50
-
-Problem: How do multiple devices with private IPs access Internet?
-```
-
----
-
-### NAT Solution
-
-**NAT translates private IPs to public IP:**
-
-```
-┌────────────────────────────────────────────────────────┐
-│                   Home Network                          │
-│  ┌──────────┐  ┌──────────┐  ┌──────────┐             │
-│  │Computer  │  │ Phone    │  │ Tablet   │             │
-│  │.1.50     │  │ .1.60    │  │ .1.70    │             │
-│  └────┬─────┘  └────┬─────┘  └────┬─────┘             │
-│       └─────────────┼─────────────┘                    │
-│                     │                                   │
-│              ┌──────▼──────┐                            │
-│              │  NAT Router │                            │
-│              │ (Gateway)   │                            │
-│              │ Private:    │                            │
-│              │ 192.168.1.1 │                            │
-│              │ Public:     │                            │
-│              │ 203.0.113.50│                            │
-│              └──────┬──────┘                            │
-└─────────────────────┼───────────────────────────────────┘
-                      │
-                      ▼
-                  Internet
-```
-
----
-
-### NAT Translation Table
-
-**Outbound Traffic (Computer to Google):**
-
-```
-Internal Packet:
-Source: 192.168.1.50:54321
-Dest: 142.250.185.206:443
-
-NAT Router translates:
-Source: 192.168.1.50:54321 → 203.0.113.50:60001
-Dest: 142.250.185.206:443 (unchanged)
-
-NAT Table Entry:
-203.0.113.50:60001 ↔ 192.168.1.50:54321
-
-External Packet:
-Source: 203.0.113.50:60001
-Dest: 142.250.185.206:443
-```
-
-**Inbound Traffic (Google to Computer):**
-
-```
-External Packet:
-Source: 142.250.185.206:443
-Dest: 203.0.113.50:60001
-
-NAT Router translates:
-Looks up 60001 in NAT table
-Finds: 60001 → 192.168.1.50:54321
-
-Internal Packet:
-Source: 142.250.185.206:443
-Dest: 192.168.1.50:54321
-```
-
-**Key Insight:**
-All internal devices share one public IP, differentiated by port numbers.
-
----
-
-## Subnetting: Dividing Networks
-
-### CIDR Notation
-
-**Format:** `IP_ADDRESS/PREFIX_LENGTH`
-
-**Examples:**
-```
-192.168.1.0/24
-- IP: 192.168.1.0
-- Prefix: 24 bits for network, 8 bits for hosts
-- Hosts: 2^8 - 2 = 254 usable addresses
-
-10.0.0.0/8
-- Prefix: 8 bits for network, 24 bits for hosts
-- Hosts: 2^24 - 2 = 16,777,214 usable addresses
-
-172.16.0.0/12
-- Prefix: 12 bits for network, 20 bits for hosts
-- Hosts: 2^20 - 2 = 1,048,574 usable addresses
-```
-
-**Why -2?**
-- Network address (all host bits = 0)
-- Broadcast address (all host bits = 1)
-
----
-
-### Subnet Mask
-
-**Subnet Mask:** Binary representation of which bits are network vs host.
-
-**Example: 192.168.1.0/24**
-
-```
-IP Address:   192.168.1.0   = 11000000.10101000.00000001.00000000
-Subnet Mask:  255.255.255.0 = 11111111.11111111.11111111.00000000
-                               ^^^^^^^^^^^^^^^^^^^^^^^^ ^^^^^^^^
-                               Network (24 bits)        Host (8 bits)
-```
-
-**Common Subnet Masks:**
-
-| CIDR | Subnet Mask     | Hosts   |
-|------|-----------------|---------|
-| /8   | 255.0.0.0       | 16M     |
-| /16  | 255.255.0.0     | 65,534  |
-| /24  | 255.255.255.0   | 254     |
-| /30  | 255.255.255.252 | 2       |
-| /32  | 255.255.255.255 | 1 (host)|
-
----
-
-### Subnetting Example
-
-**Problem:**
-You have 192.168.1.0/24 and need to divide into 4 subnets.
-
-**Solution:**
-```
-Original: 192.168.1.0/24 (254 hosts)
-
-Borrow 2 bits from host portion → /26
-
-Subnets:
-1. 192.168.1.0/26   (hosts: .1 - .62)
-2. 192.168.1.64/26  (hosts: .65 - .126)
-3. 192.168.1.128/26 (hosts: .129 - .190)
-4. 192.168.1.192/26 (hosts: .193 - .254)
-
-Each subnet: 2^6 - 2 = 62 usable hosts
-```
-
----
-
-## Practical IP Tools
-
-### ping
-
-**Purpose:** Test reachability and measure round-trip time.
+## 10. ICMP: IP's error and diagnostics helper
+
+**ICMP** (Internet Control Message Protocol; IP protocol 1; ICMPv6 = 58) reports problems and supports diagnostics. It isn't a transport for applications.
+
+| Type (code) | Message | Used by |
+|---|---|---|
+| 8 / 0 | **Echo Request** / **Echo Reply** | `ping` |
+| 3 | **Destination Unreachable** (0 net, 1 host, 3 **port**, 4 **fragmentation needed**, 13 admin prohibited) | UDP "port unreachable", PMTUD |
+| 11 | **Time Exceeded** (TTL expired) | `traceroute` |
+| 5 | Redirect ("use another gateway") | (usually disabled) |
+| 4 (old) / — | Source quench (obsolete) | |
 
 ```bash
-$ ping google.com
-PING google.com (142.250.185.206): 56 data bytes
-64 bytes from 142.250.185.206: icmp_seq=0 ttl=117 time=11.2 ms
-64 bytes from 142.250.185.206: icmp_seq=1 ttl=117 time=10.8 ms
+ping -c 4 8.8.8.8                     # RTT and TTL of replies
+ping -c 3 -M do -s 1472 8.8.8.8       # -M do = set DF; 1472 + 8 ICMP + 20 IP = 1500. Try 1473: "message too long" or fragmentation needed
+ping -6 -c 3 ipv6.google.com          # IPv6
 ```
-
-**How it works:**
-1. Sends ICMP Echo Request (Protocol=1, Type=8)
-2. Destination responds with ICMP Echo Reply (Type=0)
-3. Measures round-trip time
+Don't blanket-block ICMP: allow echo, "fragmentation needed/packet too big", "time exceeded" and (IPv6) neighbor discovery.
 
 ---
 
-### traceroute / tracert
+## 11. NAT (Network Address Translation)
 
-**Purpose:** Map network path to destination.
+Because of IPv4 scarcity, most homes and offices use **private addresses** internally and share **one (or a few) public IPs**. A **NAT** device (your router) rewrites addresses/ports:
+
+```
+Inside                       NAT router                              Internet
+192.168.1.50:54321 ────►  translates source ──►  203.0.113.50:60001 ─────────► 142.250.185.206:443
+                          table: 203.0.113.50:60001  ↔  192.168.1.50:54321
+reply to 203.0.113.50:60001 ─► router looks it up ─► rewrites destination to 192.168.1.50:54321 ─► inside
+```
+
+- The common form is **PAT / NAPT / "masquerading"**: many inside hosts share one public IP, told apart by **translated source ports**.
+- **Outbound is easy** (the router creates the mapping). **Inbound is not**: an unsolicited packet has no table entry, so it's dropped. To reach a service inside you need **port forwarding** (a static mapping such as public `:8080` → `192.168.1.50:80`), UPnP/NAT-PMP, or a relay.
+- **NAT is not a firewall.** It incidentally blocks unsolicited inbound traffic, but security requires real stateful firewall rules. It also **breaks the end-to-end model**: peer-to-peer apps need **STUN/TURN/ICE** hole-punching; some protocols carry IPs inside payloads (FTP, SIP), needing ALGs.
+- **Double NAT / CGNAT:** ISPs increasingly put customers behind carrier-grade NAT (`100.64.0.0/10`), so you can't port-forward at all.
+- **Docker publishing `-p 8080:80`** is exactly **DNAT** (destination NAT) in the host's firewall; container outbound traffic is **masqueraded** (SNAT). See rules with `sudo iptables -t nat -L -n -v` (or `nft list ruleset`).
+- **Connection tracking** (`conntrack`) is the table behind it: `sudo conntrack -L`.
+- IPv6 doesn't need NAT; use a stateful firewall instead.
+
+---
+
+## 12. IP in Docker and Kubernetes
+
+| Concept | Details |
+|---|---|
+| **Default bridge network** | Subnet **172.17.0.0/16**, gateway `172.17.0.1` (the host's `docker0` interface); containers get addresses like `172.17.0.2`; outbound traffic is masqueraded to the host's IP |
+| **User-defined networks** | Docker allocates subnets from a pool (default `172.18.0.0/16`, `172.19.0.0/16`, ... then `192.168.x.0/20`); choose your own with `docker network create --subnet 10.10.0.0/24 mynet` and a specific container address with `--ip` |
+| **Inspect** | `docker network ls`, `docker network inspect bridge -f '{{json .IPAM.Config}}'`, `docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}} gw={{.Gateway}}{{end}}' NAME` |
+| **Host view** | `ip -br addr` shows `docker0` and `br-<id>` interfaces plus `veth...` peers; `ip route` shows a route per Docker subnet |
+| **Address conflicts** | Docker's default 172.16/12 ranges **overlap with corporate VPNs and cloud VPCs**. Symptoms: containers can't reach an internal `172.x.x.x` service, or the VPN breaks after starting Docker. Fix: set `default-address-pools` in `/etc/docker/daemon.json` (e.g. `{"default-address-pools":[{"base":"10.200.0.0/16","size":24}]}`) or create networks with explicit non-overlapping subnets |
+| **Container-to-container** | Same subnet on the same bridge → direct (L2 via the Linux bridge); different networks → isolated unless a container is attached to both or routed |
+| **`localhost`** | Inside a container, `127.0.0.1` is the container itself |
+| **IPv6** | Off by default; enable in `daemon.json` (`"ipv6": true, "fixed-cidr-v6": "fd00:db8:1::/64"`) or per network (`docker network create --ipv6 ...`) |
+| **Kubernetes** | Every **pod** gets its own IP from the cluster's **pod CIDR** (a CNI plugin provides routing/overlay; pods can talk to any pod without NAT); **Services** get virtual **cluster IPs** from the service CIDR; `NodePort`/`LoadBalancer` expose them; plan CIDRs so pod, service, node and VPC ranges **don't overlap** |
+
+---
+
+## 13. Hands-on labs
+
+**Lab 1: Your addresses and routes**
 
 ```bash
-$ traceroute google.com
-1  192.168.1.1 (192.168.1.1)  1.234 ms
-2  10.0.0.1 (10.0.0.1)  5.678 ms
-3  203.0.113.1 (203.0.113.1)  12.345 ms
-4  198.51.100.5 (198.51.100.5)  20.123 ms
-...
-15 142.250.185.206 (142.250.185.206)  45.678 ms
+ip -br addr                  # interfaces, states, IPv4/IPv6 with prefix lengths
+ip route                     # default gateway and connected routes
+ip -6 route
+ip route get 8.8.8.8         # "via <gw> dev <if> src <your ip>" → which route wins and why
+ip route get 127.0.0.1
 ```
+Identify: your private IP, the mask/prefix, the default gateway, whether the docker0 subnet appears, and any IPv6 global and link-local addresses.
 
-**How it works:**
-1. Send packet with TTL=1 → First router responds
-2. Send packet with TTL=2 → Second router responds
-3. Increment TTL until destination reached
-
----
-
-### ip / ifconfig
-
-**View IP configuration:**
+**Lab 2: See IP headers on the wire**
 
 ```bash
-$ ip addr show
-eth0: <BROADCAST,MULTICAST,UP>
-    inet 192.168.1.50/24 brd 192.168.1.255 scope global
-    inet6 fe80::a00:27ff:fe4e:66a1/64 scope link
+sudo tcpdump -i any -nn -v -c 4 icmp &
+ping -c 2 8.8.8.8
 ```
+Read: `ttl 64`, `id`, `flags [DF]`, `proto ICMP (1)`, `length 84` (20 IP + 8 ICMP + 56 data). Then `sudo tcpdump -i any -nn -XX -c 1 icmp` to see the raw bytes; find `45 00` at the start of the IP header.
 
-**Add/remove IP addresses:**
+**Lab 3: TTL and traceroute**
 
 ```bash
-# Add IP address
-$ ip addr add 192.168.1.100/24 dev eth0
-
-# Remove IP address
-$ ip addr del 192.168.1.100/24 dev eth0
+ping -c 1 -t 1 8.8.8.8            # (Linux: -t sets TTL) → "Time to live exceeded" from the first router
+ping -c 1 -t 2 8.8.8.8            # second router answers
+traceroute -n 8.8.8.8
+mtr -n -c 10 --report 1.1.1.1
 ```
+For each hop note the private-vs-public addresses (your NAT gateway, ISP internal `100.64.x.x`/`10.x.x.x`, then public transit).
 
----
-
-### ip route
-
-**View routing table:**
+**Lab 4: MTU and fragmentation**
 
 ```bash
-$ ip route show
-default via 192.168.1.1 dev eth0
-192.168.1.0/24 dev eth0 proto kernel scope link src 192.168.1.50
+ip link show | grep mtu                         # interface MTUs (docker0 is 1500)
+ping -c 2 -M do -s 1472 8.8.8.8                 # fits exactly 1500 → works
+ping -c 2 -M do -s 1473 8.8.8.8                 # 1501 → "Message too long" (local) or ICMP frag needed
+ping -c 2 -s 3000 8.8.8.8 &                     # DF not set: fragmented by the sender
+sudo tcpdump -i any -nn -v icmp                 # see "frag ... (frag 1234:1480@0+)" then "(frag 1234:1528@1480)"
+tracepath -n 8.8.8.8                            # reports "pmtu 1500"
 ```
 
-**Add static route:**
+**Lab 5: Subnet arithmetic with Python's `ipaddress`**
+
+```python
+import ipaddress as ip
+n = ip.ip_network("192.168.1.0/24")
+print(n.netmask, n.broadcast_address, n.num_addresses, list(n.hosts())[0], list(n.hosts())[-1])
+print(list(ip.ip_network("192.168.1.0/24").subnets(new_prefix=26)))        # 4 subnets of 64
+print(ip.ip_address("192.168.1.77") in ip.ip_network("192.168.1.64/26"))   # True
+print(ip.ip_address("10.1.2.3").is_private, ip.ip_address("8.8.8.8").is_global, ip.ip_address("::1").is_loopback)
+print(ip.ip_address("2001:db8::1").exploded, ip.ip_address("2001:0db8:0000:0000:0000:0000:0000:0001").compressed)
+```
+
+**Lab 6: Longest-prefix match by hand.** Add temporary routes to a scratch namespace (safe; nothing touches your real routing):
 
 ```bash
-$ ip route add 10.0.0.0/8 via 192.168.1.1
+sudo ip netns add lab
+sudo ip netns exec lab ip link set lo up
+sudo ip netns exec lab ip link add d0 type dummy && sudo ip netns exec lab ip link set d0 up
+sudo ip netns exec lab ip addr add 10.9.0.1/24 dev d0
+sudo ip netns exec lab ip route add 192.168.0.0/16 via 10.9.0.2
+sudo ip netns exec lab ip route add 192.168.1.0/24 via 10.9.0.3
+sudo ip netns exec lab ip route add default via 10.9.0.4
+sudo ip netns exec lab ip route get 192.168.1.50      # → via 10.9.0.3  (the /24 wins)
+sudo ip netns exec lab ip route get 192.168.7.50      # → via 10.9.0.2  (the /16)
+sudo ip netns exec lab ip route get 8.8.8.8           # → via 10.9.0.4  (default)
+sudo ip netns del lab
 ```
 
----
-
-### netstat / ss
-
-**View active connections:**
+**Lab 7: Docker networking**
 
 ```bash
-$ netstat -tuln
-Proto  Local Address    Foreign Address   State
-tcp    0.0.0.0:22       0.0.0.0:*         LISTEN
-tcp    192.168.1.50:443 142.250.185.206:443 ESTABLISHED
+docker network create --subnet 10.77.0.0/24 labnet
+docker run -d --name a --network labnet --ip 10.77.0.10 alpine:3.20 sleep 3600
+docker run -d --name b --network labnet --ip 10.77.0.11 alpine:3.20 sleep 3600
+docker exec a ip -br addr; docker exec a ip route; docker exec a ping -c 2 10.77.0.11
+ip -br addr | grep br-; ip route | grep 10.77
+docker exec a traceroute -n 8.8.8.8 2>/dev/null || docker exec a sh -c 'apk add --no-cache busybox-extras >/dev/null; traceroute -n 8.8.8.8'   # 1st hop: the bridge 10.77.0.1, then your LAN gateway
+sudo iptables -t nat -L POSTROUTING -n | grep 10.77            # the MASQUERADE rule for outbound traffic
+docker rm -f a b; docker network rm labnet
 ```
 
----
+**Lab 8: IPv6**
 
-## Connection to Other Layers
-
-### Layer Stack Review
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│  Application (L7): HTTP Request                             │
-│  "GET / HTTP/1.1\r\nHost: google.com\r\n\r\n"               │
-└───────────────────────────────┬─────────────────────────────┘
-                                │
-┌───────────────────────────────▼─────────────────────────────┐
-│  Transport (L4): TCP Segment                                │
-│  ┌────────────────────────────────────────────────┐         │
-│  │ Source Port: 54321                             │         │
-│  │ Destination Port: 80                           │         │
-│  │ Sequence: 12345, Ack: 67890                    │         │
-│  │ Flags: PSH, ACK                                │         │
-│  │ Data: [HTTP Request]                           │         │
-│  └────────────────────────────────────────────────┘         │
-└───────────────────────────────┬─────────────────────────────┘
-                                │
-┌───────────────────────────────▼─────────────────────────────┐
-│  Network (L3): IP Packet ★                                  │
-│  ┌────────────────────────────────────────────────┐         │
-│  │ Version: 4                                     │         │
-│  │ Source IP: 192.168.1.50                        │         │
-│  │ Destination IP: 142.250.185.206                │         │
-│  │ Protocol: 6 (TCP)                              │         │
-│  │ TTL: 64                                        │         │
-│  │ Data: [TCP Segment]                            │         │
-│  └────────────────────────────────────────────────┘         │
-└───────────────────────────────┬─────────────────────────────┘
-                                │
-┌───────────────────────────────▼─────────────────────────────┐
-│  Data Link (L2): Ethernet Frame                             │
-│  ┌────────────────────────────────────────────────┐         │
-│  │ Source MAC: AA:BB:CC:DD:EE:FF                  │         │
-│  │ Destination MAC: 11:22:33:44:55:66             │         │
-│  │ EtherType: 0x0800 (IPv4)                       │         │
-│  │ Data: [IP Packet]                              │         │
-│  └────────────────────────────────────────────────┘         │
-└───────────────────────────────┬─────────────────────────────┘
-                                │
-┌───────────────────────────────▼─────────────────────────────┐
-│  Physical (L1): Bits                                        │
-│  1010101001010101... (transmitted as electrical signals)    │
-└─────────────────────────────────────────────────────────────┘
+```bash
+ip -6 addr                     # fe80:: link-local always; a global 2xxx: address if your network has IPv6
+ping -6 -c 2 ::1
+curl -6 -sI https://ipv6.google.com | head -1        # works only with IPv6 connectivity
+curl -s https://api64.ipify.org                       # which address family do you use to reach the internet?
 ```
 
----
-
-### IP's Role
-
-**IP provides:**
-1. **Addressing:** Unique IP address for every device
-2. **Routing:** Forwarding decisions based on destination IP
-3. **Fragmentation:** Breaking large packets for smaller MTUs
-4. **Encapsulation:** Wrapping transport layer segments
-
-**IP does NOT provide:**
-- **Reliability:** No retransmission (TCP handles this)
-- **Flow control:** No congestion management (TCP handles this)
-- **Port addressing:** No concept of applications (TCP/UDP handle this)
-
-**IP is "best effort":**
-Packets may be:
-- Lost (no acknowledgment)
-- Duplicated (sent multiple times)
-- Reordered (arrive out of sequence)
-- Corrupted (header checksum detects, but drops)
-
-**Transport layer (TCP) adds reliability on top of IP's best-effort delivery.**
+**Lab 9: What is my public IP, and what does NAT change?** `curl -s https://ifconfig.me` (public) vs `ip -br addr` (private). Explain why they differ, then `curl` the same from inside a Docker container and note both are the same public IP.
 
 ---
 
-## IPv4 vs IPv6: Summary Comparison
+## 14. Troubleshooting
 
-| Feature | IPv4 | IPv6 |
-|---------|------|------|
-| Address Size | 32 bits | 128 bits |
-| Address Format | Dotted-decimal (192.168.1.1) | Colon-hex (2001:db8::1) |
-| Total Addresses | ~4.3 billion | ~340 undecillion |
-| Header Size | 20-60 bytes (variable) | 40 bytes (fixed) |
-| Checksum | Yes (header checksum) | No (relies on other layers) |
-| Fragmentation | By routers | By sender only (PMTUD required) |
-| NAT | Required (due to shortage) | Not needed (enough addresses) |
-| IPsec | Optional | Mandatory (built-in) |
-| Configuration | Manual or DHCP | SLAAC (auto-configuration) |
-| Broadcast | Yes (255.255.255.255) | No (uses multicast) |
-| QoS | ToS field | Traffic Class + Flow Label |
-
----
-
-## Common IP Misunderstandings
-
-### Misconception 1: "IP guarantees delivery"
-
-**Reality:**
-IP is best-effort. Packets can be lost, duplicated, or reordered. TCP provides reliability on top of IP.
+| Symptom | Likely cause | Check |
+|---|---|---|
+| `Network is unreachable` | No route (missing default gateway or interface down) | `ip route`, `ip -br addr`, `ip link` |
+| Can ping the gateway but not the internet | Default route wrong, ISP or gateway problem, NAT/DNS issue | `ping 8.8.8.8` (IP) vs `ping example.com` (DNS); `traceroute -n 8.8.8.8` |
+| Ping works but the website hangs after connecting | **MTU/PMTU black hole** | `ping -M do -s 1472 host`, `tracepath`, MSS clamping, allow ICMP |
+| Two hosts on a LAN can't talk | Different subnets/masks, VLAN, duplicate IP | `ip addr`, `arping -D`, mask consistency |
+| Random connection failures/duplicates | **Duplicate IP addresses** on the LAN | `arping`, DHCP scope/static overlap |
+| `169.254.x.x` address | DHCP failed | Check DHCP server/cable/Wi-Fi |
+| Can't reach a private IP behind a VPN in Docker | Docker's subnet overlaps the VPN's | Change `default-address-pools` / network subnet |
+| IPv6 sites slow (timeouts, then fine) | Broken IPv6 path, Happy Eyeballs fallback delay | Test with `-4`/`-6` in curl; fix IPv6 routing or disable it on that path |
+| Asymmetric routing breaks a stateful firewall | Reply takes another path | Check both directions with `traceroute` from each end |
+| Cannot reach a server behind NAT from outside | No port forwarding, or CGNAT | Configure a forward, use a tunnel/relay |
+| `ttl exceeded` in traceroute loops | Routing loop | Check routes between the repeating hops |
 
 ---
 
-### Misconception 2: "IP address uniquely identifies a device"
+## 15. Common misconceptions
 
-**Reality:**
-- Private IPs (192.168.x.x) are reused across millions of networks
-- NAT allows multiple devices to share one public IP
-- DHCP assigns IPs dynamically (same device may have different IP over time)
-
----
-
-### Misconception 3: "Routers examine entire packet at each hop"
-
-**Reality:**
-Routers only examine IP header (especially destination IP). They don't touch transport layer or application layer data (except for NAT).
-
----
-
-### Misconception 4: "IPv6 is faster than IPv4"
-
-**Reality:**
-IPv6 is not inherently faster. Benefits:
-- No NAT overhead (end-to-end communication)
-- Simpler header (faster processing)
-- No fragmentation by routers (reduces CPU load)
-
-Performance difference is minimal in practice.
+| Misconception | Reality |
+|---|---|
+| "IP guarantees delivery" | It is best effort; TCP (or the app) adds reliability |
+| "An IP address identifies a device permanently" | Addresses are assigned (often by DHCP), change, and are shared through NAT; an interface can have several |
+| "Routers read the whole packet" | Routers look at the IP header (and optionally L4 for firewalling/ECMP); they don't need the payload |
+| "MAC addresses are used across the internet" | MACs only matter on each local link and change at every hop |
+| "The path out is the path back" | Routing is per hop and can be asymmetric |
+| "IPv6 is faster/more secure by itself" | Simpler forwarding and no NAT help, but speed is similar and security depends on configuration |
+| "NAT is a firewall" | It's address rewriting; use real firewall rules |
+| "Private addresses are secret/unreachable" | They are just non-routable on the public internet; anyone on your network can reach them |
+| "`/24` means 24 hosts" | It means **24 network bits**, leaving 8 host bits (254 usable) |
+| "IPv6 IPsec is mandatory" | It's supported, not mandatory |
+| "Fragmentation is normal and fine" | It hurts performance and reliability; PMTUD and MSS avoid it |
+| "The internet runs out of IPv4, so it stopped working" | Scarcity is handled by NAT, address trading, and IPv6 adoption |
 
 ---
 
-### Misconception 5: "Every device needs a public IP"
+## 16. Summary
 
-**Reality:**
-With NAT, thousands of devices on a private network can share one public IP. This is how most home and office networks operate.
-
----
-
-## Summary and Key Takeaways
-
-### IP in One Sentence
-
-**Internet Protocol (IP) provides addressing and routing to deliver packets from source to destination across interconnected networks.**
+- **IP** = addressing + hop-by-hop routing at **Layer 3**; **best effort**, with no reliability, ports or ordering. Unit: the **packet**; ICMP reports errors.
+- **IPv4 header:** version, IHL, DSCP/ECN, total length, identification/flags/fragment offset, **TTL**, **protocol** (1/6/17), **header checksum**, **source**, **destination**, options. Decode it from hex; the checksum of a valid header sums to `0xFFFF`.
+- **IPv4 addresses:** 32 bits; prefix/mask split network and host; private ranges (10/8, 172.16/12, 192.168/16), loopback 127/8, link-local 169.254/16, CGNAT 100.64/10, multicast 224/4; classes are historical; CIDR is current.
+- **IPv6:** 128-bit addresses with `::` shorthand, link-local/ULA/global types, fixed 40-byte header, no checksum, no router fragmentation, SLAAC, NDP, multicast instead of broadcast.
+- **Routing:** hosts/routers use tables; **longest-prefix match** picks the route; the **destination IP stays the same, the MACs change per hop**; TTL decrements each hop; BGP glues autonomous systems together.
+- **MTU/PMTUD:** avoid fragmentation with DF + ICMP "frag needed"; blocked ICMP creates black holes; clamp MSS.
+- **NAT** shares public addresses (DNAT for Docker `-p`, SNAT/masquerade outbound) but is not a firewall.
+- **Docker:** `docker0` = 172.17.0.0/16; watch out for subnet overlap with VPNs; Kubernetes gives each pod an IP.
 
 ---
 
-### Essential Concepts
+## 17. Check your understanding
 
-1. **IP operates at Layer 3 (Network Layer)**
-2. **Packets vs Segments vs Frames:**
-   - L4 (TCP/UDP): Segment
-   - L3 (IP): Packet
-   - L2 (Ethernet): Frame
-3. **IP Header Structure:**
-   - Version (4 or 6)
-   - Source IP and Destination IP
-   - TTL (prevents infinite loops)
-   - Protocol (TCP=6, UDP=17, ICMP=1)
-   - Checksum (header integrity)
-4. **IPv4 Addresses:**
-   - 32 bits, dotted-decimal (192.168.1.1)
-   - ~4.3 billion addresses (exhausted)
-5. **IPv6 Addresses:**
-   - 128 bits, colon-hex (2001:db8::1)
-   - ~340 undecillion addresses
-6. **Routing:**
-   - Routers use destination IP to forward packets
-   - Routing tables with longest prefix match
-   - Dynamic routing protocols (OSPF, BGP)
-7. **NAT:**
-   - Translates private IPs to public IPs
-   - Allows multiple devices to share one public IP
-8. **IP is Best-Effort:**
-   - No reliability, flow control, or ordering guarantees
-   - TCP/UDP add those features
+1. In an IPv4 header `IHL = 8` and Total Length = 300. How long is the header and how much payload does the packet carry?
+2. Which header field tells the receiver the payload is TCP? Which number?
+3. A packet crosses 5 routers. Which of (source IP, destination IP, source MAC, destination MAC, TTL) change, and how?
+4. Routes: `10.0.0.0/8 → A`, `10.1.0.0/16 → B`, `10.1.2.0/24 → C`, `0.0.0.0/0 → D`. Where do packets to 10.1.2.9, 10.1.9.9, 10.9.9.9 and 8.8.8.8 go?
+5. Compress `2001:0db8:0000:0000:0000:ff00:0042:8329`.
+6. A 4,000-byte payload must cross a link with MTU 1500 (IPv4, DF=0, 20-byte header). How many fragments, with what data sizes and offsets?
+7. Why can a website hang after the TCP handshake completes when a firewall blocks all ICMP?
+8. Why can't two containers on different user-defined Docker networks talk by default, and what would allow it?
+9. Why is NAT not a security feature? What does `docker run -p 8080:80` do at the IP layer?
+10. Give two reasons that IPv6 doesn't need NAT.
 
----
+<details>
+<summary>Answers</summary>
 
-### Complete Flow Recap
+1. Header = 8 × 4 = 32 bytes (12 bytes of options); payload = 300 − 32 = 268 bytes.
+2. The Protocol field, value 6 (UDP = 17, ICMP = 1).
+3. Source and destination IP: unchanged (barring NAT). Source and destination MAC: rewritten at every hop (new frame per link). TTL: decremented by 1 at each router (64 → 59 after five routers).
+4. 10.1.2.9 → C (/24); 10.1.9.9 → B (/16); 10.9.9.9 → A (/8); 8.8.8.8 → D (default).
+5. `2001:db8::ff00:42:8329`.
+6. Data per fragment must be ≤ 1480 and a multiple of 8: 1480 fits. 4000 ÷ 1480 → fragments of 1480, 1480, 1040 bytes (three fragments) with offsets 0, 185, 370 and MF = 1, 1, 0. (Total header bytes = 3 × 20.)
+7. Large packets need Path MTU Discovery, which relies on ICMP "fragmentation needed"/"packet too big". If it's blocked, the sender keeps sending oversized DF packets that are dropped silently (a PMTU black hole), while small packets, like the handshake, work.
+8. They are separate subnets/bridges with no route or forwarding between them (isolation). Attach a container to both networks, connect one container to the other network (`docker network connect`), or route/publish ports.
+9. NAT only rewrites addresses/ports and incidentally drops unsolicited inbound traffic; it doesn't inspect or authorize traffic like a firewall. `-p 8080:80` installs DNAT (and forwarding) rules mapping host port 8080 to the container's IP:80.
+10. IPv6 has vastly more addresses (every device can be globally unique), so no address sharing is needed; and end-to-end addressing is part of its design (privacy and security handled by firewalls and address privacy extensions).
+</details>
 
-```
-You type: https://google.com
-     ↓
-DNS resolves: google.com → 142.250.185.206
-     ↓
-Application (L7): Creates HTTP GET request
-     ↓
-Transport (L4): TCP wraps with ports 443, 54321 → Segment
-     ↓
-Network (L3): IP wraps with 192.168.1.50 → 142.250.185.206 → Packet
-     ↓
-Data Link (L2): Ethernet wraps with MAC addresses → Frame
-     ↓
-Physical (L1): Bits transmitted as electrical/radio signals
-     ↓
-Router 1 (Home): Examines Dest IP, forwards to ISP
-     ↓
-Router 2-N (Internet): Each router forwards based on routing table
-     ↓
-Router N (Google): Delivers packet to server 142.250.185.206
-     ↓
-Server processes request, sends response (reverses Source/Dest)
-     ↓
-Response travels back (possibly different path)
-     ↓
-Your computer receives response, browser renders page
-```
+**Practice**
+
+1. Capture a `ping` and a `curl` with tcpdump, and decode the IP headers of one packet by hand from the hex (version, IHL, total length, TTL, protocol, addresses); verify the checksum with a script.
+2. Use `traceroute`/`mtr` to two destinations (one nearby, one on another continent), annotate each hop as private/CGNAT/public, and estimate where the biggest latency jump occurs.
+3. Find your path MTU to three destinations with `ping -M do -s` and `tracepath`; explain any results below 1500.
+4. Create two Docker networks with non-overlapping subnets, attach a container to both, and prove it can route between them (`sysctl net.ipv4.ip_forward=1` inside it, and add routes in the peers).
+5. Enable IPv6 on a Docker network, start two containers, and ping each other's `fd00:` addresses.
 
 ---
 
-## Conclusion
-
-The Internet Protocol is the invisible infrastructure enabling global communication. When you watch a video streamed from servers 10,000 kilometers away, when you send a message to someone on another continent, when you make a video call to a colleague across the world—IP is routing every single packet through a complex web of routers, switches, and networks, each making forwarding decisions based solely on the destination IP address.
-
-Understanding IP means understanding how routers think. A router doesn't care about HTTP, TCP, TLS, or application-level protocols. It sees one thing: the destination IP address in the packet header. Based on that single piece of information and its routing table, it decides: "Forward this packet to Router X." That router makes the same decision: "Forward to Router Y." This continues until the packet reaches its destination.
-
-IP's simplicity is its power. A 32-bit or 128-bit address, hierarchical addressing allowing aggregation into routing prefixes, best-effort delivery without reliability overhead—these design decisions enable the Internet to scale to billions of devices and trillions of packets per day.
-
-You've now learned the complete IP packet structure: version bits identifying IPv4 vs IPv6, IHL specifying header length, TTL preventing infinite loops, protocol field identifying TCP vs UDP vs ICMP, source and destination IP addresses enabling routing, checksum detecting corruption, fragmentation fields handling MTU limitations. You understand how routers use longest prefix matching on destination IPs to make forwarding decisions. You know why IPv4's 4.3 billion addresses weren't enough and how IPv6's 340 undecillion addresses solve that problem. You understand how NAT allows private networks to share public IPs. You can visualize a packet's journey from your computer, through your home router, through your ISP, across the Internet backbone, to a server on another continent—and back.
-
-**Master IP, and you master the foundation of internetworking. Every networking protocol, every routing decision, every packet forwarding operation builds on IP's simple but powerful addressing and routing model. This is not just Layer 3—this is the layer that makes the Internet possible.**
-
----
-
-## Further Reading
-
-- **RFC 791:** Internet Protocol (IPv4)
-- **RFC 8200:** Internet Protocol, Version 6 (IPv6) Specification
-- **RFC 1918:** Address Allocation for Private Internets (private IP ranges)
-- **RFC 1812:** Requirements for IPv4 Routers
-- **RFC 2460:** IPv6 Specification
-- **"TCP/IP Illustrated, Volume 1" by W. Richard Stevens:** Comprehensive guide to TCP/IP stack
-- **"Internet Routing Architectures" by Sam Halabi:** BGP and routing protocol details
-- **Cisco CCNA Study Guide:** Practical subnetting and routing configuration
-- **"Computer Networks" by Andrew S. Tanenbaum:** Networking fundamentals
-- **Wireshark Network Analysis:** Packet capture and IP analysis
+**Next:** [Chapter 31 – The Data Link Layer and Ethernet Frames](31_data_link_layer_frame_in_details.md)

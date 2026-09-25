@@ -1,1255 +1,504 @@
-# Chapter 11: Managing Packages on Linux - A Complete Beginner's Guide
+# Chapter 11: Managing Packages on Linux
 
-## Introduction: The Software Management Problem
+> **In one sentence:** On Linux you install software with a **package manager** (like `apt`) that downloads verified **packages** from **repositories**, installs their **dependencies** automatically, and can update or remove everything cleanly.
 
-Imagine you want to listen to music on your computer. You need a music player. Want to edit text files? You need a text editor. Want to browse the web? You need a browser. Every task requires **software** (programs or applications).
+**Level:** 🟢 Beginner → 🟡 Intermediate (with a Docker-specific expert section) · **Reading time:** ~40 minutes
 
-But here's the challenge:
-- Where do these programs come from?
-- How do you install them safely?
-- How do you update them when new versions are released?
-- What if a program depends on other programs to work?
-- How do you remove software cleanly when you no longer need it?
-
-On Windows, you typically:
-1. Search Google for software
-2. Download an `.exe` file from various websites
-3. Run the installer
-4. Hope it's not malware!
-
-On Linux, there's a **far superior system** called **package management**. This chapter will teach you everything about how Linux handles software installation, updates, and removal - making you far more efficient and secure than traditional methods.
+**Prerequisites:** [Chapter 10 – Running Ubuntu on Docker](10_running_ubuntu_on_docker.md). You will type all commands inside an Ubuntu container.
 
 ---
 
-## What You'll Learn
+## What you will learn
 
-By the end of this chapter, you will understand:
-
-1. **What packages are** and why they're better than traditional installers
-2. **Package managers** - your software installation toolbelt
-3. **Package repositories** - centralized, trusted software sources
-4. **High-level vs low-level package managers** - why there are layers
-5. **Package formats** - different flavors for different distributions
-6. **Practical commands** for installing, removing, and managing software
-7. **The internal workflow** from repository to installed program
-
-This knowledge is **fundamental** for:
-- Docker (most Dockerfiles start with package installation)
-- System administration
-- Development environments
-- Server management
-- DevOps workflows
+- What a **package**, a **repository** and a **package manager** are
+- Why there are two layers (`apt` on top of `dpkg`)
+- The everyday `apt` commands: update, install, remove, purge, search, show, upgrade, autoremove
+- How `apt` knows where to download from, and how it verifies downloads
+- The equivalent tools on other distributions (`dnf`, `apk`, `pacman`, `zypper`)
+- **How to install packages properly in a Dockerfile** (a very common source of bugs and huge images)
+- Troubleshooting the most common errors
 
 ---
 
-## The Big Picture: Understanding the Ecosystem
+## 1. The problem: how do you install software safely?
 
-Before diving into commands, let's understand the complete architecture.
+Traditionally on some systems you would search the web, download an installer from some site, run it, and hope it is not malware, that it doesn't clash with other software, and that you'll remember to update it.
 
-### The Three Key Components
+Linux distributions solve this with **package management**:
 
 ```
-┌─────────────────────────────────────────────────┐
-│                                                 │
-│  1. PACKAGE REPOSITORY (The Warehouse)          │
-│     ┌─────────────────────────────────────┐     │
-│     │  Remote Server (Ubuntu Official)    │     │
-│     │  - Git                              │     │
-│     │  - Vim                              │     │
-│     │  - Nano                             │     │
-│     │  - Curl                             │     │
-│     │  - VLC                              │     │
-│     │  - ... thousands more               │     │
-│     └─────────────────────────────────────┘     │
-│              ▲                 │                 │
-│              │ (search/verify) │ (download)      │
-│              │                 ▼                 │
-│  2. PACKAGE MANAGER (The Tool)                  │
-│     ┌─────────────────────────────────────┐     │
-│     │  apt / apt-get / yum / pacman       │     │
-│     │  - Resolves dependencies            │     │
-│     │  - Downloads packages               │     │
-│     │  - Verifies integrity               │     │
-│     │  - Manages versions                 │     │
-│     └─────────────────────────────────────┘     │
-│              │                                   │
-│              │ (installs/removes)                │
-│              ▼                                   │
-│  3. YOUR COMPUTER (The Installation)            │
-│     ┌─────────────────────────────────────┐     │
-│     │  /bin/ (installed programs)         │     │
-│     │  /usr/bin/ (user programs)          │     │
-│     │  /etc/ (configuration files)        │     │
-│     └─────────────────────────────────────┘     │
-│                                                 │
-└─────────────────────────────────────────────────┘
+   ┌────────────────────────┐   1. "apt install git"   ┌────────────────┐
+   │ Repository (server)    │ ◄──────────────────────── │ Package manager│
+   │ thousands of signed    │                           │ (apt)          │
+   │ packages + an index    │ ──── 2. download ───────► │                │
+   └────────────────────────┘                           └───────┬────────┘
+                                                        3. verify signature,
+                                                           resolve dependencies
+                                                                │
+                                                        ┌───────▼────────┐
+                                                        │ Your system    │
+                                                        │ /usr/bin/git … │
+                                                        └────────────────┘
 ```
 
-**Analogy**: Think of it like this:
-- **Package Repository** = Amazon warehouse (stores all products)
-- **Package Manager** = Amazon delivery service (finds, ships, and delivers)
-- **Your Computer** = Your home (where products arrive and are used)
+| Piece | Analogy |
+|---|---|
+| **Repository** | A warehouse of trusted, signed software |
+| **Package manager** | The delivery service that fetches, installs and tracks everything |
+| **Your system** | Your home, with a record of everything delivered |
 
 ---
 
-## Component 1: What is a Package?
+## 2. What is a package?
 
-A **package** is a bundle containing everything needed to install and run a program.
+A **package** is an archive with the program's files plus **metadata** describing how to install it.
 
-### Anatomy of a Package
+| Contents | Example (`git`) |
+|---|---|
+| Program files, placed in standard locations | `/usr/bin/git`, `/usr/lib/git-core/...` |
+| Documentation and man pages | `/usr/share/doc/git/` |
+| Default config files | `/etc/...` |
+| **Metadata**: name, version, architecture, description, maintainer, license | `git 1:2.43.0-1ubuntu7`, `amd64` |
+| **Dependencies**: other packages this one needs | `libc6`, `libcurl3-gnutls`, `perl`, `zlib1g`, ... |
+| **Maintainer scripts** (optional) | `preinst`, `postinst`, `prerm`, `postrm`: small scripts run before/after installing or removing (create a user, start a service, clean up) |
 
-```
-┌────────────────────────────────────────┐
-│          Package: "git"                │
-├────────────────────────────────────────┤
-│  1. Binary Program                     │
-│     └─ The actual executable code      │
-│                                        │
-│  2. Metadata                           │
-│     ├─ Version (e.g., 2.34.1)         │
-│     ├─ Description                     │
-│     ├─ Maintainer info                │
-│     ├─ License                         │
-│     └─ Architecture (amd64, arm64)    │
-│                                        │
-│  3. Dependencies                       │
-│     ├─ vim (required)                  │
-│     ├─ nano (required)                 │
-│     └─ curl (required)                 │
-│                                        │
-│  4. Installation Scripts               │
-│     ├─ preinst (pre-installation)     │
-│     ├─ postinst (post-installation)   │
-│     ├─ prerm (pre-removal)            │
-│     └─ postrm (post-removal)          │
-│                                        │
-│  5. Configuration Files                │
-│     └─ Default settings               │
-│                                        │
-│  6. Documentation                      │
-│     ├─ Manual pages                    │
-│     └─ README files                   │
-└────────────────────────────────────────┘
-```
-
-### Installation Scripts Explained
-
-**Why are there four different scripts?**
-
-1. **preinst (pre-install)**
-   - Runs **before** installation begins
-   - Checks if your system meets requirements
-   - Creates necessary user accounts
-   - Backs up existing configurations
-   - **Example**: Before installing a web server, create a `www-data` user
-
-2. **postinst (post-install)**
-   - Runs **after** installation completes
-   - Starts services
-   - Registers the program with the system
-   - Creates default configuration files
-   - **Example**: After installing a database, initialize the data directory
-
-3. **prerm (pre-removal)**
-   - Runs **before** uninstallation begins
-   - Stops running services gracefully
-   - Notifies other programs
-   - **Example**: Before removing a web server, stop all active connections
-
-4. **postrm (post-removal)**
-   - Runs **after** uninstallation completes
-   - Removes configuration files (if requested)
-   - Cleans up temporary files
-   - **Example**: After removing a program, delete log files
-
-### Real-World Example: Installing Git
-
-When you install Git, here's what the package contains:
+Package file names follow a pattern:
 
 ```
-git_2.34.1-1ubuntu1_amd64.deb
-│
-├─ Binary: /usr/bin/git
-├─ Libraries: /usr/lib/git-core/
-├─ Man pages: /usr/share/man/man1/git.1.gz
-├─ Documentation: /usr/share/doc/git/
-├─ Configuration: /etc/gitconfig
-└─ Scripts:
-   ├─ preinst: Check if old version exists
-   ├─ postinst: Set up git configuration paths
-   ├─ prerm: Nothing (git doesn't run as service)
-   └─ postrm: Clean up user configurations if requested
+git_1%3a2.43.0-1ubuntu7_amd64.deb
+ │            │             │
+ name      version     architecture (amd64 = 64-bit x86, arm64 = ARM)
 ```
+
+### Package formats
+
+| Format | Used by | Low-level tool | High-level tool(s) |
+|---|---|---|---|
+| **`.deb`** | Debian, Ubuntu, Mint, Kali... | `dpkg` | `apt`, `apt-get` |
+| **`.rpm`** | Fedora, RHEL, Rocky, Alma, openSUSE | `rpm` | `dnf` (older `yum`), `zypper` on SUSE |
+| **`.apk`** | Alpine | `apk` | `apk` (it does both jobs) |
+| **`.pkg.tar.zst`** | Arch | `pacman` | `pacman` |
+
+A `.deb` file is an `ar` archive containing a `control` archive (metadata and scripts) and a `data` archive (the actual files). You can peek inside one: `dpkg-deb -I file.deb` (info) and `dpkg-deb -c file.deb` (contents).
 
 ---
 
-## Component 2: Package Repositories - The Software Warehouse
+## 3. Two layers: `dpkg` and `apt`
 
-A **repository** (repo) is a **centralized storage location** for packages.
+| Layer | Tool | Job |
+|---|---|---|
+| **Low level** | `dpkg` | Installs or removes **one local `.deb` file**. Knows what is installed. Does **not** download and does **not** fetch dependencies |
+| **High level** | `apt` | Reads repositories, **finds** packages, **downloads** them, works out **dependencies**, verifies signatures, then calls `dpkg` to do the installing |
 
-### Types of Repositories
+Example: try installing a `.deb` with `dpkg` when its dependencies are missing, and it stops with an error about unmet dependencies. With `apt install git`, apt sees that git needs a dozen other packages, downloads them all, and installs everything in the right order.
 
-1. **Official Repositories**
-   - Maintained by the distribution (Ubuntu, Debian, RedHat)
-   - Heavily tested and verified
-   - Free and open-source
-   - **Example**: `http://archive.ubuntu.com/ubuntu/`
-
-2. **Community Repositories**
-   - Maintained by community members
-   - More packages available
-   - Less rigorous testing
-   - **Example**: Ubuntu Universe repository
-
-3. **Private/Corporate Repositories**
-   - Company-specific software
-   - Require authentication
-   - Not publicly accessible
-   - **Example**: Your company's internal tools
-
-4. **Third-Party PPAs** (Personal Package Archives)
-   - Individual developers host packages
-   - For software not in official repos
-   - Use with caution!
-   - **Example**: Adding newer versions of software
-
-### Repository Structure
-
-Let's explore an actual Ubuntu repository:
-
-```
-http://archive.ubuntu.com/ubuntu/
-│
-├─ dists/              (Distributions)
-│  ├─ jammy/           (Ubuntu 22.04 codename)
-│  ├─ noble/           (Ubuntu 24.04 codename)
-│  └─ focal/           (Ubuntu 20.04 codename)
-│
-├─ pool/               (Actual packages stored here)
-│  ├─ main/            (Official supported packages)
-│  │  ├─ g/
-│  │  │  └─ git/
-│  │  │     ├─ git_2.34.1.deb
-│  │  │     └─ git_2.40.0.deb
-│  │  ├─ v/
-│  │  │  └─ vim/
-│  │  └─ c/
-│  │     └─ curl/
-│  │
-│  ├─ restricted/      (Proprietary drivers)
-│  ├─ universe/        (Community-maintained)
-│  └─ multiverse/      (Not officially supported)
-│
-└─ indices/            (Fast lookup indexes)
-```
-
-### Repository Components Explained
-
-**main**:
-- Official packages
-- Fully supported by Ubuntu
-- Free and open-source
-- Receive security updates
-- **Example**: Apache, Python, Git
-
-**restricted**:
-- Proprietary software
-- Common hardware drivers
-- Officially supported
-- **Example**: NVIDIA drivers, certain firmware
-
-**universe**:
-- Community-maintained
-- Free and open-source
-- No official support
-- **Example**: Obscure libraries, academic software
-
-**multiverse**:
-- Non-free software
-- No support
-- Legal restrictions may apply
-- **Example**: Some codecs, proprietary software
-
----
-
-## Component 3: Package Managers - Your Software Tool
-
-A **package manager** is a program that automates installing, upgrading, and removing packages.
-
-### The Two-Layer System
-
-Linux has **two levels** of package managers:
-
-```
-┌─────────────────────────────────────────┐
-│   HIGH-LEVEL PACKAGE MANAGER            │
-│   (apt, yum, dnf, pacman)               │
-│   ┌─────────────────────────────────┐   │
-│   │ - Resolves dependencies         │   │
-│   │ - Downloads from repositories   │   │
-│   │ - Handles upgrades              │   │
-│   │ - Verifies signatures           │   │
-│   │ - Manages versions              │   │
-│   └─────────────────────────────────┘   │
-│              │                           │
-│              │ delegates to              │
-│              ▼                           │
-│   ┌─────────────────────────────────┐   │
-│   │  LOW-LEVEL PACKAGE MANAGER      │   │
-│   │  (dpkg, rpm)                    │   │
-│   │  - Unpacks packages             │   │
-│   │  - Installs files               │   │
-│   │  - Runs install scripts         │   │
-│   │  - Removes files                │   │
-│   └─────────────────────────────────┘   │
-└─────────────────────────────────────────┘
-```
-
-### Why Two Layers?
-
-**Historical Reason**: Low-level managers came first (dpkg, rpm). They could install packages but couldn't handle dependencies automatically. High-level managers were built on top to solve this problem.
-
-### High-Level vs Low-Level: A Concrete Example
-
-**Scenario**: You want to install Git, which depends on:
-- vim
-- nano
-- curl
-
-**Using Low-Level Manager (dpkg)**:
+`dpkg` is still useful for inspection:
 
 ```bash
-dpkg -i git.deb
-# Error: dependency 'vim' not found!
-# Error: dependency 'nano' not found!
-# Error: dependency 'curl' not found!
+dpkg -l | head            # list installed packages
+dpkg -L git               # files a package installed
+dpkg -S /usr/bin/git      # which package owns this file?
+dpkg -s git               # status of one package
 ```
 
-You would need to:
-1. Manually find and download vim.deb
-2. Manually find and download nano.deb
-3. Manually find and download curl.deb
-4. Install each one in the correct order
-5. Then finally install git.deb
+### `apt` vs `apt-get`
+- **`apt-get`**, **`apt-cache`**: the older tools, with a stable, script-friendly output.
+- **`apt`**: newer (2014), friendlier (progress bars, colors, combines common commands).
+- **Rule of thumb:** use **`apt` when typing interactively**, use **`apt-get` in scripts and Dockerfiles** (`apt` itself warns that its CLI is not stable for scripts).
 
-**Nightmare!**
+---
 
-**Using High-Level Manager (apt)**:
+## 4. Repositories: where packages come from
+
+A **repository** ("repo") is a server holding packages plus an **index** listing them with versions, checksums and dependencies. Ubuntu's main archive is `archive.ubuntu.com` (and `security.ubuntu.com`); Debian's is `deb.debian.org`.
+
+### Ubuntu's "components"
+
+| Component | Contents | Support |
+|---|---|---|
+| **main** | Free and open-source software supported by Canonical | Yes |
+| **restricted** | Proprietary drivers and firmware | Yes (limited) |
+| **universe** | Free and open-source, maintained by the community | Community |
+| **multiverse** | Software with licensing restrictions or non-free | No |
+
+### "Suites" (per release)
+Each Ubuntu release has a codename, e.g. `noble` (24.04), `jammy` (22.04). Each has pockets:
+
+- `noble` – the software as released
+- `noble-security` – security fixes
+- `noble-updates` – other fixes
+
+### Where apt is configured
+On Ubuntu 24.04 (and its Docker image):
 
 ```bash
-apt install git
-# Calculating dependencies...
-# The following additional packages will be installed:
-#   vim nano curl
-# Do you want to continue? [Y/n] y
-# Installing vim... done
-# Installing nano... done
-# Installing curl... done
-# Installing git... done
+cat /etc/apt/sources.list.d/ubuntu.sources
 ```
 
-**One command!** The high-level manager:
-1. Analyzed git's dependencies
-2. Found vim, nano, and curl in the repository
-3. Downloaded all packages
-4. Installed them in the correct order
-5. Configured everything
+```
+Types: deb
+URIs: http://archive.ubuntu.com/ubuntu/
+Suites: noble noble-updates noble-backports
+Components: main universe restricted multiverse
+Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+```
+
+Older releases and Debian may use `/etc/apt/sources.list` with lines like `deb http://archive.ubuntu.com/ubuntu jammy main universe`. Extra repositories live in `/etc/apt/sources.list.d/`.
+
+### Trust: signatures
+Repository indexes are **cryptographically signed** and apt checks them against keys in `Signed-By` keyrings. Every package's checksum is in the signed index, so a tampered download is rejected. When you add a third-party repository, you also add its key. Only do that for sources you trust.
+
+**PPAs** (Personal Package Archives) are third-party Ubuntu repositories hosted on Launchpad; they can offer newer versions, but you are trusting an individual.
 
 ---
 
-## Package Managers Across Distributions
+## 5. The everyday `apt` commands
 
-Different Linux distributions use different package managers and formats.
+Run these inside `docker run -it --rm ubuntu:24.04 bash` (you are root, so no `sudo`). On a normal machine, prefix with `sudo`.
 
-### Complete Comparison Table
-
-| Distribution | High-Level PM | Low-Level PM | Package Format | Repository URL Example |
-|-------------|---------------|--------------|----------------|------------------------|
-| **Ubuntu** | apt, apt-get | dpkg | .deb | archive.ubuntu.com |
-| **Debian** | apt, apt-get | dpkg | .deb | deb.debian.org |
-| **Linux Mint** | apt, apt-get | dpkg | .deb | packages.linuxmint.com |
-| **Pop!_OS** | apt, apt-get | dpkg | .deb | apt.pop-os.org |
-| **RedHat** | yum, dnf | rpm | .rpm | download.redhat.com |
-| **CentOS** | yum, dnf | rpm | .rpm | mirror.centos.org |
-| **Fedora** | dnf | rpm | .rpm | download.fedoraproject.org |
-| **Arch Linux** | pacman | pacman | .pkg.tar.xz | archlinux.org |
-| **openSUSE** | zypper | rpm | .rpm | download.opensuse.org |
-| **Alpine** | apk | apk | .apk | dl-cdn.alpinelinux.org |
-
-### Which Should You Learn?
-
-**Priority order for most developers:**
-
-1. **apt/apt-get (90% of your career)**
-   - Ubuntu is dominant in cloud/server environments
-   - Most Docker images are based on Ubuntu/Debian
-   - Most tutorials and documentation use apt
-
-2. **yum/dnf (10% of your career)**
-   - Enterprise environments often use RedHat/CentOS
-   - Occasionally needed for specific projects
-
-3. **Others (<1% of your career)**
-   - Arch (pacman): Rare in production
-   - Alpine (apk): Used for minimal Docker images
-   - openSUSE (zypper): Niche use cases
-
-**This course focuses on `apt`** because it's the most practical for Docker, Kubernetes, and modern development.
-
----
-
-## Package Formats: Understanding File Extensions
-
-The package format determines how software is bundled.
-
-### `.deb` Format (Debian/Ubuntu Family)
-
-**Full Name**: Debian Package
-**Used By**: Ubuntu, Debian, Linux Mint, Pop!_OS, Elementary OS
-
-**Why `.deb`?**
-- Ubuntu is based on Debian
-- Debian pioneered this format in 1993
-- All Debian-derived distributions inherit it
-
-**Structure**:
-```
-git_2.34.1-1ubuntu1_amd64.deb
-│   │      │         └─ Architecture (amd64 = 64-bit Intel/AMD)
-│   │      └─────────── Distribution-specific version
-│   └────────────────── Version number
-└────────────────────── Package name
-```
-
-**Example files in a .deb package**:
-```
-git_2.34.1-1ubuntu1_amd64.deb
-├─ control (metadata)
-├─ data.tar.xz (actual files)
-└─ debian-binary (format version)
-```
-
-### `.rpm` Format (RedHat Family)
-
-**Full Name**: RedHat Package Manager
-**Used By**: RedHat, CentOS, Fedora
-
-**Example**:
-```
-git-2.34.1-1.el8.x86_64.rpm
-└─ .rpm extension indicates RPM format
-```
-
-### `.apk` Format (Alpine)
-
-**Used By**: Alpine Linux
-**Why Special**: Extremely minimal for Docker containers
-
----
-
-## Hands-On: Working with APT
-
-Now let's get practical. We'll use `apt` on Ubuntu.
-
-### Understanding apt vs apt-get
-
-**Historical Context**:
-- `apt-get` - Original tool (1998)
-- `apt` - Newer, user-friendly interface (2014)
-
-**Differences**:
-```
-apt-get update        →  apt update      (same functionality)
-apt-get install vim   →  apt install vim (same functionality)
-apt-get remove vim    →  apt remove vim  (same functionality)
-```
-
-**Key Differences**:
-- `apt` has prettier output with progress bars
-- `apt` combines frequently used commands
-- `apt-get` has more low-level options
-- `apt` is recommended for interactive use
-- `apt-get` is better for scripts (stable interface)
-
-**Recommendation**: Use `apt` for daily work, learn both for completeness.
-
----
-
-## Essential APT Commands
-
-### 1. Updating the Package Cache
-
-Before installing anything, update your local cache:
+### 5.1 `apt update`: refresh the index (not the software!)
 
 ```bash
 apt update
 ```
 
-**What this does**:
+Downloads the latest **package lists** from the repositories. **It installs nothing.** A fresh Ubuntu container has *empty* lists, which is why this error appears first:
+
 ```
-┌─────────────────────────────────────────────────┐
-│  1. Your Computer (Local Cache)                 │
-│     Last synced: 3 days ago                     │
-│     Has: 50,000 packages                        │
-│                                                 │
-│               ↓ apt update ↓                    │
-│                                                 │
-│  2. Repository Server                           │
-│     Current packages: 52,000                    │
-│     Added: nginx 1.24, git 2.40                │
-│                                                 │
-│               ↓ Download metadata ↓             │
-│                                                 │
-│  3. Your Computer (Updated Cache)               │
-│     Now synced with repository                  │
-│     Has: 52,000 packages                        │
-└─────────────────────────────────────────────────┘
+E: Unable to locate package curl
 ```
 
-**Output explanation**:
-```bash
-$ apt update
+Sample output:
 
-Hit:1 http://archive.ubuntu.com/ubuntu noble InRelease
-Get:2 http://security.ubuntu.com/ubuntu noble-security InRelease [126 kB]
-Get:3 http://archive.ubuntu.com/ubuntu noble-updates InRelease [126 kB]
-Fetched 252 kB in 2s (126 kB/s)
+```
+Get:1 http://archive.ubuntu.com/ubuntu noble InRelease [256 kB]
+Get:2 http://archive.ubuntu.com/ubuntu noble-updates InRelease [126 kB]
+...
+Fetched 25.5 MB in 3s
 Reading package lists... Done
-Building dependency tree... Done
-Reading state information... Done
-2 packages can be upgraded. Run 'apt list --upgradable' to see them.
 ```
 
-**Line-by-line**:
-1. `Hit:1` - Local cache is up-to-date for this source
-2. `Get:2` - Downloading new information from security updates
-3. `Fetched 252 kB` - Downloaded metadata (not packages)
-4. `Reading package lists` - Processing the downloaded information
-5. `2 packages can be upgraded` - Found newer versions available
+`Hit:` = index unchanged; `Get:` = downloading; `Ign:` = ignored.
 
-**Important**: `apt update` downloads **lists** of packages, not the packages themselves.
-
-### 2. Installing Packages
+### 5.2 `apt install`: install packages
 
 ```bash
 apt install curl
 ```
 
-**Full workflow**:
-```
-You type: apt install curl
-        ↓
-apt checks local cache: "Do I know what 'curl' is?"
-        ↓
-apt finds curl in cache
-        ↓
-apt checks dependencies: curl needs libcurl4
-        ↓
-apt downloads curl.deb and libcurl4.deb from repository
-        ↓
-apt calls dpkg to unpack and install
-        ↓
-dpkg runs preinst script
-        ↓
-dpkg copies files to /usr/bin/curl
-        ↓
-dpkg runs postinst script
-        ↓
-Installation complete!
-```
+Apt shows what it will do and asks `Do you want to continue? [Y/n]`. Add `-y` to say yes automatically (needed in scripts and Dockerfiles).
 
-**Output walkthrough**:
-```bash
-$ apt install curl
-
-Reading package lists... Done
-Building dependency tree... Done
-Reading state information... Done
+```
 The following additional packages will be installed:
-  libcurl4
+  libcurl4t64 ...
 The following NEW packages will be installed:
-  curl libcurl4
-0 upgraded, 2 newly installed, 0 to remove and 2 not upgraded.
-Need to get 452 kB of archives.
-After this operation, 1,234 kB of additional disk space will be used.
-Do you want to continue? [Y/n] y
-Get:1 http://archive.ubuntu.com/ubuntu noble/main amd64 libcurl4 [234 kB]
-Get:2 http://archive.ubuntu.com/ubuntu noble/main amd64 curl [218 kB]
-Fetched 452 kB in 1s (452 kB/s)
-Selecting previously unselected package libcurl4.
-Preparing to unpack .../libcurl4_7.81.0-1_amd64.deb ...
-Unpacking libcurl4 (7.81.0-1) ...
-Selecting previously unselected package curl.
-Preparing to unpack .../curl_7.81.0-1_amd64.deb ...
-Unpacking curl (7.81.0-1) ...
-Setting up libcurl4 (7.81.0-1) ...
-Setting up curl (7.81.0-1) ...
-Processing triggers for man-db (2.10.2-1) ...
+  curl libcurl4t64 ...
+0 upgraded, 4 newly installed, 0 to remove and 0 not upgraded.
+Need to get 1.1 MB of archives.
+After this operation, 4.7 MB of additional disk space will be used.
 ```
 
-**Understanding each line**:
-- `Reading package lists` - Loading the cache
-- `Building dependency tree` - Figuring out what else is needed
-- `libcurl4` - curl depends on this library
-- `Need to get 452 kB` - Total download size
-- `After this operation, 1,234 kB` - Disk space required
-- `Do you want to continue?` - Confirmation prompt
-- `Get:1`, `Get:2` - Downloading packages
-- `Unpacking` - Extracting files from .deb
-- `Setting up` - Running postinst scripts
-- `Processing triggers` - Updating system databases
-
-### 3. Removing Packages
+Handy variants:
 
 ```bash
-apt remove curl
+apt install -y curl git nano          # several at once, no prompt
+apt install --no-install-recommends -y curl   # skip "recommended" extras (smaller)
+apt install nginx=1.24.0-2ubuntu7     # a specific version
 ```
 
-**What happens**:
-```
-apt runs prerm script (if exists)
-        ↓
-apt calls dpkg to remove files
-        ↓
-dpkg removes /usr/bin/curl
-        ↓
-dpkg keeps configuration files
-        ↓
-apt runs postrm script
-        ↓
-Removal complete (config files remain)
-```
+Dependency types: **Depends** (mandatory), **Recommends** (installed by default, skip with `--no-install-recommends`), **Suggests** (only listed).
 
-**vs. Purge (complete removal)**:
+### 5.3 Finding packages
 
 ```bash
-apt purge curl
+apt search "web server"        # search names and descriptions (noisy)
+apt show nginx                 # details: version, dependencies, size, description
+apt list --installed | head    # what's installed
+apt list --upgradable          # what could be upgraded
+apt-cache policy nginx         # installed vs candidate version, and where from
+apt-file search bin/ping       # which package provides a file (install apt-file first)
 ```
 
-**Difference**:
-- `remove` - Deletes program, keeps configuration
-- `purge` - Deletes program AND configuration
-
-**Example**:
-```bash
-# After 'apt remove nginx'
-ls /etc/nginx/
-nginx.conf  (still there!)
-
-# After 'apt purge nginx'
-ls /etc/nginx/
-ls: cannot access '/etc/nginx/': No such file or directory
-```
-
-### 4. Upgrading Packages
+### 5.4 Removing
 
 ```bash
-apt upgrade
+apt remove curl        # remove the program, KEEP config files
+apt purge curl         # remove the program AND its system config files
+apt autoremove         # remove dependencies nobody needs anymore
+apt autoremove --purge # ...and their configs
 ```
 
-**What it does**:
-- Upgrades **all installed packages** to latest versions
-- Keeps same major version (safe upgrades)
-- Won't remove packages
-- Won't change dependencies drastically
+`apt remove` deliberately keeps configuration in `/etc` in case you reinstall. `purge` deletes it. (It does not delete your personal data in home directories.)
 
-**Example output**:
-```bash
-$ apt upgrade
-
-Reading package lists... Done
-Building dependency tree... Done
-Reading state information... Done
-Calculating upgrade... Done
-The following packages will be upgraded:
-  curl git vim
-3 upgraded, 0 newly installed, 0 to remove and 0 not upgraded.
-Need to get 8,234 kB of archives.
-After this operation, 123 kB of additional disk space will be used.
-Do you want to continue? [Y/n]
-```
-
-### 5. Searching for Packages
+### 5.5 Upgrading
 
 ```bash
-apt search nginx
+apt update && apt upgrade       # upgrade installed packages; never removes packages
+apt full-upgrade                # may also remove or install packages to resolve changes (was dist-upgrade)
+apt list --upgradable
 ```
 
-**Output**:
-```bash
-nginx/noble 1.24.0-1 amd64
-  high performance web server
+Always **update first, then upgrade**, since upgrade uses the lists that update downloads. In containers you normally do **not** upgrade in place; you rebuild the image from a newer base instead (see section 8).
 
-nginx-common/noble 1.24.0-1 all
-  common files for nginx
-
-nginx-core/noble 1.24.0-1 amd64
-  nginx web/proxy server (core version)
-```
-
-### 6. Getting Package Information
+### 5.6 Housekeeping
 
 ```bash
-apt show nginx
-```
-
-**Output**:
-```bash
-Package: nginx
-Version: 1.24.0-1
-Priority: optional
-Section: web
-Maintainer: Ubuntu Developers
-Installed-Size: 1,234 kB
-Depends: libc6, libssl3
-Homepage: https://nginx.org/
-Description: high performance web server
- Nginx is a web server with a focus on high concurrency,
- performance and low memory usage.
-```
-
-### 7. Cleaning Up
-
-```bash
-# Remove downloaded .deb files
-apt clean
-
-# Remove unneeded dependencies
-apt autoremove
-```
-
-**What `autoremove` does**:
-- Finds packages installed as dependencies
-- Checks if they're still needed
-- Removes orphaned packages
-
-**Example**:
-```bash
-$ apt autoremove
-
-Reading package lists... Done
-Building dependency tree... Done
-Reading state information... Done
-The following packages will be REMOVED:
-  libcurl4 (no longer needed by curl)
-0 upgraded, 0 newly installed, 1 to remove and 0 not upgraded.
-After this operation, 234 kB disk space will be freed.
-Do you want to continue? [Y/n]
-```
-
----
-
-## Understanding Repository Configuration
-
-How does apt know where to find packages?
-
-### The Configuration File
-
-Location: `/etc/apt/sources.list.d/ubuntu.sources`
-
-**View it**:
-```bash
-cat /etc/apt/sources.list.d/ubuntu.sources
-```
-
-**Contents**:
-```
-Types: deb
-URIs: http://archive.ubuntu.com/ubuntu/
-Suites: noble noble-updates noble-security
-Components: main restricted universe multiverse
-Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
-```
-
-**Breaking it down**:
-
-```
-Types: deb
-└─ We're using .deb package format
-
-URIs: http://archive.ubuntu.com/ubuntu/
-└─ Repository URL (where packages are stored)
-
-Suites: noble noble-updates noble-security
-        │     │             └─ Security patches
-        │     └───────────────── Bug fixes
-        └─────────────────────── Base packages
-
-Components: main restricted universe multiverse
-           │    │          │        └─ Unsupported, proprietary
-           │    │          └────────── Community-maintained
-           │    └───────────────────── Proprietary drivers
-           └────────────────────────── Official, supported
-```
-
-### How APT Uses This
-
-When you run `apt install git`:
-
-```
-1. apt reads /etc/apt/sources.list.d/ubuntu.sources
-2. apt connects to http://archive.ubuntu.com/ubuntu/
-3. apt looks in dists/noble/main/ (because git is in 'main')
-4. apt finds pool/main/g/git/git_2.34.1.deb
-5. apt downloads the .deb file
-6. apt calls dpkg to install it
-```
-
----
-
-## Real-World Example: Complete Installation
-
-Let's install VLC media player from start to finish.
-
-### Step 1: Start Ubuntu Container
-
-```bash
-docker run -it ubuntu:24.04 bash
-```
-
-### Step 2: Try Installing Without Updating (Will Fail!)
-
-```bash
-apt install vlc
-```
-
-**Output**:
-```
-Reading package lists... Done
-Building dependency tree... Done
-Reading state information... Done
-E: Unable to locate package vlc
-```
-
-**Why?** The container's package cache is **empty**!
-
-### Step 3: Update Package Cache
-
-```bash
-apt update
-```
-
-**What's happening**:
-```
-Connecting to http://archive.ubuntu.com/ubuntu/...
-Downloading package lists...
-  - dists/noble/main/Packages (23 MB)
-  - dists/noble/universe/Packages (14 MB)
-  - dists/noble/restricted/Packages (120 KB)
-Updating local cache...
-Done!
-```
-
-### Step 4: Install VLC
-
-```bash
-apt install vlc
-```
-
-**Output** (abbreviated):
-```
-The following additional packages will be installed:
-  libavcodec58 libavformat58 libavutil56 libvlc-bin libvlc5 
-  libvlccore9 vlc-data vlc-plugin-base vlc-plugin-qt
-  ... (20+ dependencies)
-
-Need to get 45.2 MB of archives.
-After this operation, 156 MB of additional disk space will be used.
-Do you want to continue? [Y/n] y
-
-Get:1 http://archive.ubuntu.com/ubuntu noble/universe amd64 libavutil56 [...]
-Get:2 http://archive.ubuntu.com/ubuntu noble/universe amd64 libavcodec58 [...]
-...
-Setting up vlc-data (3.0.18-1) ...
-Setting up libvlc5 (3.0.18-1) ...
-Setting up vlc (3.0.18-1) ...
-```
-
-**Notice**:
-- VLC requires 20+ dependencies (libraries, plugins)
-- apt automatically found and installed all of them
-- Total download: 45.2 MB
-- Total installed size: 156 MB
-- apt handled everything automatically!
-
-### Step 5: Verify Installation
-
-```bash
-which vlc
-# /usr/bin/vlc
-
-vlc --version
-# VLC media player 3.0.18 Vetinari
-```
-
-### Step 6: Remove VLC
-
-```bash
-apt remove vlc
-```
-
-**Output**:
-```
-The following packages will be REMOVED:
-  vlc vlc-plugin-base vlc-plugin-qt
-0 upgraded, 0 newly installed, 3 to remove and 0 not upgraded.
-After this operation, 12.3 MB disk space will be freed.
-Do you want to continue? [Y/n] y
-```
-
-**Notice**: apt only removes VLC and its direct plugins, not all dependencies. Why?
-
-### Step 7: Remove Unused Dependencies
-
-```bash
-apt autoremove
-```
-
-**Output**:
-```
-The following packages will be REMOVED:
-  libavcodec58 libavformat58 libavutil56 libvlc-bin libvlc5 
-  libvlccore9 vlc-data
-  ... (all the dependencies no longer needed)
-
-After this operation, 143 MB disk space will be freed.
-```
-
-**Now** we've completely removed VLC and all its unused dependencies!
-
----
-
-## Troubleshooting Common Issues
-
-### Issue 1: "Unable to locate package"
-
-**Symptom**:
-```bash
-apt install some-package
-E: Unable to locate package some-package
-```
-
-**Causes**:
-1. You forgot to run `apt update`
-2. Package name is wrong
-3. Package doesn't exist in your repositories
-
-**Solution**:
-```bash
-# Always update first
-apt update
-
-# Search for the correct name
-apt search some-package
-
-# Check if package exists
-apt show some-package
-```
-
-### Issue 2: "Could not get lock"
-
-**Symptom**:
-```bash
-apt install nginx
-E: Could not get lock /var/lib/dpkg/lock-frontend
-```
-
-**Cause**: Another apt process is running (or crashed)
-
-**Solution**:
-```bash
-# Wait if something is installing
-# Or kill stale process
-ps aux | grep apt
-kill <process-id>
-
-# Remove lock files (careful!)
-rm /var/lib/dpkg/lock-frontend
-rm /var/lib/apt/lists/lock
-```
-
-### Issue 3: Broken Dependencies
-
-**Symptom**:
-```bash
-The following packages have unmet dependencies:
- package-a : Depends: package-b (>= 2.0) but 1.9 is installed
-```
-
-**Solution**:
-```bash
-# Fix broken dependencies
-apt --fix-broken install
-
-# Or remove the problematic package
-apt remove package-a
-apt autoremove
-apt install package-a
-```
-
----
-
-## Advanced Concepts
-
-### Package Priorities
-
-When multiple repositories offer the same package, apt uses **priorities**:
-
-```
-Priority 990 - Currently installed version
-Priority 500 - Default repositories
-Priority 100 - Third-party repositories
-Priority   1 - Archived/outdated repositories
-```
-
-**Higher number = preferred**
-
-### Holding Packages
-
-Prevent a package from being upgraded:
-
-```bash
-apt-mark hold nginx
-# nginx set on hold.
-
-apt upgrade
-# nginx will be skipped!
-
+apt clean            # delete downloaded .deb files in /var/cache/apt/archives
+apt autoclean        # delete only obsolete ones
+apt-mark hold nginx  # prevent upgrades of this package
 apt-mark unhold nginx
-# Canceled hold on nginx.
+apt-mark showhold
 ```
 
-**Use case**: You need a specific version of a library that breaks with updates.
+---
 
-### Pinning Versions
+## 6. Where does apt keep things?
 
-Install a specific version:
+| Path | What |
+|---|---|
+| `/etc/apt/` | Configuration and sources |
+| `/var/lib/apt/lists/` | Downloaded package indexes (from `apt update`) |
+| `/var/cache/apt/archives/` | Downloaded `.deb` files |
+| `/var/lib/dpkg/status` | dpkg's database of installed packages |
+| `/var/lib/dpkg/info/` | Per-package file lists and maintainer scripts |
+| `/usr/share/keyrings/` | Repository signing keys |
+
+---
+
+## 7. Other package managers (side by side)
+
+| Task | Debian/Ubuntu (`apt`) | Fedora/RHEL/Rocky (`dnf`) | Alpine (`apk`) | Arch (`pacman`) |
+|---|---|---|---|---|
+| Refresh index | `apt-get update` | (automatic; `dnf makecache`) | `apk update` | `pacman -Sy` |
+| Install | `apt-get install -y curl` | `dnf install -y curl` | `apk add --no-cache curl` | `pacman -S curl` |
+| Remove | `apt-get remove curl` | `dnf remove curl` | `apk del curl` | `pacman -R curl` |
+| Upgrade all | `apt-get upgrade` | `dnf upgrade` | `apk upgrade` | `pacman -Syu` |
+| Search | `apt-cache search x` | `dnf search x` | `apk search x` | `pacman -Ss x` |
+| Info | `apt-cache show x` | `dnf info x` | `apk info x` | `pacman -Si x` |
+| Files of a package | `dpkg -L x` | `rpm -ql x` | `apk info -L x` | `pacman -Ql x` |
+| Low-level tool | `dpkg` | `rpm` | (`apk`) | (`pacman`) |
+
+On other operating systems the same idea exists: **Homebrew** on macOS, **winget**/**Chocolatey** on Windows, and language-level managers such as `pip`, `npm` or `cargo`. Do not confuse them with OS packages: `pip install` installs *Python libraries*, `apt install python3-requests` installs a *Debian-packaged* one.
+
+---
+
+## 8. Packages in Docker: doing it right (intermediate → expert)
+
+Almost every Dockerfile installs packages. Because each instruction creates an image **layer** (Chapter 7), *how* you write it matters for image size, correctness and reproducibility.
+
+### 8.1 The standard Debian/Ubuntu pattern
+
+```dockerfile
+FROM ubuntu:24.04
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      curl \
+      ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
+```
+
+Why each part:
+
+| Part | Reason |
+|---|---|
+| `apt-get`, not `apt` | Stable interface for scripts |
+| `update && install` in the **same `RUN`** | If they are separate layers, Docker may cache the `update` layer and later install from a *stale* index, producing 404 errors |
+| `-y` | No interactive prompt (there is nobody to press Y) |
+| `--no-install-recommends` | Skips optional extras: much smaller image |
+| `rm -rf /var/lib/apt/lists/*` (in the **same** layer) | Deletes the downloaded indexes. Deleting them in a *later* layer would not shrink the image, because earlier layers are immutable |
+| One package per line, alphabetical | Cleaner diffs, easy to review |
+| `ca-certificates` | Needed for HTTPS downloads. Slim images often lack it |
+
+> Ubuntu and Debian *base images* already include a small config that deletes downloaded `.deb` files after installation. But the package **lists** stay unless you remove them.
+
+### 8.2 Avoiding prompts
+Some packages ask questions (for example `tzdata` asks for a time zone), and the build hangs. Prevent it:
+
+```dockerfile
+ENV DEBIAN_FRONTEND=noninteractive
+```
+
+Better yet, set it only for the command: `RUN DEBIAN_FRONTEND=noninteractive apt-get install -y tzdata`. (Avoid setting it globally in the final image with `ENV`, because it also affects later interactive use.)
+
+### 8.3 Pin versions for reproducibility (production)
+
+```dockerfile
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      curl=8.5.0-2ubuntu10.6 \
+ && rm -rf /var/lib/apt/lists/*
+```
+
+Look up exact versions with `apt-cache policy curl`. Pinning stops silent changes, but you must update it deliberately for security fixes. Also pin the base image (`ubuntu:24.04`, or by digest), not `latest`.
+
+### 8.4 Don't do these
+
+| Bad practice | Why |
+|---|---|
+| `apt-get upgrade` in a Dockerfile | Makes builds non-reproducible. Start from an updated base image instead |
+| `RUN apt-get update` alone in its own layer | Stale cache problem, plus wasted layer |
+| Installing editors, `ssh`, `sudo`, debugging tools in production images | Larger attack surface, larger image |
+| Adding third-party repos without verifying keys | Supply-chain risk |
+| Using `apt` (not `apt-get`) | Warning: "apt does not have a stable CLI interface" |
+
+### 8.5 Other distributions in Dockerfiles
+
+```dockerfile
+# Alpine
+RUN apk add --no-cache curl ca-certificates
+
+# Fedora / Rocky / Alma
+RUN dnf install -y curl && dnf clean all
+
+# Debian slim is the same pattern as Ubuntu:
+FROM debian:12-slim
+```
+
+`apk add --no-cache` avoids storing the index, so no cleanup step is needed.
+
+### 8.6 Multi-stage builds: keep build tools out of the final image
+Compilers and `-dev` packages are needed only to *build*. Install them in a builder stage and copy just the result into a slim final stage (Chapter 20). This is the most effective way to shrink images and reduce attack surface.
+
+---
+
+## 9. Hands-on lab
+
+Run inside `docker run -it --rm ubuntu:24.04 bash` (it is disposable).
+
+**Lab 1: Empty cache, then fill it**
 
 ```bash
-# List available versions
-apt-cache policy nginx
-
-# Install specific version
-apt install nginx=1.18.0-1
-```
-
----
-
-## The Complete Workflow Diagram
-
-Let's visualize the entire process:
-
-```
-┌─────────────────────────────────────────────────────────┐
-│  YOU TYPE: apt install git                              │
-└────────────────────┬────────────────────────────────────┘
-                     ↓
-┌─────────────────────────────────────────────────────────┐
-│  APT (High-Level Package Manager)                       │
-├─────────────────────────────────────────────────────────┤
-│  1. Read /etc/apt/sources.list.d/ubuntu.sources         │
-│  2. Check local cache in /var/lib/apt/lists/            │
-│  3. Find 'git' package metadata                         │
-│  4. Check dependencies: vim, nano, curl                 │
-│  5. Find dependency packages in cache                   │
-│  6. Calculate download sizes                            │
-│  7. Download from repository:                           │
-│     http://archive.ubuntu.com/ubuntu/pool/main/g/git/   │
-│  8. Download dependencies too                           │
-│  9. Verify package signatures (security)                │
-│  10. Call dpkg for installation                         │
-└────────────────────┬────────────────────────────────────┘
-                     ↓
-┌─────────────────────────────────────────────────────────┐
-│  DPKG (Low-Level Package Manager)                       │
-├─────────────────────────────────────────────────────────┤
-│  For each package (vim, nano, curl, git):               │
-│  1. Run preinst script                                  │
-│  2. Unpack .deb file                                    │
-│  3. Extract files to correct locations:                 │
-│     - Binaries to /usr/bin/                             │
-│     - Libraries to /usr/lib/                            │
-│     - Config to /etc/                                   │
-│     - Docs to /usr/share/doc/                           │
-│  4. Run postinst script                                 │
-│  5. Update system package database                      │
-│  6. Register with dpkg                                  │
-└────────────────────┬────────────────────────────────────┘
-                     ↓
-┌─────────────────────────────────────────────────────────┐
-│  RESULT: Git is installed and ready to use!             │
-│  You can now run: git --version                         │
-└─────────────────────────────────────────────────────────┘
-```
-
----
-
-## Comparison with Other Operating Systems
-
-Understanding Linux package management is even better when compared to alternatives:
-
-### Windows
-
-```
-Old Way:
-1. Search Google for "download git windows"
-2. Navigate to official website
-3. Download .exe installer
-4. Run installer, click Next 10 times
-5. Hope it doesn't install bloatware
-
-Modern Way (with winget):
-winget install Git.Git
-```
-
-**Problems with traditional Windows approach**:
-- No centralized source (security risk)
-- No automatic updates
-- No dependency resolution
-- No easy removal
-- Bloatware/adware bundled
-
-### macOS
-
-```
-Old Way:
-1. Download .dmg file
-2. Drag to Applications folder
-3. Hope it includes all dependencies
-
-Modern Way (with Homebrew):
-brew install git
-```
-
-**Similar to Linux approach**, but:
-- Homebrew is third-party (not built-in)
-- Limited to CLI tools mainly
-- Slower than apt
-
-### Linux (apt)
-
-```
-apt install git
-```
-
-**Advantages**:
-- Built into the OS
-- Secure, verified repositories
-- Automatic dependency resolution
-- Easy updates: `apt upgrade`
-- Easy removal: `apt remove git`
-- Thousands of packages available
-- Completely free and open-source
-
----
-
-## Key Takeaways
-
-1. **Packages** bundle programs, dependencies, metadata, and installation scripts
-2. **Package repositories** are centralized, trusted warehouses of software
-3. **Package managers** automate downloading, installing, and managing software
-4. **High-level managers** (apt) handle dependencies and repositories
-5. **Low-level managers** (dpkg) perform actual installation
-6. **Always run `apt update`** before installing to refresh the package list
-7. **Ubuntu uses .deb format** (Debian-based)
-8. **RedHat uses .rpm format** (enterprise systems)
-9. **Package management is vastly superior** to manual installation
-10. **Understanding this is critical** for Docker, servers, and development
-
----
-
-## Practice Exercises
-
-### Exercise 1: Install and Verify
-
-```bash
-# Start fresh container
-docker run -it ubuntu:24.04 bash
-
-# Update cache
+apt install -y tree          # E: Unable to locate package tree  (no lists yet)
+ls /var/lib/apt/lists | head # almost empty
 apt update
-
-# Install tree (directory visualization tool)
-apt install tree
-
-# Verify installation
-which tree
+ls /var/lib/apt/lists | head # now filled
+apt install -y tree
 tree --version
-
-# Test it
-tree /etc/
+tree -L 1 /etc | head
 ```
 
-### Exercise 2: Dependency Exploration
+**Lab 2: Dependencies**
 
 ```bash
-# Check what nginx depends on
-apt show nginx
-
-# Install nginx
-apt install nginx
-
-# See all installed dependencies
-apt list --installed | grep nginx
+apt show git | grep -E '^(Depends|Recommends)'
+apt install -s git | head -20        # -s = simulate; shows what WOULD be installed
 ```
 
-### Exercise 3: Complete Removal
+**Lab 3: Inspect an installed package**
 
 ```bash
-# Install git
-apt install git
-
-# Note the disk space
-du -sh /usr/bin/git
-
-# Remove git
-apt remove git
-
-# Check if files remain
-ls /usr/bin/git  # Still there!
-
-# Completely remove
-apt purge git
-apt autoremove
-
-# Verify complete removal
-ls /usr/bin/git  # Gone!
+dpkg -L tree                 # files it installed
+dpkg -S "$(which tree)"      # which package owns /usr/bin/tree
+apt-cache policy tree        # version and origin
 ```
 
+**Lab 4: remove vs purge**
+
+```bash
+apt install -y nginx
+ls /etc/nginx | head -3
+apt remove -y nginx
+ls /etc/nginx | head -3          # config still there
+apt purge -y nginx
+ls /etc/nginx                    # No such file or directory
+apt autoremove -y
+```
+
+**Lab 5: Measure the effect of `--no-install-recommends`**
+
+```bash
+apt install -s git | grep -E 'newly installed'
+apt install -s --no-install-recommends git | grep -E 'newly installed'
+```
+
+You will see fewer packages with the second form.
+
+**Lab 6: Build a small image (needs a text editor on the host)**
+
+`Dockerfile`:
+
+```dockerfile
+FROM ubuntu:24.04
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends curl ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
+CMD ["curl", "--version"]
+```
+
+```bash
+docker build -t curl-demo .
+docker run --rm curl-demo
+docker images curl-demo
+```
+
+Now change the `RUN` line by removing the `rm -rf /var/lib/apt/lists/*` part, rebuild under another tag, and compare sizes with `docker images`.
+
 ---
 
-## Coming Up Next
+## 10. Troubleshooting
 
-In the next chapter, we'll explore **Linux Basic Commands** - the fundamental commands you'll use daily:
-- Navigating directories (`cd`, `ls`, `pwd`)
-- File operations (`cp`, `mv`, `rm`, `touch`)
-- Text manipulation (`cat`, `grep`, `sed`)
-- System information (`uname`, `whoami`, `df`)
-
-These commands are the **building blocks** of Linux mastery!
-
----
-
-## Conclusion
-
-Package management is one of Linux's greatest strengths. Understanding how apt, repositories, and packages work gives you:
-- **Control** over your software environment
-- **Security** through verified sources
-- **Efficiency** through automation
-- **Reproducibility** for Docker and development
-
-This knowledge is fundamental to:
-- Building Docker images (almost every Dockerfile starts with `apt install`)
-- Managing servers
-- Creating development environments
-- Understanding Linux at a deeper level
-
-**Next time** you're working with Docker and see `RUN apt-get update && apt-get install -y nginx`, you'll understand **exactly** what's happening under the hood!
-
-Keep practicing, and remember: **apt is your friend**. Master it, and you'll be far more productive than developers who fear the command line.
+| Error | Cause | Fix |
+|---|---|---|
+| `E: Unable to locate package X` | Index empty or stale; misspelled name; package in another component/release | `apt update`; check with `apt search X`; make sure `universe` is enabled if needed |
+| `E: Could not get lock /var/lib/dpkg/lock-frontend` | Another apt/dpkg is running (or crashed) | Wait for it. Check `ps aux \| grep -E 'apt\|dpkg'`. Only if you are sure it is dead, kill it and run `dpkg --configure -a`. Avoid deleting lock files by hand |
+| `E: Failed to fetch ... 404 Not Found` | Stale index (very common in Docker caches), or the release is end-of-life and moved to `old-releases` | `apt-get update` in the same `RUN`; use a supported release |
+| `dpkg: dependency problems prevent configuration of X` | Broken or partial install | `apt --fix-broken install` |
+| `E: Unmet dependencies. Try 'apt --fix-broken install'` | Conflicting versions | Same; or remove the conflicting package |
+| `debconf: unable to initialize frontend: Dialog` / build hangs at a question | Interactive package in a non-interactive shell | `DEBIAN_FRONTEND=noninteractive` |
+| `Temporary failure resolving 'archive.ubuntu.com'` | No network or DNS (proxy, VPN, firewall) | Check connectivity; configure a proxy or DNS for Docker |
+| `W: GPG error: ... NO_PUBKEY` | Missing signing key for a third-party repo | Add the vendor's key as documented (to a `Signed-By` keyring) |
+| `sudo: command not found` in a container | You are already root and sudo isn't installed | Just drop `sudo` |
+| `command not found` after `apt install` | Package installs the tool under a different name | `apt-file search bin/<tool>` or `dpkg -L <package>` |
 
 ---
 
-**Chapter Progress**: ✅ Chapter 18 Complete
+## 11. Common misconceptions
 
-**Next Chapter**: Chapter 19 - Linux Basic Commands
+| Misconception | Reality |
+|---|---|
+| "`apt update` updates my software" | It only refreshes the index. `apt upgrade` updates software |
+| "`apt` and `dpkg` are alternatives" | `apt` calls `dpkg`. dpkg alone doesn't resolve dependencies |
+| "Removing a package removes everything" | `remove` keeps config; deps stay until `autoremove` |
+| "`git` depends on vim, nano and curl" | It does not. Always check with `apt show` |
+| "I can `rm` the apt lists in a later layer to make the image smaller" | Earlier layers are immutable; the data still ships. Clean in the same `RUN` |
+| "`pip install` and `apt install` are the same thing" | Different ecosystems and tools |
+| "More installed packages = better container" | Each package adds size and attack surface |
+
+---
+
+## 12. Summary
+
+- A **package** = files + metadata + dependencies (+ scripts). **Repositories** serve signed packages. A **package manager** automates it all.
+- **`dpkg`** handles single `.deb` files; **`apt`** adds repositories, downloading and dependency resolution.
+- The core commands: `apt update`, `apt install`, `apt remove` / `purge`, `apt upgrade`, `apt search`, `apt show`, `apt autoremove`.
+- Fresh Docker images have **empty package lists**: run `apt-get update` first.
+- In Dockerfiles: `update` + `install -y --no-install-recommends` + cleanup, all in **one `RUN`**; pin versions when reproducibility matters; prefer multi-stage builds.
+- Other families: `dnf` (Red Hat), `apk` (Alpine), `pacman` (Arch), `zypper` (SUSE).
+
+---
+
+## 13. Check your understanding
+
+1. What is the difference between `apt update` and `apt upgrade`?
+2. Why does `apt install curl` fail in a brand-new `ubuntu:24.04` container?
+3. Why should `apt-get update` and `apt-get install` be in the same `RUN` instruction?
+4. What does `apt purge` do that `apt remove` does not?
+5. Why doesn't deleting `/var/lib/apt/lists` in a separate `RUN` reduce the image size?
+6. Which command shows which package installed `/usr/bin/curl`?
+
+<details>
+<summary>Answers</summary>
+
+1. `update` refreshes the list of available packages; `upgrade` installs newer versions of installed packages.
+2. The image ships with empty package lists; `apt update` must fetch them first.
+3. Docker caches layers; a cached `update` layer can go stale, so a later `install` may look for package versions that no longer exist.
+4. It also deletes the package's system configuration files.
+5. Layers are additive and immutable: the files still exist in the earlier layer. Cleanup must happen in the same layer that created them.
+6. `dpkg -S /usr/bin/curl`
+</details>
+
+**Practice:** write a Dockerfile that installs `git` and `curl` on `debian:12-slim` with a minimal layer, build it, and compare the image size with an `ubuntu:24.04` version. Then write the same for `alpine:3.20` using `apk`.
+
+---
+
+**Next:** [Chapter 12 – Linux Basic Commands](12_linux_basic_commands.md)

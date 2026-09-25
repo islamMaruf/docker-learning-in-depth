@@ -1,1523 +1,376 @@
-# Chapter 38: Hub, Switch, Router - Network Devices In Details
+# Chapter 38: Hub, Switch and Router
 
-## Overview
+> **In one sentence:** A **hub** repeats every signal out of every port (Layer 1, no intelligence), a **switch** learns which MAC lives on which port and forwards frames only where needed (Layer 2), and a **router** forwards packets between different IP networks (Layer 3); a home "router" is really a router, a switch and a Wi-Fi access point in one box.
 
-You now understand DHCP. You know how a computer acquires an IP address, subnet mask, gateway, and DNS servers through the DORA handshake. You understand how packets flow through the OSI layers—Application, Transport, Network, Data Link, Physical—and how each layer adds its headers before the NIC transmits electrical signals across the wire.
+**Level:** 🟢 Beginner → 🟡 Intermediate · **Reading time:** ~50 minutes
 
-But how does data actually travel from one computer to another? When you connect multiple computers together, what devices sit between them? How do those devices decide where to forward traffic?
-
-This chapter explores the three fundamental network devices that form the infrastructure of every network:
-
-**Hub (Layer 1 Device):** A blind repeater that floods traffic everywhere  
-**Switch (Layer 2 Device):** An intelligent forwarder that learns MAC addresses  
-**Router (Layer 3 Device):** A network-boundary gateway that understands IP addresses
-
-By the end of this chapter, you'll understand:
-- Why hubs are obsolete and inefficient
-- How switches build MAC address tables to forward intelligently
-- Why home routers contain both a switch and a router
-- How your computer decides whether to send packets directly to another device or through the router
-- The role subnet masks play in forwarding decisions
-
-**This is where individual computers become networks.**
+**Prerequisites:** Chapters [31](31_data_link_layer_frame_in_details.md) (frames/MACs/switching basics), [32](32_first_computer_and_first_router_in_details.md) (first router) and [33](33_subnetting_and_subnet_masks_in_details.md) (masks).
 
 ---
 
-## The Three Devices: OSI Layer Perspective
+## What you will learn
 
-Before diving into each device, understand their fundamental difference: **which OSI layer they operate at**.
-
-```
-┌─────────────────────────────────────────────────┐
-│ OSI Model                                       │
-├─────────────────────────────────────────────────┤
-│ Layer 7: Application                            │
-│ Layer 6: Presentation                           │
-│ Layer 5: Session                                │
-│ Layer 4: Transport                              │
-│ Layer 3: Network      ← ROUTER works here       │
-│ Layer 2: Data Link    ← SWITCH works here       │
-│ Layer 1: Physical     ← HUB works here          │
-└─────────────────────────────────────────────────┘
-```
-
-**Hub (L1 Device):**
-- Operates at Physical Layer only
-- Understands: Electrical signals (zeros and ones)
-- Cannot read: MAC addresses, IP addresses, ports, application data
-
-**Switch (L2 Device):**
-- Operates at Data Link Layer
-- Understands: MAC addresses, Ethernet frames
-- Cannot read: IP addresses, ports, application data
-
-**Router (L3 Device):**
-- Operates at Network Layer
-- Understands: IP addresses, subnets, routing
-- Can read: Everything below Layer 3 (MAC addresses, physical signals)
-
-**The higher the layer, the more intelligent the device.**
+- What **collision domains** and **broadcast domains** are, and why they matter
+- How a **hub** works (and why nobody sells them any more)
+- How a **switch** builds its **MAC address table (CAM)** by learning, and the exact **learn / forward / flood / filter** algorithm
+- How a **router** decides, and the **same-network vs different-network** rule that every host applies
+- **Managed switch** features: VLANs, trunks, STP, port mirroring, PoE, port security; **Layer 3 switches**
+- The **home router** = several devices in one, and where modem/firewall/AP fit
+- A **hands-on lab** that builds a switch with a Linux bridge, watches it learn, and turns it into a hub
+- Docker's bridge = a software switch; troubleshooting patterns
 
 ---
 
-## Part 1: Hub - The Blind Repeater
+## 1. Two important vocabulary words
 
-### What is a Hub?
+| Term | Meaning | Why care |
+|---|---|---|
+| **Collision domain** | The set of devices whose transmissions can **collide** if they talk at the same time (shared medium) | Smaller = faster; collisions only matter on shared/half-duplex media |
+| **Broadcast domain** | The set of devices that receive each other's **broadcast** frames (`ff:ff:ff:ff:ff:ff`) | Larger = more ARP/DHCP noise; one IP subnet ≈ one broadcast domain |
 
-A hub is the simplest network device. It connects multiple computers together, allowing them to communicate. But it does so in the most primitive way possible: **blind flooding**.
-
-```
-Physical appearance:
-┌───────────────────────────────────┐
-│  Network Hub (Ethernet Hub)       │
-│  ┌───┬───┬───┬───┬───┬───┬───┐   │
-│  │ 1 │ 2 │ 3 │ 4 │ 5 │ 6 │ 7 │   │  ← Ports (4-8 typical)
-│  └───┴───┴───┴───┴───┴───┴───┘   │
-└───────────────────────────────────┘
-
-Ethernet cables plug into these ports
-```
-
-**Typical port count:** 4, 5, 6, 7, or 8 ports maximum
+| Device | OSI layer | Collision domains | Broadcast domains |
+|---|---|---|---|
+| **Hub** | 1 | **One** for all ports | One |
+| **Switch** (unmanaged) | 2 | **One per port** (full duplex → effectively none) | **One** (all ports) |
+| **Switch with VLANs** | 2 | One per port | **One per VLAN** |
+| **Router** | 3 | One per interface | **One per interface** (broadcasts stop here) |
 
 ---
 
-### Hub Topology
+## 2. The hub: a "dumb" repeater
+
+A **hub** is a multi-port repeater: whatever electrical signal arrives on one port is **copied out of every other port**. It doesn't read frames, addresses or anything else.
 
 ```
-    Computer A
-    MAC: AA:BB:CC:DD:EE:FF
-         │
-         │
-    ┌────┴────┐
-    │         │
-    │   HUB   │  ← Layer 1 device (Physical Layer only)
-    │         │
-    └─┬──┬──┬─┘
-      │  │  │
-      │  │  └────── Computer C
-      │  │          MAC: CC:CC:CC:CC:CC:CC
-      │  │
-      │  └────────── Computer B
-      │             MAC: BB:BB:BB:BB:BB:BB
-      │
-      └──────────── Computer D
-                    MAC: DD:DD:DD:DD:DD:DD
+        PC-A ─┐          ┌─ PC-B
+              ├─  HUB  ──┤
+        PC-C ─┘          └─ PC-D
+
+A → B: the hub sends the signal to B, C and D. C and D hear it too and discard it (wrong MAC).
 ```
+Consequences:
+- **Everyone shares the bandwidth.** A 100 Mbit/s hub with 4 PCs gives them ~100 Mbit/s *in total*, not each.
+- **Half duplex only:** a device can't send and receive at the same time; two simultaneous senders **collide** and both back off (**CSMA/CD**, Chapter 31), so busy hubs slow to a crawl.
+- **No privacy:** any host with a NIC in promiscuous mode can read all traffic (easy sniffing).
+- **No filtering, no learning, no management.**
+
+Hubs vanished in the 2000s when switches became cheap. You will only meet them in textbooks, old labs, and (deliberately) in some tap/monitoring setups. The lesson they teach is what *every other device improves on*.
 
 ---
 
-### How Hub Works
+## 3. The switch: learn, then forward
 
-**Scenario:** Computer A sends a message to Computer D.
+A **switch** (a *multi-port bridge*) reads the **destination MAC** of each frame and sends it **only out the port where that MAC lives**. To know which port, it builds a **MAC address table** (also called **CAM table**, *content-addressable memory*, or forwarding database/FDB) by watching **source MACs**.
 
-#### Step 1: Computer A Sends Message
+### The learning algorithm
 
-```
-Computer A creates message:
-Layer 7 (Application): "Hello World"
-Layer 4 (Transport): Port 12345 → Port 80
-Layer 3 (Network): 192.168.1.10 → 192.168.1.13
-Layer 2 (Data Link): AA:BB:CC:DD:EE:FF → DD:DD:DD:DD:DD:DD
-Layer 1 (Physical): NIC converts to electrical signals
-
-         ↓
-    Electrical signals
-    (zeros and ones)
-         ↓
-       To Hub
-```
-
-#### Step 2: Hub Receives Electrical Signals
-
-**Hub's processing capability:**
+For every frame arriving on port *P*:
 
 ```
-Hub receives: 01010110101010101...
-
-Hub can read: Zeros and ones (electrical voltages)
-
-Hub CANNOT read:
-✗ MAC addresses (Data Link Layer)
-✗ IP addresses (Network Layer)
-✗ Ports (Transport Layer)
-✗ Application data (Application Layer)
-
-Hub only understands: SIGNAL PRESENT
+1. LEARN   : record (source MAC → port P, timestamp) in the table  (refresh if it exists)
+2. LOOK UP : find the destination MAC in the table
+3. DECIDE  :
+     dst is broadcast (ff:ff:ff:ff:ff:ff) or multicast   → FLOOD out all ports except P
+     dst found on port Q, Q ≠ P                           → FORWARD only to Q
+     dst found on port P (same port it came from)         → FILTER (drop; sender already reached it)
+     dst NOT in table (unknown unicast)                   → FLOOD out all ports except P
 ```
+Entries **age out** (typically **300 seconds** = 5 min by default) so moved or dead devices are forgotten.
 
-**Hub is completely blind to all higher-layer information.**
+### Worked example (four PCs on ports 1–4; the table starts empty)
 
-#### Step 3: Hub Forwards Blindly
+| # | Frame | Learn | Decision | Result |
+|---|---|---|---|---|
+| 1 | A→B (A on port 1) | `A → 1` | B unknown | **Flood** to 2, 3, 4 (C and D drop it) |
+| 2 | B→A (B on port 2) | `B → 2` | A known: port 1 | **Forward to 1 only** |
+| 3 | A→B | (refresh A) | B known: port 2 | **Forward to 2 only**; C and D are not disturbed |
+| 4 | C→D (C on 3) | `C → 3` | D unknown | Flood |
+| 5 | D→C | `D → 4` | C known: 3 | Forward to 3 |
+| 6 | A→ff:ff:… (ARP) | | broadcast | **Flood** always |
 
-**Hub's algorithm:**
-
-```python
-def hub_forward(signal, incoming_port):
-    """
-    Hub forwarding logic - braindead simple
-    """
-    for port in all_ports:
-        if port != incoming_port:  # Don't send back to source
-            forward(signal, port)
-```
-
-**What actually happens:**
+After step 5:
 
 ```
-Message arrives on Port 1 (from Computer A)
-
-Hub forwards to:
-- Port 2 (Computer B) ← Gets message NOT meant for it
-- Port 3 (Computer C) ← Gets message NOT meant for it  
-- Port 4 (Computer D) ← Gets message MEANT for it ✓
-
-Hub floods to ALL ports except source!
+MAC table:   A → port 1    B → port 2    C → port 3    D → port 4
 ```
+A↔B and C↔D can now talk **simultaneously** (each pair uses different ports, full duplex): the total capacity is the sum of the ports, not one shared wire.
 
-#### Step 4: Recipients Process Message
+### Switch vs hub
 
-**Computer B receives signals:**
+| | Hub | Switch |
+|---|---|---|
+| Sends a frame to | everyone | the right port (after learning) |
+| Simultaneous conversations | 1 | many |
+| Duplex | half | **full** |
+| Collisions | frequent | none in full duplex |
+| Sniffing others' traffic | trivial | needs tricks (MAC flooding, ARP spoofing, mirror port) |
+| Broadcast domain | one | one (same!) |
 
-```
-1. Physical Layer: Electrical signals → Frame
-2. Data Link Layer: Check destination MAC
-   Destination MAC: DD:DD:DD:DD:DD:DD
-   My MAC: BB:BB:BB:BB:BB:BB
-   ✗ Not for me! Discard at Layer 2
-   
-Never reaches Layer 3, 4, 5, 6, or 7
-```
+**A switch does not reduce broadcasts**: it still floods them to all ports of the VLAN. To split broadcast domains you need VLANs or a router.
 
-**Computer C receives signals:**
+### Forwarding modes (inside the switch)
+- **Store-and-forward:** receive the whole frame, check the FCS, then forward (drops corrupted frames; most common).
+- **Cut-through:** start forwarding once the destination MAC (first 6 bytes) is read; lower latency, may forward bad frames (data-center/low-latency switches).
 
-```
-1. Physical Layer: Electrical signals → Frame
-2. Data Link Layer: Check destination MAC
-   Destination MAC: DD:DD:DD:DD:DD:DD
-   My MAC: CC:CC:CC:CC:CC:CC
-   ✗ Not for me! Discard at Layer 2
-```
+### Managed switches: what else they do
 
-**Computer D receives signals:**
+| Feature | Purpose |
+|---|---|
+| **VLANs (802.1Q)** and **trunk** ports | Split one physical switch into several broadcast domains; carry many VLANs over one link with tags (Chapter 31) |
+| **STP / RSTP** (Spanning Tree) | Blocks redundant links so cabling loops don't create **broadcast storms** |
+| **Link aggregation (LACP, 802.3ad)** | Bundle links for bandwidth/redundancy |
+| **Port mirroring (SPAN)** | Copy traffic to a monitoring port for Wireshark/IDS |
+| **Port security** | Limit MACs per port; block unknown devices |
+| **DHCP snooping, Dynamic ARP Inspection** | Defend against rogue DHCP/ARP spoofing (Chapters 35, 39) |
+| **PoE (802.3af/at/bt)** | Power over Ethernet for access points, cameras, phones |
+| **QoS** | Prioritize voice/video |
+| **Layer 3 switch** | A switch with routing between VLANs (switched virtual interfaces, SVIs) in hardware |
 
-```
-1. Physical Layer: Electrical signals → Frame
-2. Data Link Layer: Check destination MAC
-   Destination MAC: DD:DD:DD:DD:DD:DD
-   My MAC: DD:DD:DD:DD:DD:DD
-   ✓ For me! Accept and pass to Layer 3
-3. Network Layer: Check destination IP (matches)
-4. Transport Layer: Check destination port (matches)
-5. Application Layer: Receive "Hello World"
-```
+### Attacks and limits
+- **MAC flooding (CAM overflow):** an attacker sends frames with thousands of fake source MACs, filling the table; the switch then floods unknown unicast like a hub, exposing traffic. Defense: port security.
+- The table has finite size (thousands to hundreds of thousands of entries).
+- **Loops:** without STP a loop turns broadcasts into an endless storm.
 
 ---
 
-### Hub Characteristics
+## 4. The router: connecting networks
 
-**Advantages:**
-- Simple and cheap
-- No configuration required
-- Works immediately
-
-**Disadvantages:**
-- **Wastes bandwidth:** Every message goes to every computer
-- **No intelligence:** Cannot learn or optimize
-- **Security risk:** All computers receive all traffic (packet sniffing easy)
-- **Collision domain:** All ports share the same bandwidth
-- **Poor scalability:** Performance degrades with each added device
-
-**Modern status:** Obsolete. Nobody uses hubs anymore.
-
----
-
-### Hub Summary
+A **router** has an interface in **each** network and forwards **IP packets** between them using its **routing table** (Chapter 42):
 
 ```
-Hub = Layer 1 Device
-
-Capabilities:
-✓ Receives electrical signals
-✓ Regenerates signals (amplification)
-✓ Forwards to all ports except source
-
-Limitations:
-✗ Cannot read MAC addresses
-✗ Cannot read IP addresses
-✗ Cannot read ports
-✗ Cannot read application data
-✗ Cannot make intelligent forwarding decisions
-
-Behavior: Blind flooding
-Intelligence level: Zero
+Network 192.168.1.0/24                  Network 10.0.0.0/24
+   PC-A  PC-B   ── [switch] ── eth1:192.168.1.1  ROUTER  eth2:10.0.0.1 ── [switch] ── Server
 ```
+Key differences from a switch:
 
----
+| | Switch | Router |
+|---|---|---|
+| Looks at | Ethernet **MAC** | **IP** address |
+| Table | MAC table (learned automatically) | Routing table (configured or learned via routing protocols) |
+| Forwards broadcasts? | Yes (within the VLAN) | **No** |
+| Rewrites the frame? | No | Yes: new L2 header per hop; TTL−1; recompute IP checksum |
+| Separates | Collision domains | **Broadcast domains** and networks |
+| Extras | VLAN, STP | NAT, firewall, DHCP relay/server, VPN, routing protocols (OSPF, BGP) |
 
-## Part 2: Switch - The Intelligent Learner
-
-### What is a Switch?
-
-A switch is a **Layer 2 device** that operates at the Data Link Layer. Unlike a hub, a switch **can read MAC addresses** and make intelligent forwarding decisions.
+### The home router = several devices in one
 
 ```
-Physical appearance:
-┌────────────────────────────────────────────┐
-│  Network Switch                            │
-│  ┌──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┐    │
-│  │1 │2 │3 │4 │5 │6 │7 │8 │9 │10│11│12│    │  ← Ports (12-48 typical)
-│  └──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┘    │
-└────────────────────────────────────────────┘
-
-Much more ports than hub!
-Can have 12, 24, 48, or even 96 ports
+┌────────────────────────── the plastic box from your ISP / shop ─────────────────────────┐
+│  [Modem / ONT]  ── WAN port ──►  ROUTER  ◄── internal link ──►  4-port SWITCH ── LAN 1-4 │
+│  (sometimes a separate box)      NAT · firewall · DHCP · DNS forwarder                   │
+│                                        └───────►  Wi-Fi ACCESS POINT (radios)            │
+└──────────────────────────────────────────────────────────────────────────────────────────┘
 ```
+| Component | Role | Layer |
+|---|---|---|
+| Modem/ONT | Converts DOCSIS/DSL/fiber signals to Ethernet | 1 |
+| Router | Forwards between LAN (`192.168.1.0/24`) and WAN (ISP) | 3 |
+| Switch | Connects LAN ports (and the AP) into one LAN | 2 |
+| Access point | Bridges 802.11 Wi-Fi to that Ethernet LAN | 1-2 |
+| DHCP server, DNS forwarder | Configure/serve clients | 7 |
+| NAT + stateful firewall | Share one public IP, block unsolicited inbound | 3-4 |
 
-**Key difference:** Switch maintains a **MAC address table** mapping MAC addresses to port numbers.
+So the "LAN ports" are switch ports, the "WAN/Internet port" is the router's outside interface, and Wi-Fi and Ethernet devices share one subnet.
 
 ---
 
-### Switch Topology
+## 5. The rule every host follows: same network or different network?
+
+Before sending, a host compares **destination AND mask** with **its own network** (Chapter 33):
 
 ```
-      Computer A
-      MAC: AA:AA:AA:AA:AA:AA
-      IP: 192.168.1.10
-           │
-           │ Port 1
-      ┌────┴────────┐
-      │             │
-      │   SWITCH    │  ← Layer 2 device (Data Link Layer)
-      │             │    Maintains MAC address table
-      └─┬──┬──┬──┬──┘
-        │  │  │  │
-   Port │  │  │  │ Port 5
-        2  3  4  
-        │  │  │
-        │  │  └────── Computer D
-        │  │          MAC: DD:DD:DD:DD:DD:DD
-        │  │          IP: 192.168.1.13
-        │  │
-        │  └────────── Computer C
-        │             MAC: CC:CC:CC:CC:CC:CC
-        │             IP: 192.168.1.12
-        │
-        └──────────── Computer B
-                      MAC: BB:BB:BB:BB:BB:BB
-                      IP: 192.168.1.11
+Host A: 192.168.1.10/24, gateway 192.168.1.1
 ```
+**To B = 192.168.1.20 (same network):**
+```
+Layer 3: src 192.168.1.10 → dst 192.168.1.20
+ARP:     "who has 192.168.1.20?" → B's MAC (bb:bb:...)
+Layer 2: src MAC A, dst MAC B          ← the frame goes directly, via the switch only
+```
+**To S = 10.0.0.5 (different network):**
+```
+Layer 3: src 192.168.1.10 → dst 10.0.0.5    (IP addresses stay end-to-end, apart from NAT)
+ARP:     "who has 192.168.1.1?"  (the GATEWAY, not the server)
+Layer 2: src MAC A, dst MAC of the ROUTER's interface   ← router receives it, re-frames it on the other side
+```
+
+| Devices involved | Same network | Different network |
+|---|---|---|
+| Switch(es) | Yes: forwards by MAC | Yes on each side, to reach the router |
+| Router | **Never sees the traffic** | Yes: forwards, TTL−1 |
+| ARP target | The destination host | The default gateway |
+
+Golden rule: **the IP destination is the final host; the MAC destination is only the next hop.**
 
 ---
 
-### The CAM Table (MAC Address Table)
+## 6. Lab: build a switch, watch it learn, and turn it into a hub
 
-**Switch maintains an internal table:**
-
-```
-CAM Table (Content Addressable Memory Table)
-Also known as:
-- MAC Address Table
-- Forwarding Database
-- Bridge Table
-
-┌─────────────────┬──────────┐
-│  MAC Address    │   Port   │
-├─────────────────┼──────────┤
-│ (empty)         │ (empty)  │  ← Initially empty!
-└─────────────────┴──────────┘
-
-Switch learns dynamically by observing traffic
-```
-
----
-
-### How Switch Learns: Step-by-Step Example
-
-#### Initial State: Empty CAM Table
-
-```
-All computers connected, but switch knows nothing yet
-
-CAM Table:
-┌─────────────────┬──────────┐
-│  MAC Address    │   Port   │
-├─────────────────┼──────────┤
-│                 │          │  ← Empty
-└─────────────────┴──────────┘
-```
-
----
-
-#### Message 1: Computer A → Computer D
-
-**Step 1: Computer A Sends Data**
-
-```
-Application Layer: "I love you"
-Transport Layer: 51561 → 3000
-Network Layer: 192.168.1.10 → 192.168.1.13
-Data Link Layer: AA:AA:AA:AA:AA:AA → DD:DD:DD:DD:DD:DD
-Physical Layer: Electrical signals → Switch Port 1
-```
-
-**Step 2: Switch Receives on Port 1**
-
-```
-Switch processing:
-1. Physical Layer receives electrical signals
-2. Data Link Layer decodes frame:
-
-   ┌────────────────────────────────────────┐
-   │ Ethernet Frame                         │
-   ├────────────────────────────────────────┤
-   │ Source MAC: AA:AA:AA:AA:AA:AA          │  ← Switch reads this!
-   │ Dest MAC: DD:DD:DD:DD:DD:DD            │  ← Switch reads this!
-   │ EtherType: 0x0800 (IPv4)               │
-   │ Payload: [IP packet with data]         │
-   │ FCS: 0x1234ABCD                        │
-   └────────────────────────────────────────┘
-
-3. Switch extracts Source MAC: AA:AA:AA:AA:AA:AA
-4. Switch notes: "This MAC is on Port 1"
-```
-
-**Step 3: Switch Updates CAM Table (Learning)**
-
-```
-CAM Table after learning source:
-┌─────────────────────┬──────────┐
-│  MAC Address        │   Port   │
-├─────────────────────┼──────────┤
-│ AA:AA:AA:AA:AA:AA   │    1     │  ← LEARNED!
-└─────────────────────┴──────────┘
-
-Switch: "Aha! MAC AA:AA:... is on Port 1. I'll remember this."
-```
-
-**Step 4: Switch Checks Destination**
-
-```
-Destination MAC: DD:DD:DD:DD:DD:DD
-
-Switch checks CAM table:
-Is DD:DD:DD:DD:DD:DD in table? NO
-
-Switch decision:
-"I don't know where DD:DD:... is yet.
- I must FLOOD to all ports except Port 1."
-```
-
-**Step 5: Switch Floods to All Ports**
-
-```
-Switch forwards frame to:
-- Port 2 (Computer B)
-- Port 3 (Computer C)
-- Port 4 (Computer D)
-- Port 5 (not shown, would flood here too if connected)
-
-Same behavior as hub at this point!
-But switch is learning...
-```
-
-**Step 6: Recipients Process Frame**
-
-```
-Computer B (Port 2):
-- Receives frame
-- Checks Dest MAC: DD:DD:DD:DD:DD:DD
-- My MAC: BB:BB:BB:BB:BB:BB
-- ✗ Not for me, discard at Layer 2
-
-Computer C (Port 3):
-- Receives frame
-- Checks Dest MAC: DD:DD:DD:DD:DD:DD
-- My MAC: CC:CC:CC:CC:CC:CC
-- ✗ Not for me, discard at Layer 2
-
-Computer D (Port 4):
-- Receives frame
-- Checks Dest MAC: DD:DD:DD:DD:DD:DD
-- My MAC: DD:DD:DD:DD:DD:DD
-- ✓ For me! Accept and process
-- Passes to Layer 3 → Layer 4 → Layer 5-7
-- Application receives: "I love you"
-```
-
----
-
-#### Message 2: Computer D → Computer A (Reply)
-
-**Step 1: Computer D Sends Reply**
-
-```
-Application Layer: "I love you too"
-Transport Layer: 3000 → 51561 (reversed ports)
-Network Layer: 192.168.1.13 → 192.168.1.10 (reversed IPs)
-Data Link Layer: DD:DD:DD:DD:DD:DD → AA:AA:AA:AA:AA:AA (reversed MACs)
-Physical Layer: Electrical signals → Switch Port 4
-```
-
-**Step 2: Switch Receives on Port 4**
-
-```
-Switch decodes frame:
-Source MAC: DD:DD:DD:DD:DD:DD  ← On Port 4
-Dest MAC: AA:AA:AA:AA:AA:AA
-
-Switch learns: "DD:DD:... is on Port 4"
-```
-
-**Step 3: Switch Updates CAM Table**
-
-```
-CAM Table after learning:
-┌─────────────────────┬──────────┐
-│  MAC Address        │   Port   │
-├─────────────────────┼──────────┤
-│ AA:AA:AA:AA:AA:AA   │    1     │
-│ DD:DD:DD:DD:DD:DD   │    4     │  ← LEARNED!
-└─────────────────────┴──────────┘
-```
-
-**Step 4: Switch Checks Destination**
-
-```
-Destination MAC: AA:AA:AA:AA:AA:AA
-
-Switch checks CAM table:
-Is AA:AA:... in table? YES! Port 1!
-
-Switch decision:
-"I know where AA:AA:... is! Port 1!
- I will forward ONLY to Port 1, not flood."
-```
-
-**Step 5: Switch Forwards Intelligently**
-
-```
-Switch forwards frame to:
-- Port 1 ONLY (Computer A) ✓
-
-Does NOT forward to:
-- Port 2 (Computer B) ✗
-- Port 3 (Computer C) ✗
-- Port 5 (if exists) ✗
-
-MUCH more efficient than hub!
-Only Computer A receives this frame
-```
-
-**Switch has learned and is now forwarding intelligently!**
-
----
-
-#### Message 3: Computer A → Computer D (Again)
-
-**Now switch knows both MACs!**
-
-```
-Computer A sends again:
-Source MAC: AA:AA:AA:AA:AA:AA (Port 1)
-Dest MAC: DD:DD:DD:DD:DD:DD
-
-CAM Table lookup:
-AA:AA:... → Port 1 (already known)
-DD:DD:... → Port 4 (already known!)
-
-Action: Forward ONLY to Port 4
-
-No flooding needed!
-Perfect efficiency!
-```
-
----
-
-### Switch Learning Algorithm
-
-```python
-def switch_process_frame(frame, incoming_port):
-    """
-    Switch processing logic
-    """
-    # Step 1: Learn source MAC
-    source_mac = frame.source_mac
-    cam_table[source_mac] = incoming_port
-    print(f"Learned: {source_mac} is on Port {incoming_port}")
-    
-    # Step 2: Check destination MAC
-    dest_mac = frame.destination_mac
-    
-    if dest_mac in cam_table:
-        # Known destination - forward only to that port
-        dest_port = cam_table[dest_mac]
-        if dest_port != incoming_port:  # Don't send back to source
-            forward(frame, dest_port)
-            print(f"Forwarding to Port {dest_port} only")
-    else:
-        # Unknown destination - flood to all ports except source
-        for port in all_ports:
-            if port != incoming_port:
-                forward(frame, port)
-        print(f"Flooding to all ports except Port {incoming_port}")
-```
-
----
-
-### Switch Advantages Over Hub
-
-```
-Hub vs Switch:
-
-Initial message (unknown destination):
-Hub: Floods to all ports
-Switch: Floods to all ports (same as hub)
-
-Subsequent messages (learned destination):
-Hub: STILL floods to all ports (never learns)
-Switch: Forwards ONLY to destination port ✓
-
-Result:
-- Switch reduces unnecessary traffic
-- Switch improves security (only destination sees traffic)
-- Switch scales better with more devices
-- Switch eliminates collisions (dedicated bandwidth per port)
-```
-
----
-
-### What Switch CANNOT Do
-
-**Switch operates at Layer 2 only:**
-
-```
-Switch can read:
-✓ Source MAC address
-✓ Destination MAC address
-✓ Ethernet frame headers
-
-Switch CANNOT read:
-✗ IP addresses (Layer 3 - Network Layer)
-✗ Ports (Layer 4 - Transport Layer)
-✗ Application data (Layer 7)
-
-Switch cannot crack open the IP packet!
-Layer 3 is a black box to the switch.
-```
-
-**Example:**
-
-```
-Frame arriving at switch:
-┌────────────────────────────────────────┐
-│ Data Link Layer (Switch can see)      │
-├────────────────────────────────────────┤
-│ Source MAC: AA:AA:AA:AA:AA:AA  ← Readable
-│ Dest MAC: DD:DD:DD:DD:DD:DD    ← Readable
-│ EtherType: 0x0800               ← Readable
-├────────────────────────────────────────┤
-│ Network Layer Payload              │
-│ ┌──────────────────────────────┐  │
-│ │ Source IP: 192.168.1.10      │  │  ← UNREADABLE
-│ │ Dest IP: 192.168.1.13        │  │  ← UNREADABLE
-│ │ [Transport Layer data]       │  │  ← UNREADABLE
-│ └──────────────────────────────┘  │
-└────────────────────────────────────────┘
-
-Switch: "I can only see MAC addresses. The rest is encrypted
-         in a sense - it's in a protocol layer I don't understand."
-```
-
----
-
-### CAM Table Names
-
-**This table has many names in the industry:**
-
-```
-Official names:
-1. CAM Table (Content Addressable Memory Table)
-   - Hardware-level name
-   - Named after the memory type used
-
-2. MAC Address Table
-   - Most common name
-   - Used in CCNA, textbooks, most documentation
-
-3. Forwarding Database
-   - IEEE 802.1D official term
-   - Used in bridge/switch standards
-
-4. Bridge Table
-   - Historical name (switches evolved from bridges)
-   - Still used in some contexts
-
-All refer to the SAME table!
-```
-
-**Why multiple names?**
-
-Historical reasons. Different organizations, different eras, different contexts. The functionality is identical—it maps MAC addresses to ports.
-
----
-
-### Switch Summary
-
-```
-Switch = Layer 2 Device
-
-Capabilities:
-✓ Reads MAC addresses
-✓ Maintains CAM table (MAC → Port mapping)
-✓ Learns dynamically by observing traffic
-✓ Forwards intelligently to specific ports
-✓ Reduces unnecessary traffic
-
-Limitations:
-✗ Cannot read IP addresses (Layer 3)
-✗ Cannot read ports (Layer 4)
-✗ Cannot read application data (Layer 7)
-✗ Cannot route between different networks
-
-Behavior: Intelligent forwarding after learning
-Intelligence level: Medium (smart, but limited to Layer 2)
-```
-
----
-
-## Part 3: Router - The Network Gateway
-
-### What is a Router?
-
-A router is a **Layer 3 device** that operates at the Network Layer. Routers **understand IP addresses** and can route traffic between different networks.
-
-```
-Physical appearance (home router):
-┌───────────────────────────────────────┐
-│  Home Router                          │
-│  ┌──┬──┬──┬──┐                        │
-│  │1 │2 │3 │4 │  ← LAN Ports          │
-│  └──┴──┴──┴──┘                        │
-│                                       │
-│  [WAN]  ← WAN Port (Internet)         │
-│  [WiFi antenna]                       │
-└───────────────────────────────────────┘
-
-You recognize this! Everyone has one at home.
-```
-
----
-
-### The Hidden Truth: Home Routers Contain TWO Devices
-
-**What you call a "router" is actually TWO devices in one box:**
-
-```
-Your "Home Router" = Switch + Router combined
-
-Physical device view:
-┌─────────────────────────────────────────────────┐
-│  Home Router (External View)                    │
-│  ┌──┬──┬──┬──┐  [WAN]  [WiFi]                  │
-│  │1 │2 │3 │4 │   Port   Antenna                │
-│  └──┴──┴──┴──┘                                  │
-└─────────────────────────────────────────────────┘
-
-Internal components:
-┌─────────────────────────────────────────────────┐
-│  Inside the "Router"                            │
-│                                                 │
-│  ┌─────────────────┐      ┌─────────────────┐  │
-│  │                 │      │                 │  │
-│  │     SWITCH      │◄────►│     ROUTER      │  │
-│  │  (Layer 2)      │      │   (Layer 3)     │  │
-│  │                 │      │                 │  │
-│  │  LAN Interface  │      │  WAN Interface  │  │
-│  │  Ports 1-4      │      │  Internet Port  │  │
-│  │  + WiFi         │      │                 │  │
-│  └─────────────────┘      └─────────────────┘  │
-│                                                 │
-└─────────────────────────────────────────────────┘
-
-Port 1, 2, 3, 4 connect to SWITCH component
-Switch connects to ROUTER component
-Router connects to WAN (Internet)
-```
-
-**When you plug an Ethernet cable into your "router," you're actually plugging into the SWITCH component!**
-
----
-
-### Router Components Explained
-
-#### LAN Interface
-
-```
-LAN Interface (Local Area Network side)
-┌─────────────────────────────────────┐
-│ LAN Interface                       │
-│ IP: 192.168.1.1                     │  ← Private IP
-│ MAC: AA:11:22:33:44:55              │  ← Router's LAN MAC
-│ Subnet: 255.255.255.0 (/24)         │
-│                                     │
-│ Connected to internal switch        │
-│ Serves as default gateway           │
-│ Runs DHCP server                    │
-└─────────────────────────────────────┘
-```
-
-#### WAN Interface
-
-```
-WAN Interface (Wide Area Network side - Internet)
-┌─────────────────────────────────────┐
-│ WAN Interface                       │
-│ IP: 203.0.113.45                    │  ← Public IP (from ISP)
-│ MAC: BB:66:77:88:99:AA              │  ← Router's WAN MAC
-│                                     │
-│ Connected to ISP (Internet)         │
-│ Acquires IP via DHCP from ISP       │
-└─────────────────────────────────────┘
-
-Initially: No IP assigned
-After connecting to ISP: Receives public IP via DHCP
-```
-
-#### Internal Switch
-
-```
-Internal Switch (Built-in)
-┌─────────────────────────────────────┐
-│ Switch Component                    │
-│                                     │
-│ Port 1: Computer A                  │
-│ Port 2: Computer B                  │
-│ Port 3: Computer C                  │
-│ Port 4: (available)                 │
-│ Port 5 (logical): Router Interface  │  ← Switch sees router
-│                                     │    as another device
-│ CAM Table maintained                │
-└─────────────────────────────────────┘
-```
-
-**Key insight:** The switch doesn't know it's "part of" the router. It just sees the router as another connected device on a port!
-
----
-
-### Home Router Scenario
-
-```
-Full topology:
-                        Internet
-                           │
-                           │ WAN Interface
-                           │ IP: 203.0.113.45 (public)
-                    ┌──────┴──────┐
-                    │             │
-                    │   ROUTER    │  Layer 3 device
-                    │             │  LAN MAC: AA:11:22:33:44:55
-                    └──────┬──────┘
-                           │ LAN Interface
-                           │ IP: 192.168.1.1 (private)
-                    ┌──────┴──────┐
-                    │             │
-                    │   SWITCH    │  Layer 2 device
-                    │             │  (built into "router")
-                    └─┬──┬──┬──┬──┘
-                      │  │  │  │
-              Port:   1  2  3  4
-                      │  │  │  │
-                      │  │  │  └─── Computer D
-                      │  │  │       IP: 192.168.1.13
-                      │  │  │       MAC: DD:DD:DD:DD:DD:DD
-                      │  │  │
-                      │  │  └─────── Computer C
-                      │  │          IP: 192.168.1.12
-                      │  │          MAC: CC:CC:CC:CC:CC:CC
-                      │  │
-                      │  └────────── Computer B
-                      │             IP: 192.168.1.11
-                      │             MAC: BB:BB:BB:BB:BB:BB
-                      │
-                      └──────────── Computer A
-                                    IP: 192.168.1.10
-                                    MAC: AA:AA:AA:AA:AA:AA
-
-All computers' default gateway: 192.168.1.1 (router's LAN IP)
-All computers' subnet mask: 255.255.255.0
-```
-
----
-
-## How Devices Decide: Same Network or Different Network?
-
-**This is the crucial decision every computer makes before sending data.**
-
-### The Algorithm
-
-**Before creating the Data Link Layer frame, the sending computer calculates:**
-
-```
-Step 1: Calculate own network
-Own_Network = Own_IP AND Subnet_Mask
-
-Step 2: Calculate destination network
-Dest_Network = Dest_IP AND Subnet_Mask
-
-Step 3: Compare
-IF Own_Network == Dest_Network:
-    Same network!
-    Send directly to destination
-    Use destination's MAC address
-ELSE:
-    Different network!
-    Send to default gateway (router)
-    Use router's MAC address
-```
-
----
-
-### Example 1: Same Network Communication
-
-**Computer A (192.168.1.10) sends to Computer C (192.168.1.12)**
-
-```
-Computer A's calculation:
-┌─────────────────────────────────────────┐
-│ Own IP: 192.168.1.10                    │
-│ Subnet: 255.255.255.0                   │
-│ AND operation:                           │
-│   192.168.1.10                          │
-│ & 255.255.255.0                         │
-│ ────────────────                         │
-│ = 192.168.1.0    ← Own network          │
-└─────────────────────────────────────────┘
-
-┌─────────────────────────────────────────┐
-│ Dest IP: 192.168.1.12                   │
-│ Subnet: 255.255.255.0                   │
-│ AND operation:                           │
-│   192.168.1.12                          │
-│ & 255.255.255.0                         │
-│ ────────────────                         │
-│ = 192.168.1.0    ← Dest network         │
-└─────────────────────────────────────────┘
-
-Comparison:
-Own network: 192.168.1.0
-Dest network: 192.168.1.0
-MATCH! ✓
-
-Decision: Same network!
-Action: Send directly to Computer C
-```
-
-**Data Link Layer frame:**
-
-```
-Ethernet Frame:
-┌────────────────────────────────────────┐
-│ Source MAC: AA:AA:AA:AA:AA:AA          │  ← Computer A
-│ Dest MAC: CC:CC:CC:CC:CC:CC            │  ← Computer C directly!
-│ EtherType: 0x0800                      │
-├────────────────────────────────────────┤
-│ IP Packet:                             │
-│   Source IP: 192.168.1.10              │
-│   Dest IP: 192.168.1.12                │
-│   [Rest of packet]                     │
-└────────────────────────────────────────┘
-
-Destination MAC = Computer C's MAC (not router!)
-```
-
-**Switch receives frame:**
-
-```
-Switch CAM table lookup:
-Source MAC: AA:AA:AA:AA:AA:AA → Learn Port 1
-Dest MAC: CC:CC:CC:CC:CC:CC → Check table
-
-If CC:CC:... in table (Port 3): Forward to Port 3 only
-If CC:CC:... not in table: Flood to all ports
-
-Router's port: NOT included in this communication!
-Router doesn't participate!
-```
-
----
-
-### Example 2: Different Network Communication
-
-**Computer A (192.168.1.10) sends to Internet (8.8.8.8 - Google DNS)**
-
-```
-Computer A's calculation:
-┌─────────────────────────────────────────┐
-│ Own IP: 192.168.1.10                    │
-│ Subnet: 255.255.255.0                   │
-│ AND operation:                           │
-│   192.168.1.10                          │
-│ & 255.255.255.0                         │
-│ ────────────────                         │
-│ = 192.168.1.0    ← Own network          │
-└─────────────────────────────────────────┘
-
-┌─────────────────────────────────────────┐
-│ Dest IP: 8.8.8.8                        │
-│ Subnet: 255.255.255.0                   │
-│ AND operation:                           │
-│   8.8.8.8                               │
-│ & 255.255.255.0                         │
-│ ────────────────                         │
-│ = 8.8.8.0        ← Dest network         │
-└─────────────────────────────────────────┘
-
-Comparison:
-Own network: 192.168.1.0
-Dest network: 8.8.8.0
-NO MATCH! ✗
-
-Decision: Different network!
-Action: Send to default gateway (router)
-```
-
-**Data Link Layer frame:**
-
-```
-Ethernet Frame:
-┌────────────────────────────────────────┐
-│ Source MAC: AA:AA:AA:AA:AA:AA          │  ← Computer A
-│ Dest MAC: AA:11:22:33:44:55            │  ← ROUTER's MAC!
-│ EtherType: 0x0800                      │
-├────────────────────────────────────────┤
-│ IP Packet:                             │
-│   Source IP: 192.168.1.10              │  ← Still Computer A
-│   Dest IP: 8.8.8.8                     │  ← Still Internet
-│   [Rest of packet]                     │
-└────────────────────────────────────────┘
-
-Layer 2 destination: Router's MAC!
-Layer 3 destination: Still 8.8.8.8!
-
-This is critical:
-- MAC address = next hop (router)
-- IP address = final destination (Internet)
-```
-
-**Switch receives frame:**
-
-```
-Switch CAM table lookup:
-Source MAC: AA:AA:AA:AA:AA:AA → Learn Port 1
-Dest MAC: AA:11:22:33:44:55 → Check table
-
-AA:11:22... is router's MAC!
-Router's MAC mapped to Port 5 (internal)
-
-Action: Forward to Port 5 (router's interface)
-
-This is how traffic reaches the router!
-```
-
-**Router receives frame:**
-
-```
-Router processing (Layer 3 device):
-1. Data Link Layer: Check Dest MAC
-   Dest MAC: AA:11:22:33:44:55 (my MAC!)
-   ✓ Accept frame
-   
-2. Network Layer: Check Dest IP
-   Dest IP: 8.8.8.8
-   My IP: 192.168.1.1 (LAN), 203.0.113.45 (WAN)
-   ✗ Not for me - must ROUTE to Internet
-   
-3. Routing decision:
-   - Look up 8.8.8.8 in routing table
-   - Next hop: ISP gateway
-   - Outgoing interface: WAN
-   
-4. Create new frame for WAN side:
-   Source MAC: BB:66:77:88:99:AA (my WAN MAC)
-   Dest MAC: [ISP gateway MAC]
-   [Same IP packet inside]
-   
-5. Forward to Internet via WAN port
-```
-
-**Router changes MAC addresses but keeps IP addresses unchanged (NAT aside)!**
-
----
-
-### The Subnet Mask AND Operation Explained
-
-**Why does this work?**
-
-```
-Example IP: 192.168.1.10
-Binary:     11000000.10101000.00000001.00001010
-
-Subnet: 255.255.255.0
-Binary: 11111111.11111111.11111111.00000000
-        └────────────┬─────────────┘└───┬────┘
-           Network portion         Host portion
-
-AND operation (bit-by-bit):
-1 AND 1 = 1
-1 AND 0 = 0
-0 AND 1 = 0
-0 AND 0 = 0
-
-Result:
-  11000000.10101000.00000001.00001010  (192.168.1.10)
-& 11111111.11111111.11111111.00000000  (255.255.255.0)
-  ──────────────────────────────────
-= 11000000.10101000.00000001.00000000  (192.168.1.0)
-
-The host bits (last octet) become 0
-Only network bits remain!
-```
-
-**Different IPs, same network:**
-
-```
-192.168.1.10 & 255.255.255.0 = 192.168.1.0
-192.168.1.11 & 255.255.255.0 = 192.168.1.0
-192.168.1.12 & 255.255.255.0 = 192.168.1.0
-192.168.1.13 & 255.255.255.0 = 192.168.1.0
-
-All produce 192.168.1.0 → Same network!
-```
-
-**Different IPs, different networks:**
-
-```
-192.168.1.10 & 255.255.255.0 = 192.168.1.0
-8.8.8.8      & 255.255.255.0 = 8.8.8.0
-
-Different results → Different networks!
-Must route through gateway!
-```
-
----
-
-## Complete Communication Flow: Same Network
-
-**Scenario:** Computer A sends "Hello" to Computer C (both on 192.168.1.0/24 network)
-
-```
-Step 1: Computer A creates message
-Application: "Hello"
-Transport: 12345 → 80
-Network: 192.168.1.10 → 192.168.1.12
-        ↓
-Decision: Check if same network
-Own: 192.168.1.10 & 255.255.255.0 = 192.168.1.0
-Dest: 192.168.1.12 & 255.255.255.0 = 192.168.1.0
-MATCH! Same network!
-        ↓
-Data Link: AA:AA:... → CC:CC:... (direct!)
-Physical: Electrical signals → Switch Port 1
-
-Step 2: Switch receives on Port 1
-Learn: AA:AA:... → Port 1 (update CAM table)
-Destination: CC:CC:...
-CAM lookup: CC:CC:... → Port 3
-Forward: Only to Port 3
-
-Step 3: Computer C receives on Port 3
-Check MAC: CC:CC:... (mine!) ✓
-Check IP: 192.168.1.12 (mine!) ✓
-Check Port: 80 (HTTP server) ✓
-Pass to application: Receive "Hello"
-
-Router was never involved!
-Internal network traffic stays internal!
-```
-
----
-
-## Complete Communication Flow: Different Network
-
-**Scenario:** Computer A sends HTTP request to 8.8.8.8 (Google DNS, Internet)
-
-```
-Step 1: Computer A creates message
-Application: HTTP GET request
-Transport: 45678 → 80
-Network: 192.168.1.10 → 8.8.8.8
-        ↓
-Decision: Check if same network
-Own: 192.168.1.10 & 255.255.255.0 = 192.168.1.0
-Dest: 8.8.8.8 & 255.255.255.0 = 8.8.8.0
-NO MATCH! Different network!
-        ↓
-Data Link: AA:AA:... → AA:11:22:... (router MAC!)
-Physical: Electrical signals → Switch Port 1
-
-Step 2: Switch receives on Port 1
-Learn: AA:AA:... → Port 1
-Destination: AA:11:22:... (router MAC)
-CAM lookup: AA:11:22:... → Port 5 (internal router port)
-Forward: Only to Port 5 (to router)
-
-Step 3: Router receives
-Data Link: Check MAC: AA:11:22:... (mine!) ✓
-Network: Check IP: 8.8.8.8 (not mine)
-Routing decision: Look up 8.8.8.8 in routing table
-Next hop: ISP gateway (via WAN interface)
-Create new frame:
-  Source MAC: BB:66:77:... (WAN MAC)
-  Dest MAC: [ISP gateway MAC]
-  [Same IP packet inside: 192.168.1.10 → 8.8.8.8]
-Forward to WAN port → Internet
-
-Router participated because destination was outside local network!
-```
-
----
-
-## Why This Design Matters
-
-### Efficiency
-
-```
-Same network traffic:
-Hub: All 4 computers receive every message (wasteful)
-Switch: Only sender and receiver communicate (efficient)
-Router: Not involved at all (most efficient)
-
-Different network traffic:
-Only router processes and forwards
-Local traffic stays local
-Internet-bound traffic goes through router
-```
-
-### Security
-
-```
-Same network:
-Computers can eavesdrop only if switch floods (first packet)
-After learning, only destination receives traffic
-
-Different network:
-Router acts as gateway/firewall
-Can inspect, block, or allow traffic
-Provides NAT (Network Address Translation)
-Hides internal network from Internet
-```
-
-### Scalability
-
-```
-Hubs: Max 8 devices (collision domain limitations)
-Switches: 12-48 devices typical, 96+ possible
-Routers: Connect multiple networks, unlimited scale
-```
-
----
-
-## Device Comparison Table
-
-```
-┌──────────────┬──────────┬─────────┬─────────┐
-│ Feature      │   Hub    │ Switch  │ Router  │
-├──────────────┼──────────┼─────────┼─────────┤
-│ OSI Layer    │    L1    │   L2    │   L3    │
-├──────────────┼──────────┼─────────┼─────────┤
-│ Reads MAC    │    ✗     │   ✓     │   ✓     │
-│ Reads IP     │    ✗     │   ✗     │   ✓     │
-│ Reads Ports  │    ✗     │   ✗     │   ✓     │
-├──────────────┼──────────┼─────────┼─────────┤
-│ Intelligence │  None    │ Medium  │  High   │
-├──────────────┼──────────┼─────────┼─────────┤
-│ Forwarding   │  Flood   │ Learned │ Routing │
-│              │  always  │ table   │ table   │
-├──────────────┼──────────┼─────────┼─────────┤
-│ Typical Use  │ Obsolete │ LAN     │ Gateway │
-├──────────────┼──────────┼─────────┼─────────┤
-│ Connects     │ Devices  │ Devices │ Networks│
-│              │ (poorly) │ (LAN)   │ (WAN)   │
-└──────────────┴──────────┴─────────┴─────────┘
-```
-
----
-
-## Key Takeaways
-
-### Hub
-- Layer 1 device (Physical Layer)
-- Blind flooding to all ports
-- No intelligence, no learning
-- Obsolete technology
-- Cannot read anything except electrical signals
-
-### Switch
-- Layer 2 device (Data Link Layer)
-- Reads MAC addresses
-- Maintains CAM table (MAC → Port mapping)
-- Learns dynamically
-- Forwards intelligently to specific ports
-- Cannot read IP addresses or higher-layer data
-
-### Router
-- Layer 3 device (Network Layer)
-- Reads IP addresses
-- Routes between different networks
-- Home "routers" contain BOTH switch + router
-- Makes forwarding decisions based on IP, not MAC
-
-### Forwarding Decision Logic
-
-**Computer decides before sending:**
-```
-IF (Source_IP & Subnet_Mask) == (Dest_IP & Subnet_Mask):
-    Same network
-    Use dest_MAC = destination computer's MAC
-ELSE:
-    Different network
-    Use dest_MAC = router's MAC (default gateway)
-```
-
-**The destination IP never changes, but destination MAC changes based on whether routing is needed!**
-
----
-
-## Troubleshooting Common Issues
-
-### Problem 1: Can't Reach Other Computer on Same Network
-
-**Symptoms:**
-- Computer A can't ping Computer B
-- Both on same network (192.168.1.0/24)
-- Router seems fine
-
-**Diagnosis:**
+Uses Linux namespaces and a **bridge** (a software switch). Needs `sudo`, `iproute2`, `iputils-ping`, `tcpdump`. Nothing touches your real network.
 
 ```bash
-# Check if switch has learned MACs
-# (Requires switch CLI access - not always possible on home switches)
+# a switch and three "PCs"
+sudo ip link add br0 type bridge
+sudo ip link set br0 type bridge ageing_time 30000     # (in 1/100 s → 300 s; the default)
+sudo ip link set br0 up
+for i in 1 2 3; do
+  sudo ip netns add pc$i
+  sudo ip link add p$i type veth peer name e$i        # p$i stays on the "switch", e$i goes to the PC
+  sudo ip link set e$i netns pc$i
+  sudo ip link set p$i master br0; sudo ip link set p$i up
+  sudo ip netns exec pc$i ip addr add 192.168.10.$i/24 dev e$i
+  sudo ip netns exec pc$i ip link set e$i up
+done
 
-# On Computer A:
-ping 192.168.1.11  # Computer B's IP
-# Fails
+# 1. Table starts empty (apart from the bridge's own entries)
+bridge fdb show br br0 | grep -v permanent
+# 2. pc1 pings pc2 → both get learned
+sudo ip netns exec pc1 ping -c 2 192.168.10.2
+bridge fdb show br br0 | grep -v permanent          # dev p1 has pc1's MAC, dev p2 pc2's MAC
+sudo ip netns exec pc1 ip -br link; sudo ip netns exec pc2 ip -br link      # compare the MACs
 
-# Check ARP table
-arp -a
-# No entry for 192.168.1.11
-
-# Try forcing ARP
-arping -c 5 192.168.1.11
+# 3. Prove the switch does NOT copy unicast to bystanders (pc3 is silent)
+sudo ip netns exec pc3 tcpdump -nn -e -i e3 -c 10 &     # watch on pc3's wire
+sleep 1
+sudo ip netns exec pc1 ping -c 3 192.168.10.2
+sleep 3; sudo pkill tcpdump        # pc3 saw only the first ARP broadcast (and no ICMP), because the table knows pc2's port
 ```
-
-**Possible causes:**
-1. **Switch port failure:** Physical connection issue
-2. **CAM table full:** Switch table overflow (rare on modern switches)
-3. **VLAN mismatch:** Computers on different VLANs (advanced topic)
-4. **Firewall on Computer B:** Blocking ICMP (ping)
-
-**Solutions:**
-- Check cable connections
-- Restart switch
-- Verify subnet mask matches (should be 255.255.255.0)
-- Disable firewall temporarily for testing
-
----
-
-### Problem 2: Computer Sends to Router MAC Instead of Direct
-
-**Symptoms:**
-- Computer A sends to Computer C
-- Both on 192.168.1.0/24
-- But packets go through router unnecessarily
-
-**Diagnosis:**
+Now **make the switch behave like a hub** by forgetting everything immediately, so every frame is "unknown unicast" and gets flooded:
 
 ```bash
-# On Computer A:
-ip route get 192.168.1.12
-# Shows: via 192.168.1.1 (WRONG! Should be direct)
-
-# Check subnet mask
-ip addr show
-# eth0: inet 192.168.1.10/32  ← PROBLEM! /32 instead of /24
+sudo ip link set br0 type bridge ageing_time 0           # entries expire instantly → flood always
+sudo ip netns exec pc3 tcpdump -nn -e -i e3 -c 6 icmp &
+sleep 1
+sudo ip netns exec pc1 ping -c 3 192.168.10.2
+sleep 3; sudo pkill tcpdump                              # pc3 now SEES pc1↔pc2 pings: hub behavior
+sudo ip link set br0 type bridge ageing_time 30000       # restore
 ```
+(Some kernels handle very small ageing values differently; if the effect isn't visible, disable learning per port: `sudo bridge link set dev p2 learning off` and `sudo bridge link set dev p2 flood on`.)
 
-**Cause:** Incorrect subnet mask
-
-```
-Subnet mask: 255.255.255.255 (/32)
-Means: Only 192.168.1.10 is "local", everything else is "remote"
-
-Result:
-192.168.1.10 & 255.255.255.255 = 192.168.1.10
-192.168.1.12 & 255.255.255.255 = 192.168.1.12
-NO MATCH → Sends to router
-
-Should be:
-Subnet mask: 255.255.255.0 (/24)
-192.168.1.10 & 255.255.255.0 = 192.168.1.0
-192.168.1.12 & 255.255.255.0 = 192.168.1.0
-MATCH → Sends directly
-```
-
-**Solution:**
+Now add **a router** and a second LAN (Chapter 32's lab) to see broadcasts stay inside their domain:
 
 ```bash
-# Linux:
-sudo ip addr add 192.168.1.10/24 dev eth0
-
-# Windows:
-netsh interface ip set address "Ethernet" static 192.168.1.10 255.255.255.0 192.168.1.1
+sudo ip netns add r; sudo ip link add r0 type veth peer name rp; sudo ip link set r0 netns r
+sudo ip link set rp master br0; sudo ip link set rp up
+sudo ip netns exec r ip addr add 192.168.10.254/24 dev r0; sudo ip netns exec r ip link set r0 up
+sudo ip netns exec r tcpdump -nn -i r0 -c 3 arp &        # the router hears the ARP broadcasts on THIS LAN...
+sleep 1; sudo ip netns exec pc1 arping -c 1 192.168.10.3; sleep 2; sudo pkill tcpdump
+# ...but they never cross to any other interface of r (routers don't forward broadcasts)
 ```
 
----
-
-### Problem 3: Switch Flooding Too Much
-
-**Symptoms:**
-- Network slow
-- All computers receiving traffic not meant for them
-- Like hub behavior
-
-**Diagnosis:**
-
-```
-Cause: CAM table not learning (or aging out too quickly)
-
-Possible reasons:
-1. Rapidly changing MAC addresses (MAC spoofing attack)
-2. CAM table aging time too short
-3. Switch memory issue
-4. Switch overload
-```
-
-**Solution:**
-- Restart switch
-- Check for MAC spoofing attacks
-- Upgrade switch firmware
-- Replace with higher-capacity switch
-
----
-
-### Problem 4: Router Not Forwarding to Internet
-
-**Symptoms:**
-- Can ping other computers on LAN (192.168.1.0/24)
-- Cannot ping Internet (8.8.8.8)
-
-**Diagnosis:**
-
+Clean up:
 ```bash
-# Check default gateway configuration
-ip route show default
-# default via 192.168.1.1 dev eth0
-
-# Ping gateway
-ping 192.168.1.1
-# Success (can reach router)
-
-# Ping Internet
-ping 8.8.8.8
-# Fails
-
-# Check router's WAN interface
-# (Access router admin page: http://192.168.1.1)
+for i in 1 2 3; do sudo ip netns del pc$i; done; sudo ip netns del r
+sudo ip link del br0     # removes p1..p3 and rp
 ```
 
-**Possible causes:**
-1. **Router WAN interface down:** No Internet connection
-2. **ISP issue:** Modem offline
-3. **Router not configured:** WAN IP not assigned
-4. **Routing table missing:** Default route to ISP not configured
-
-**Solution:**
-- Check ISP connection
-- Restart modem and router
-- Verify WAN interface has public IP
-- Check router logs for errors
+**Docker connection:** `docker0` (and each `br-<id>`) is exactly this software bridge; each container's `eth0` is one end of a veth pair whose other end is a port on the bridge. Check with `bridge link`, `bridge fdb show br docker0`, `ip -br link | grep veth`. Containers on the same bridge talk at Layer 2 (a MAC table lookup); to reach the outside world, packets go to the bridge's IP (the "router" = the host with NAT).
 
 ---
 
-## Advanced Topics Preview
+## 7. Comparison table
 
-### VLANs (Virtual LANs)
-
-**What you'll learn later:**
-
-```
-One physical switch can create multiple logical networks:
-
-VLAN 10: Engineering (192.168.10.0/24)
-VLAN 20: Sales (192.168.20.0/24)
-
-Physical Port 1 → VLAN 10
-Physical Port 2 → VLAN 10
-Physical Port 3 → VLAN 20
-Physical Port 4 → VLAN 20
-
-Ports in different VLANs cannot communicate
-(even though same physical switch!)
-
-Requires router for inter-VLAN communication
-```
-
-### Layer 3 Switches
-
-```
-Hybrid device: Switch + Router combined
-
-Can perform:
-- Layer 2 switching (MAC forwarding)
-- Layer 3 routing (IP routing)
-
-Faster than separate switch + router
-Used in enterprise networks
-```
-
-### Spanning Tree Protocol (STP)
-
-```
-Problem: Switch loops cause broadcast storms
-Solution: STP disables redundant paths
-
-Prevents:
-- Infinite packet loops
-- CAM table thrashing
-- Network meltdown
-
-Creates loop-free topology
-```
+| | **Hub** | **Switch** | **Router** |
+|---|---|---|---|
+| Layer | 1 | 2 | 3 |
+| Forwarding unit | bits/signals | **frames** | **packets** |
+| Decision based on | nothing | destination **MAC** | destination **IP** |
+| Learning | none | source MACs (automatic) | routes (static/dynamic protocols) |
+| Collision domains | 1 | 1 per port | 1 per interface |
+| Broadcast domains | 1 | 1 (per VLAN) | 1 per interface |
+| Duplex | half | full | full |
+| Security/features | none | VLAN, STP, port security… | NAT, firewall, VPN, ACLs, routing protocols |
+| Typical use today | (obsolete) | connecting devices in a LAN | connecting LANs, internet gateway |
+| Cost/complexity | trivial | low–medium | medium–high |
 
 ---
 
-## Conclusion
+## 8. Design thinking: why three devices?
 
-You now understand the three fundamental network devices:
+- **Efficiency:** a switch's learning table gives each conversation its own path; a hub wastes capacity.
+- **Scalability:** a router keeps broadcast domains small: a 10,000-host flat network would drown in ARP and DHCP chatter.
+- **Security and control:** routers (and firewalls) are the natural points to apply policy between networks; switches are the place for port-level controls.
+- **Fault isolation:** a loop or broadcast storm is contained to its VLAN/network.
 
-**Hub:** The obsolete blind repeater that floods everything everywhere. Layer 1 device. No intelligence. Never learns. Wastes bandwidth.
-
-**Switch:** The intelligent Layer 2 forwarder. Reads MAC addresses. Maintains CAM table. Learns dynamically. Forwards only to destination port after learning. Cannot read IP addresses.
-
-**Router:** The Layer 3 gateway between networks. Reads IP addresses. Routes traffic between different networks. Your home "router" is actually a switch + router combined. Devices decide whether to send to router or directly based on subnet mask AND operation.
-
-**The critical insight:** Your computer performs the AND operation **before** creating the Data Link Layer frame. The subnet mask determines whether the destination MAC will be the actual destination's MAC (same network) or the router's MAC (different network). The IP header's destination IP never changes—only the Ethernet frame's destination MAC changes based on routing needs.
-
-Next, you'll learn how these devices handle more complex scenarios: multiple routers, NAT, port forwarding, firewalls, and how Docker networking leverages these concepts to create container networks.
-
-**This is where networking theory becomes networking reality.**
+Real designs often use a **three-tier** or **leaf-spine** topology: access switches → distribution/aggregation (L3 switches) → core routers, with routing used to interconnect subnets/VLANs.
 
 ---
 
-## Further Reading
+## 9. Troubleshooting
 
-- **IEEE 802.3:** Ethernet standard (hub/switch behavior)
-- **IEEE 802.1D:** Spanning Tree Protocol (switch loops)
-- **"Computer Networks" by Andrew S. Tanenbaum:** Bridges, switches, routers chapter
-- **RFC 826:** ARP (Address Resolution Protocol) - how computers learn MACs
-- **CCNA Study Guide:** Switch CAM table, router fundamentals
-- **Cisco Switch Configuration Guide:** CAM table management, port configuration
-- **"TCP/IP Illustrated, Volume 1":** Routing fundamentals chapter
-- **Wireshark tutorials:** Capturing and analyzing switch/router traffic
-- **"Network Warrior" by Gary A. Donahue:** Practical switch and router configuration
+| Problem | Checks |
+|---|---|
+| **Can't reach a host on the same network** | Same subnet/mask? `ip neigh`/`arp -n` shows `FAILED`/`INCOMPLETE`? VLAN/port mismatch? Switch port up (link light, `ethtool`)? Firewall on the host? Cable/duplex |
+| **Host sends local traffic to the router** (`ip route get 192.168.1.20` shows `via 192.168.1.1`) | Wrong mask (`/32` instead of `/24`, or a typo): the host thinks neighbors are remote |
+| **Network slow, lights blinking constantly** | Broadcast storm/loop (missing STP), too many hosts in one VLAN, a chatty device; check switch counters, `tcpdump -nn broadcast` |
+| **Random disconnects, flapping MACs** | Duplicate MACs/IPs, a loop, bad cable, PoE overload; look at the MAC table for the same MAC on two ports |
+| **No internet but LAN works** | Router WAN/ISP/NAT/DNS; `ping <gateway>`, `ping 1.1.1.1`, `ping example.com` (Chapter 32) |
+| **Sees others' traffic in Wireshark** | Hub/wireless/mirror port, or MAC flooding attack |
+| **Wi-Fi devices can't see wired ones** | Client isolation, guest network separation, different VLANs/subnets |
+| **Two "routers" chained** | Double NAT: port forwarding fails; put the second one in bridge/AP mode or connect via its LAN port, with DHCP disabled |
+
+Commands: `ip -br link`, `ip neigh`, `bridge fdb`, `bridge link`, `ethtool -S eth0 | grep -i -E 'err|drop'`, `tcpdump -nn -e`, on switches `show mac address-table`, `show interfaces status`, `show spanning-tree`.
+
+---
+
+## 10. Common misconceptions
+
+| Misconception | Reality |
+|---|---|
+| "A switch and a hub are basically the same" | A hub repeats to all; a switch learns and sends selectively |
+| "A switch stops broadcasts" | It floods them; only routers (or VLANs) split broadcast domains |
+| "A router and a switch are interchangeable" | Different layers, tables and jobs |
+| "The 'router' from the ISP is only a router" | It's router + switch + Wi-Fi AP (+ modem) |
+| "Switches can't be sniffed" | With MAC flooding, ARP spoofing or mirroring they can |
+| "Switch ports have IP addresses" | Unmanaged switches have none; managed ones have one management IP |
+| "Routers look at MAC to choose the route" | They look at the destination IP; MACs are only for the next hop |
+| "More switches = slower" | Each hop adds microseconds; loops and broadcast domains are the real problem |
+| "Wi-Fi is a hub" | It is a shared half-duplex medium (like a hub in spirit), so airtime is shared, but it uses access control (CSMA/CA) and encryption |
+
+---
+
+## 11. Summary
+
+- **Hub**: Layer 1, repeats everything, one collision domain, half duplex. Obsolete.
+- **Switch**: Layer 2, **learns source MACs**, then forwards/filters/floods by destination MAC; full duplex; one broadcast domain per VLAN; managed versions add VLAN, STP, mirroring, port security, PoE.
+- **Router**: Layer 3, forwards IP packets between networks using a routing table; stops broadcasts; adds NAT/firewall/DHCP in home gear.
+- Hosts use **IP + mask** to decide same-network (ARP the destination) or different-network (ARP the **gateway**). IP = final target, MAC = next hop.
+- A home router bundles modem, router, switch and Wi-Fi AP. Docker's `docker0` is a software switch; the host acts as its router.
+
+---
+
+## 12. Check your understanding
+
+1. What is the difference between a collision domain and a broadcast domain? How many of each does a hub have? A switch with 8 ports?
+2. Describe the four things a switch can do with a frame.
+3. Which MAC does the switch record, source or destination, and why?
+4. What happens to unknown unicast frames? To broadcasts?
+5. When PC-A talks to a server on another subnet, what are the source/destination MAC and IP on the first hop?
+6. Why is a home "router" really several devices?
+7. What is a MAC flooding attack and what defends against it?
+8. In the lab, why did pc3 see pc1↔pc2 traffic only after `ageing_time 0`?
+
+<details>
+<summary>Answers</summary>
+
+1. Collision domain: devices that can interfere on shared medium; broadcast domain: devices reached by a broadcast. Hub: 1 and 1. 8-port switch: 8 collision domains, 1 broadcast domain (per VLAN).
+2. Learn (record the source), forward to a known port, filter (same port), flood (unknown or broadcast).
+3. The **source** MAC on the ingress port, because it shows where that device is reachable.
+4. Both are flooded out all ports except the ingress one (broadcasts always; unknown unicast until learned).
+5. MAC: src A, dst the router's LAN-side MAC (ARP for the gateway). IP: src A, dst the server (unchanged).
+6. It combines routing, switching, Wi-Fi AP, DHCP/DNS services, NAT/firewall, sometimes a modem.
+7. Flooding with fake source MACs to fill the CAM table so the switch floods everything; port security (MAC limits) defends.
+8. With zero ageing the table forgot pc2's port immediately, so frames to pc2 were "unknown unicast" and flooded to every port, including pc3's, just like a hub.
+</details>
+
+**Practice**
+
+1. Run the lab; capture `bridge fdb show` before and after each ping; explain each entry.
+2. Add a 4th PC on a second bridge linked by a veth "trunk" and watch how MACs are learned across two switches.
+3. Enable STP on `br0` (`ip link set br0 type bridge stp_state 1`), create a loop with two veth links between two bridges, and observe the blocked port with `bridge link`.
+4. Draw your home network (modem, router, switch, AP, devices) and label each device's layer and each domain.
+5. On your Docker host, list the bridges, their ports (`bridge link`), and the MAC table entries for your containers.
+
+---
+
+**Next:** [Chapter 39 – Networking Inside a Network: ARP](39_networking_inside_a_network_arp_protocol_in_details.md)

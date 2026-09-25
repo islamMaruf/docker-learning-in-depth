@@ -1,1060 +1,478 @@
 # Chapter 12: Linux Basic Commands
 
-## Overview
+> **In one sentence:** Learn to move around the Linux file system and to create, view, copy, move, search and delete files from the command line, the daily toolkit for working inside containers and on servers.
 
-Welcome to one of the most practical chapters in your Docker and Linux journey! This chapter will teach you the fundamental commands that every Linux user needs to master. Whether you're working inside a Docker container or directly on a Linux system, these commands are your daily tools for navigating, managing, and manipulating files and directories.
+**Level:** 🟢 Beginner → 🟡 Intermediate · **Reading time:** ~45 minutes, but the real learning is in typing the commands yourself.
 
-In this chapter, we'll cover everything from understanding the terminal prompt structure to mastering file operations. By the end, you'll be comfortable navigating the Linux filesystem, creating and deleting files and directories, viewing and editing file contents, and understanding the difference between absolute and relative paths.
+**Prerequisites:** [Chapter 9](09_gnu_coreutils.md) (terminal, shell, pipes) and [Chapter 10](10_running_ubuntu_on_docker.md) (how to start a practice container).
 
-Think of this chapter as learning to walk before you run. These basic commands form the foundation for everything else you'll do in Linux and Docker. They might seem simple at first, but mastering them will make you significantly more efficient and confident when working with containers and Linux systems.
-
-## The Terminal Prompt: Understanding Your Identity
-
-### Anatomy of the Terminal Prompt
-
-When you open a terminal in Linux, you're greeted with a prompt that might look confusing at first. Let's break it down piece by piece:
-
-```
-username@hostname ~ %
-```
-
-This simple line tells you a lot about your current session:
-
-1. **username**: This is the name of the user currently logged in. In the example, it could be something like `habiburrahman` or `root`.
-
-2. **@**: This is just a separator, like saying "at".
-
-3. **hostname**: This is the name of the machine you're working on. In Docker containers, this is often a random string of characters assigned to the container.
-
-4. **~**: This tilde character represents your home directory. It's a shortcut that always points to your user's home directory (typically `/root` for the root user or `/home/username` for regular users).
-
-5. **%** or **#** or **$**: This final character tells you important information about your shell and permissions:
-   - **%**: Z Shell (zsh) with normal user privileges
-   - **#**: Root user (superuser) with administrative privileges
-   - **$**: Bash shell with normal user privileges
-
-### The Significance of the Prompt Symbol
-
-The symbol at the end of your prompt is more important than it might seem:
+**A safe place to practice.** Start a throw-away container. Anything you break vanishes when you exit:
 
 ```bash
-# Root user in bash
-root@container:~#
-
-# Normal user in zsh
-habiburrahman@container:~%
-
-# Normal user in bash
-habiburrahman@container:~$
+docker run -it --rm ubuntu:24.04 bash
 ```
 
-When you see `#`, you should be extra careful. The root user has unlimited power to modify, delete, or break the system. With great power comes great responsibility!
+---
 
-### Switching Between Users and Shells
+## What you will learn
 
-You can switch to the root user using the `sudo su` command:
+- How to read the shell **prompt**
+- The layout of the Linux **file system** and what each top-level folder is for
+- **Paths**: absolute vs relative, and the shortcuts `~`, `.`, `..`, `-`
+- Navigate: `pwd`, `ls`, `cd`
+- Create: `mkdir`, `touch`, `echo`, redirection
+- View: `cat`, `less`, `head`, `tail`, `wc`
+- Copy, move, rename, delete: `cp`, `mv`, `rm`, `rmdir`
+- **Wildcards**, links, searching (`find`, `grep`), and getting help (`man`, `--help`)
+- Safety habits, common mistakes, and a checklist of exercises
+
+---
+
+## 1. Reading the prompt
+
+```
+root@3f9c2a1b7d4e:/app#
+│    │            │   └ # = you are root   ($ = normal user)
+│    │            └ current directory (~ means your home)
+│    └ hostname (in a container: the container ID)
+└ user name
+```
+
+- The **last character** is a hint. `#` traditionally means the user is **root** (the administrator with unlimited power) and `$` a normal user. It is only a convention set by your shell's configuration (`PS1`); zsh often uses `%`. Use `whoami` or `id` to be sure.
+- **`~`** in the prompt means "in the home directory" (`/root` for root, `/home/<user>` for others).
+- In Docker containers you are root by default. That is convenient for learning, but remember: **root can delete anything**.
 
 ```bash
-# Normal user prompt
-habiburrahman@container:~%
-
-# Switch to root user
-$ sudo su
-Password: [enter your password]
-
-# Now you're root
-root@container:~#
+whoami          # root
+id              # uid=0(root) gid=0(root) groups=0(root)
+hostname
+echo $HOME      # /root
 ```
 
-The `sudo` command breaks down as:
-- **su**: Super User
-- **do**: Do (execute)
-- So `sudo su` means "execute as superuser to become superuser"
+`sudo` means "**s**uper**u**ser **do**": run *one command* with administrator rights (`sudo apt update`). Regular Ubuntu servers use it; minimal Docker images usually don't include it because you're already root. `su` ("switch user") starts a whole session as another user, which is why you may see `sudo su` in tutorials (though `sudo -i` is the cleaner way).
 
-You can also switch between different shells. For example, switching from zsh to bash:
+---
 
-```bash
-# Currently in zsh
-habiburrahman@container:~%
+## 2. The Linux file system
 
-# Switch to bash
-% bash
-
-# Now in bash (notice the $ symbol)
-habiburrahman@container:~$
-```
-
-To exit and return to your previous shell, simply type `exit`.
-
-## The Linux Filesystem: Your Digital Neighborhood
-
-### Root Directory Structure
-
-In Linux, everything starts from the root directory, represented by a single forward slash `/`. This is the top of the filesystem hierarchy, and all other directories branch out from here.
-
-When you run the `ls /` command from the root directory, you'll see something like this:
-
-```bash
-/ $ ls
-bin   dev   home  lib    media  opt   root  sbin  sys  usr
-boot  etc   lib64 mnt    proc   run   srv   tmp   var
-```
-
-Let's understand what each of these directories contains:
-
-### Essential System Directories
-
-**1. /bin (Binaries)**
-Contains essential command binaries (executable programs) that all users can run. Commands like `ls`, `pwd`, `mkdir`, `cat`, and many others live here. When you type a command, the shell looks in `/bin` to find the corresponding program.
-
-**2. /boot (Boot Loader)**
-Contains files needed to boot the system, including the Linux kernel and bootloader configuration.
-
-**3. /dev (Devices)**
-Contains device files that represent hardware components. Linux treats hardware devices as special files. For example, your hard drive might be `/dev/sda`.
-
-**4. /etc (Etcetera/Configuration)**
-Contains system-wide configuration files. Think of this as the "settings" folder for your entire Linux system.
-
-**5. /home (User Home Directories)**
-Contains personal directories for regular users. Each user gets their own subdirectory here, like `/home/username`. This is where users store their personal files and settings.
-
-**6. /lib and /lib64 (Libraries)**
-Contains shared libraries needed by programs in `/bin` and `/sbin`. Think of these as code libraries that multiple programs can use, similar to DLLs in Windows.
-
-**7. /media (Removable Media)**
-Mount point for removable media like USB drives, CD-ROMs, etc.
-
-**8. /mnt (Mount)**
-Temporary mount point for filesystems. Administrators can mount filesystems here temporarily.
-
-**9. /opt (Optional)**
-Contains optional software packages. Third-party software often gets installed here.
-
-**10. /proc (Process Information)**
-A virtual filesystem that provides information about running processes and the kernel. Files here don't actually exist on disk; they're generated on-the-fly by the kernel.
-
-**11. /root (Root User Home)**
-The home directory for the root user. Note the difference: `/root` is the root user's home, while `/` is the root of the filesystem.
-
-**12. /run (Runtime Data)**
-Contains runtime data for processes that started since the last boot.
-
-**13. /sbin (System Binaries)**
-Contains system administration binaries. These are typically used by the root user for system maintenance.
-
-**14. /sys (System)**
-A virtual filesystem providing information about the system and kernel, similar to `/proc`.
-
-**15. /tmp (Temporary)**
-Temporary files created by programs. This directory is typically cleared on reboot.
-
-**16. /usr (User Programs)**
-Contains user programs and data. This is often one of the largest directories, containing most of the programs you'll use.
-
-**17. /var (Variable)**
-Contains variable data like logs, caches, and spool files. This directory grows over time as logs accumulate.
-
-### Visualizing the Filesystem Hierarchy
+Linux has **one tree** with a single top, called **root** and written **`/`**. (Do not confuse it with `/root`, the *home folder of the user root*.) There are no drive letters like `C:`. Other disks and USB drives are **mounted** somewhere inside the same tree.
 
 ```
-/                           (root directory)
-├── bin/                    (essential commands)
-├── boot/                   (boot files)
-├── dev/                    (devices)
-├── etc/                    (configuration)
-├── home/                   (user homes)
-│   └── username/
-├── lib/                    (libraries)
-├── media/                  (removable media)
-├── mnt/                    (mount points)
-├── opt/                    (optional software)
-├── proc/                   (process info)
-├── root/                   (root's home)
-├── run/                    (runtime data)
-├── sbin/                   (system binaries)
-├── sys/                    (system info)
-├── tmp/                    (temporary files)
-├── usr/                    (user programs)
-│   ├── bin/
-│   ├── lib/
-│   └── share/
-└── var/                    (variable data)
-    ├── log/
-    └── cache/
-```
-
-## Core Navigation Commands
-
-### pwd: Present Working Directory
-
-The `pwd` command shows you exactly where you are in the filesystem:
-
-```bash
-$ pwd
-/root
-```
-
-This is incredibly useful when you're navigating deep directory structures and lose track of your location.
-
-### ls: Listing Directory Contents
-
-The `ls` command is one of your most frequently used commands. It lists the contents of a directory.
-
-**Basic usage:**
-```bash
-$ ls
-bin   dev   home  lib    media  opt   root  sbin  sys  usr
-boot  etc   lib64 mnt    proc   run   srv   tmp   var
-```
-
-**ls -l (long format):**
-```bash
-$ ls -l
-drwxr-xr-x  2 root root 4096 Jan 15 10:30 bin
-drwxr-xr-x  3 root root 4096 Jan 15 10:30 boot
-drwxr-xr-x  5 root root  360 Jan 20 08:15 dev
-```
-
-The long format shows:
-- File permissions (drwxr-xr-x)
-- Number of links
-- Owner name
-- Group name
-- File size
-- Modification date
-- Filename
-
-**ls -a (show all, including hidden files):**
-```bash
-$ ls -a
-.   ..   .bashrc   .profile   bin   boot   dev   etc
-```
-
-Files starting with a dot (.) are hidden files. The special entries `.` and `..` represent the current directory and parent directory, respectively.
-
-**ls -la (combine long format with all files):**
-```bash
-$ ls -la
-total 64
-drwxr-xr-x  20 root root 4096 Jan 20 08:15 .
-drwxr-xr-x  20 root root 4096 Jan 20 08:15 ..
--rw-r--r--   1 root root  220 Jan 15 10:30 .bashrc
-```
-
-This combines both options, showing all files (including hidden ones) in long format.
-
-### cd: Changing Directories
-
-The `cd` (change directory) command is how you navigate the filesystem. It has several powerful variations:
-
-**Basic navigation:**
-```bash
-# Go to a specific directory
-$ cd /bin
-$ pwd
-/bin
-
-# Go to home directory
-$ cd ~
-$ pwd
-/root
-
-# Just cd with no arguments also goes home
-$ cd
-$ pwd
-/root
-```
-
-**The tilde (~) shortcut:**
-The tilde character is a powerful shortcut that always represents your home directory:
-
-```bash
-$ cd ~
-$ pwd
-/root
-```
-
-**Parent directory (..):**
-Two dots represent the parent directory (one level up):
-
-```bash
-$ pwd
-/app/habib/rahim
-$ cd ..
-$ pwd
-/app/habib
-```
-
-**Current directory (.):**
-A single dot represents the current directory:
-
-```bash
-$ cd .
-# You stay in the same place
-```
-
-**Previous directory (-):**
-The hyphen takes you back to your previous location:
-
-```bash
-$ cd /bin
-$ pwd
-/bin
-
-$ cd /home
-$ pwd
-/home
-
-$ cd -
-/bin
-```
-
-**Navigating to the root:**
-```bash
-$ cd /
-$ pwd
 /
+├── bin  → usr/bin      essential programs (on modern systems these are links into /usr)
+├── boot                kernel and boot loader files (mostly empty in containers)
+├── dev                 device files: /dev/null, /dev/sda, ...
+├── etc                 system-wide configuration files
+├── home                users' personal folders: /home/alice
+├── lib, lib64          shared libraries (like DLLs on Windows)
+├── media, mnt          mount points for removable / temporary disks
+├── opt                 optional third-party software
+├── proc                virtual: information about processes and the kernel
+├── root                home folder of the root user
+├── run                 runtime data (PID files, sockets) since boot
+├── sbin → usr/sbin     administration programs
+├── srv                 data served by this machine (web, ftp)
+├── sys                 virtual: devices and kernel settings
+├── tmp                 temporary files (may be cleared at reboot)
+├── usr                 the bulk of installed programs, libraries and docs
+└── var                 variable data: logs, caches, databases, mail
 ```
 
-### Tab Completion: Your Best Friend
+Key facts:
 
-When using bash shell, pressing the Tab key will auto-complete commands, filenames, and directory names:
+- **`/etc`** is where you find configuration; **`/var/log`** is where you look when something breaks.
+- **`/proc` and `/sys`** aren't stored on disk; the kernel generates them on the fly (Chapter 2).
+- **Everything is a file**: keyboards, disks and processes appear under paths.
+- File names are **case-sensitive**: `Notes.txt`, `notes.txt` and `NOTES.TXT` are three different files.
+- A name starting with **`.`** is **hidden** (e.g. `.bashrc`) from a normal `ls`.
+
+---
+
+## 3. Paths
+
+A **path** says where a file or folder is.
+
+| Kind | Starts with | Meaning | Example |
+|---|---|---|---|
+| **Absolute** | `/` | From the top of the tree; the same from anywhere | `/etc/hostname` |
+| **Relative** | anything else | From your **current directory** | `docs/readme.txt` |
+
+Special names available everywhere:
+
+| Symbol | Meaning |
+|---|---|
+| `/` | The root of the tree |
+| `~` | Your home directory (`/root`, `/home/alice`) |
+| `.` | The current directory |
+| `..` | The parent directory (one level up) |
+| `-` | (only with `cd`) the previous directory you were in |
+
+```
+Current directory: /app/habib/rahim
+
+../          → /app/habib
+../..        → /app
+../../ataur  → /app/ataur
+./run.sh     → /app/habib/rahim/run.sh
+```
+
+Use **absolute paths** in scripts and Dockerfiles for clarity, and **relative paths** for quick work inside a project.
+
+---
+
+## 4. Navigating: `pwd`, `ls`, `cd`
 
 ```bash
-$ cd /bi[TAB]
-# Automatically completes to:
-$ cd /bin/
-
-$ cd /ho[TAB]
-# Shows suggestions:
-home/  
-
-$ cd hom[TAB]
-# Completes to:
-$ cd home/
+pwd                 # print working directory → where am I?
+ls                  # list files here
+ls /etc             # list another place without going there
+ls -l               # long format: permissions, owner, size, date
+ls -a               # include hidden files (names starting with .)
+ls -la              # both
+ls -lh              # human-readable sizes (K, M, G)
+ls -lt              # newest first (sort by time); add -r to reverse
+ls -R               # recursive: list sub-folders too
+ls -d */            # only directories
 ```
 
-Tab completion saves time and prevents typos. Press Tab twice to see all available options if there are multiple matches.
+Reading `ls -l`:
 
-## Working with Directories
-
-### mkdir: Creating Directories
-
-The `mkdir` (make directory) command creates new directories:
-
-**Creating a simple directory:**
-```bash
-$ mkdir app
-$ ls
-app
+```
+drwxr-xr-x 2 root root 4096 Jan 15 10:30 docs
+-rw-r--r-- 1 root root  220 Jan 15 10:30 notes.txt
+lrwxrwxrwx 1 root root    7 Jan 15 10:30 bin -> usr/bin
 ```
 
-**Creating nested directories with -p:**
-```bash
-# This will fail without -p
-$ mkdir habib/rahim
-mkdir: cannot create directory 'habib/rahim': No such file or directory
+| Field | Meaning |
+|---|---|
+| First character | Type: `-` file, `d` directory, `l` symbolic link |
+| Next nine | Permissions: owner / group / others, each `rwx` (Chapter 13) |
+| Number | Hard links count |
+| `root root` | Owner and group |
+| Number | Size in bytes |
+| Date | Last modification |
+| Last | Name (`-> target` for links) |
 
-# Use -p to create parent directories
-$ mkdir -p habib/rahim
-$ ls
-habib
-
-$ cd habib
-$ ls
-rahim
-```
-
-The `-p` flag stands for "parents" - it creates all necessary parent directories.
-
-**Creating multiple directories:**
-```bash
-$ mkdir dir1 dir2 dir3
-$ ls
-dir1  dir2  dir3
-```
-
-### Navigating Directory Trees
-
-Let's practice navigating a multi-level directory structure:
+**Changing directory:**
 
 ```bash
-# Create a nested structure
-$ mkdir -p /app/habib/rahim
-
-# Navigate into it
-$ cd /app/habib/rahim
-$ pwd
-/app/habib/rahim
-
-# Go up one level
-$ cd ..
-$ pwd
-/app/habib
-
-# Go up another level
-$ cd ..
-$ pwd
-/app
-
-# Jump directly to a nested directory
-$ cd habib/rahim
-$ pwd
-/app/habib/rahim
-
-# Go to home directory
-$ cd ~
-$ pwd
-/root
-
-# Return to previous location
-$ cd -
-/app/habib/rahim
+cd /etc          # absolute path
+cd ..            # up one level
+cd ../..         # up two levels
+cd ~             # home    (same as just: cd)
+cd -             # back to where I was before (toggles between two places)
+cd /             # the top
+cd "My Folder"   # quote names with spaces
 ```
 
-## Working with Files
+**Tab completion**: type the first letters and press **Tab** to auto-complete a name; press Tab twice to list candidates. It saves typing and prevents typos. (Ubuntu's Docker image has bash's completion available, but a few very minimal images may not.) **Up/Down arrows** recall earlier commands; **Ctrl+R** searches history; **Ctrl+C** stops a running command; **Ctrl+L** clears the screen.
 
-### touch: Creating Empty Files
+---
 
-The `touch` command creates a new empty file:
+## 5. Creating things
+
+### Directories
 
 ```bash
-$ touch a.txt
-$ ls
-a.txt
+mkdir project                 # one directory
+mkdir a b c                   # several
+mkdir -p project/src/utils    # -p = create missing parent directories (and no error if it exists)
 ```
 
-If the file already exists, `touch` updates its modification timestamp without changing the contents.
+Without `-p`, `mkdir x/y` fails with `No such file or directory` if `x` doesn't exist.
 
-### cat: Viewing File Contents
-
-The `cat` (concatenate) command displays file contents:
+### Files
 
 ```bash
-$ cat a.txt
-# Shows the file contents (currently empty)
+touch a.txt               # create an empty file (or update its timestamp if it exists)
+touch a.txt b.txt c.txt
+echo "Hello" > a.txt      # write text into a file, OVERWRITING what was there
+echo "World" >> a.txt     # APPEND to the end
 ```
 
-**Viewing multiple files:**
-```bash
-$ cat file1.txt file2.txt
-# Displays both files in sequence
-```
+> **Redirection** (`>` and `>>`) is done by the **shell**, not by `echo`. It works with any command's output: `ls > list.txt`.
 
-### echo: Writing to Files
+| Operator | Effect |
+|---|---|
+| `>` | Send output to a file; **replaces** the file's content |
+| `>>` | Send output to a file; **adds** to the end |
+| `<` | Read input from a file |
+| `2>` | Send error messages to a file |
+| `\|` | Pipe: send output to another command |
 
-The `echo` command prints text and can redirect output to files:
+**A common mistake:** `echo Hello World > file.txt` works fine. It writes `Hello World` into the file. (Quotes are only *required* when the text contains special characters like `*`, `$`, `;` or `>`.)
 
-**Simple echo:**
-```bash
-$ echo "Hello World"
-Hello World
-```
-
-**Writing to a file (overwrite):**
-```bash
-$ echo "Hello World" > a.txt
-$ cat a.txt
-Hello World
-```
-
-The single `>` operator overwrites the file completely.
-
-**Appending to a file:**
-```bash
-$ echo "Hello World" >> a.txt
-$ echo "How are you?" >> a.txt
-$ cat a.txt
-Hello World
-How are you?
-```
-
-The double `>>` operator appends content without erasing existing data.
-
-**Understanding the difference:**
-```bash
-# Overwrite example
-$ echo "First line" > file.txt
-$ echo "Second line" > file.txt
-$ cat file.txt
-Second line    # First line was erased!
-
-# Append example
-$ echo "First line" >> file.txt
-$ echo "Second line" >> file.txt
-$ cat file.txt
-First line
-Second line    # Both lines preserved!
-```
-
-### head: Viewing File Beginnings
-
-The `head` command shows the first few lines of a file:
+### Editing text
+Small images have no editor by default. Install one (`apt-get update && apt-get install -y nano`) or write with `echo`/`cat`:
 
 ```bash
-# Show first 10 lines (default)
-$ head a.txt
-
-# Show first 5 lines
-$ head -n 5 a.txt
+cat > hello.sh << 'EOF'
+#!/bin/sh
+echo "Hello from a script"
+EOF
 ```
 
-This is incredibly useful for previewing large files without displaying the entire contents.
+(That's a *here-document*: everything until `EOF` goes into the file.) Editors: **nano** (easy: Ctrl+O save, Ctrl+X exit), **vi/vim** (powerful: `i` to insert, `Esc`, then `:wq` to save and quit, `:q!` to quit without saving).
 
-### tail: Viewing File Endings
+---
 
-The `tail` command shows the last few lines of a file:
+## 6. Viewing files
 
 ```bash
-# Show last 10 lines (default)
-$ tail a.txt
-
-# Show last 2 lines
-$ tail -n 2 a.txt
+cat a.txt             # print the whole file
+cat -n a.txt          # with line numbers
+cat a.txt b.txt       # several files, one after another
+less bigfile.log      # scroll: Space/PageDown, b = back, /word = search, q = quit
+head a.txt            # first 10 lines
+head -n 3 a.txt       # first 3
+tail a.txt            # last 10 lines
+tail -n 2 a.txt       # last 2
+tail -f app.log       # FOLLOW the end of a growing file (Ctrl+C to stop); great for logs
+wc -l a.txt           # count lines (-w words, -c bytes)
+file photo.jpg        # what kind of file is this?
+stat a.txt            # detailed info (size, times, permissions)
 ```
 
-**Real-world example:**
-```bash
-# Create a file with multiple lines
-$ echo "Line 1" >> data.txt
-$ echo "Line 2" >> data.txt
-$ echo "Line 3" >> data.txt
-$ echo "Line 4" >> data.txt
-$ echo "Line 5" >> data.txt
+---
 
-# View first 3 lines
-$ head -n 3 data.txt
-Line 1
-Line 2
-Line 3
+## 7. Copy, move, rename, delete
 
-# View last 2 lines
-$ tail -n 2 data.txt
-Line 4
-Line 5
-```
-
-## File and Directory Operations
-
-### rm: Removing Files
-
-The `rm` (remove) command deletes files:
+| Command | Does | Notes |
+|---|---|---|
+| `cp src dst` | Copy a file | `cp -r dir1 dir2` for directories; `cp -a` preserves permissions and times; `cp -i` asks before overwriting |
+| `mv src dst` | **Move** *or* **rename** | Same command for both; overwrites silently unless `-i` |
+| `rm file` | Delete a file | **Permanent. No trash bin** |
+| `rm -r dir` | Delete a directory and everything inside | |
+| `rmdir dir` | Delete an **empty** directory | Safer, fails if not empty |
+| `rm -i file` | Ask before deleting | Good habit while learning |
+| `rm -f file` | "Force": no prompts, ignore missing files | |
 
 ```bash
-$ touch test.txt
-$ ls
-test.txt
-
-$ rm test.txt
-$ ls
-# test.txt is gone
+cp a.txt backup.txt            # copy to a new name
+cp a.txt docs/                 # copy into a directory (keeps the name)
+cp -r docs docs_backup         # copy a directory
+mv backup.txt old.txt          # RENAME
+mv old.txt docs/               # MOVE into docs/
+mv old.txt docs/renamed.txt    # move AND rename
+rm docs/renamed.txt
+rm -r docs_backup
 ```
 
-**Removing directories requires the -r flag:**
-```bash
-# This will fail
-$ rm mydirectory
-rm: cannot remove 'mydirectory': Is a directory
+The rule for `cp` and `mv`: if the destination is an **existing directory**, the file goes *inside* it; otherwise the destination is the *new name*.
 
-# Use -r for recursive removal
-$ rm -r mydirectory
-# Directory and all its contents removed
-```
+### ⚠️ Deleting safely
+- **There is no undo.** Deleted files are not in a recycle bin.
+- Run `pwd` and `ls` **before** any `rm -r`.
+- Be specific: `rm -r project/build`, not `rm -rf *`.
+- Never combine `rm -rf` with an unchecked variable: `rm -rf "$DIR/"` deletes `/` if `$DIR` is empty. In scripts, use `set -u`, or `${DIR:?}`.
+- GNU `rm` refuses to remove `/` itself unless you add `--no-preserve-root`, but it will happily delete everything *inside* your current directory tree.
 
-**Force removal with -f:**
-```bash
-# Remove without confirmation, even if write-protected
-$ rm -rf mydirectory
-```
+---
 
-The `-rf` combination is powerful but dangerous:
-- `-r`: Recursive (remove directories and contents)
-- `-f`: Force (no confirmation prompts)
+## 8. Wildcards (globbing)
 
-**⚠️ WARNING:** The command `rm -rf /` will delete your entire system! Never run this command. Always double-check before using `rm -rf`.
+The shell expands these patterns **before** the command runs:
 
-### cp: Copying Files
-
-The `cp` (copy) command duplicates files:
-
-**Basic file copy:**
-```bash
-$ touch file1.txt
-$ echo "Hello World" > file1.txt
-$ cp file1.txt file2.txt
-
-$ cat file2.txt
-Hello World
-```
-
-**Copying directories requires -r:**
-```bash
-$ mkdir -p rahim
-$ cp -r rahim ataur
-
-$ ls
-rahim  ataur
-```
-
-**Copying to a different location:**
-```bash
-# Copy file2.txt to parent directory as file3.txt
-$ cp file2.txt ../rahim/file3.txt
-
-# Verify
-$ ls ../rahim/
-file3.txt
-```
-
-### mv: Moving and Renaming
-
-The `mv` (move) command serves two purposes: moving files and renaming them.
-
-**Renaming a file:**
-```bash
-$ touch file3.txt
-$ ls
-file3.txt
-
-$ mv file3.txt file4.txt
-$ ls
-file4.txt
-```
-
-**Moving files to different directories:**
-```bash
-$ mkdir documents
-$ mv file4.txt documents/
-$ ls documents/
-file4.txt
-```
-
-**Moving and renaming simultaneously:**
-```bash
-$ mv file1.txt documents/renamed_file.txt
-$ ls documents/
-renamed_file.txt
-```
-
-## Understanding Paths: Absolute vs. Relative
-
-### Absolute Paths
-
-An absolute path always starts from the root directory (`/`) and specifies the complete path to a file or directory:
+| Pattern | Matches |
+|---|---|
+| `*` | Any number of characters (including none) |
+| `?` | Exactly one character |
+| `[abc]` | One character from the set |
+| `[0-9]` | One character in the range |
+| `{a,b,c}` | (brace expansion) each listed alternative |
 
 ```bash
-$ cd /app/habib/rahim
-$ pwd
-/app/habib/rahim
-
-# Absolute path example
-$ cd /bin
-$ pwd
-/bin
+ls *.txt               # all .txt files
+ls file?.txt           # file1.txt, fileA.txt ...
+ls report_[0-9][0-9].csv
+touch note_{1..5}.txt  # creates note_1.txt ... note_5.txt
+rm *.tmp               # delete all .tmp files (check with ls *.tmp first!)
 ```
 
-Absolute paths always begin with `/` and specify the exact location regardless of where you currently are.
+`*` does **not** match hidden files (starting with `.`) by default.
 
-### Relative Paths
+---
 
-A relative path specifies a location relative to your current directory:
+## 9. Links
 
 ```bash
-# Currently in /app/ataur
-$ pwd
-/app/ataur
-
-# Relative path using ..
-$ cd ../habib/rahim
-$ pwd
-/app/habib/rahim
+ln -s /etc/hostname myhost     # symbolic (soft) link: a shortcut that points to a path
+ls -l myhost                   # myhost -> /etc/hostname
+ln a.txt a_hard.txt            # hard link: a second NAME for the same file content
+readlink -f myhost             # resolve the real path
 ```
 
-**Relative path components:**
-- `.` = current directory
-- `..` = parent directory
-- `../..` = two levels up
-- `dirname` = subdirectory in current location
+Symbolic links can point to directories and across disks, and break if the target is removed. Hard links can't. You met symlinks already: `/bin -> usr/bin`, and in Alpine `/bin/ls -> /bin/busybox`.
 
-**Practical example:**
-```bash
-# Currently in /app/habib/rahim
-$ pwd
-/app/habib/rahim
+---
 
-# Go to parent's parent
-$ cd ../..
-$ pwd
-/app
+## 10. Finding things
 
-# Navigate using relative path
-$ cd habib/rahim
-$ pwd
-/app/habib/rahim
-```
-
-### When to Use Each
-
-**Use absolute paths when:**
-- Writing scripts that must work from any location
-- Specifying system directories like `/etc`, `/var/log`
-- You want to be explicit and avoid ambiguity
-
-**Use relative paths when:**
-- Working within a project directory structure
-- The exact absolute location might change
-- You want shorter, more readable commands
-
-## Practical Command Examples
-
-Let's put everything together with a practical workflow:
+### `find`: search by name, type, size, age
 
 ```bash
-# 1. Start in home directory
-$ cd ~
-$ pwd
-/root
-
-# 2. Create a project structure
-$ mkdir -p projects/myapp/src
-$ mkdir -p projects/myapp/docs
-
-# 3. Navigate to the project
-$ cd projects/myapp
-
-# 4. Create some files
-$ touch src/main.py
-$ touch docs/README.md
-
-# 5. Add content to files
-$ echo "print('Hello, World!')" > src/main.py
-$ echo "# My Application" > docs/README.md
-$ echo "This is a sample project." >> docs/README.md
-
-# 6. View the files
-$ cat src/main.py
-print('Hello, World!')
-
-$ cat docs/README.md
-# My Application
-This is a sample project.
-
-# 7. List the project structure
-$ ls -R
-.:
-docs  src
-
-./docs:
-README.md
-
-./src:
-main.py
-
-# 8. Copy a file
-$ cp docs/README.md docs/README_backup.md
-
-# 9. Remove a file
-$ rm docs/README_backup.md
-
-# 10. Return to home
-$ cd ~
+find /etc -name "*.conf"             # by name pattern
+find . -type d                       # directories only  (-type f = files)
+find . -name "*.log" -size +1M       # bigger than 1 MB
+find . -mtime -1                     # modified in the last day
+find /tmp -name "*.tmp" -delete      # find AND delete (careful!)
+find . -name "*.txt" -exec wc -l {} \;   # run a command on each match
 ```
 
-## Running Docker Ubuntu Container
-
-To practice these commands, you can run an Ubuntu container:
+### `grep`: search inside files
 
 ```bash
-# Pull and run Ubuntu 22.04 with bash
-$ docker run -it ubuntu:22.04 bash
-
-# You'll see a root prompt
-root@container-id:/#
-
-# Now you can practice all the commands we learned
-root@container-id:/# pwd
-/
-
-root@container-id:/# ls
-bin  boot  dev  etc  home  lib  media  mnt  opt  proc  root  run  sbin  srv  sys  tmp  usr  var
-
-root@container-id:/# cd /bin
-root@container-id:/bin# ls
-# You'll see all the binary commands
+grep "error" app.log              # lines containing "error"
+grep -i "error" app.log           # case-insensitive
+grep -n "error" app.log           # show line numbers
+grep -r "TODO" .                  # search all files under here (recursive)
+grep -v "debug" app.log           # lines NOT containing "debug"
+grep -c "error" app.log           # just count matching lines
+ps aux | grep nginx               # filter another command's output
 ```
 
-The `-it` flags mean:
-- `-i`: Interactive (keep STDIN open)
-- `-t`: TTY (allocate a pseudo-terminal)
-
-Together, they give you an interactive terminal session inside the container.
-
-## Command Summary Cheat Sheet
-
-Here's a quick reference for all the commands we covered:
-
-### Navigation
-```bash
-pwd                    # Print working directory
-ls                     # List directory contents
-ls -l                  # Long format listing
-ls -a                  # Show hidden files
-ls -la                 # Long format with hidden files
-cd directory           # Change directory
-cd ~                   # Go to home directory
-cd ..                  # Go up one level
-cd -                   # Go to previous directory
-cd /                   # Go to root directory
-```
-
-### Directory Operations
-```bash
-mkdir dirname          # Create directory
-mkdir -p path/to/dir   # Create nested directories
-```
-
-### File Operations
-```bash
-touch filename         # Create empty file
-cat filename           # View file contents
-echo "text"            # Print text
-echo "text" > file     # Overwrite file
-echo "text" >> file    # Append to file
-head -n 5 file         # Show first 5 lines
-tail -n 5 file         # Show last 5 lines
-```
-
-### File Management
-```bash
-rm filename            # Remove file
-rm -r dirname          # Remove directory recursively
-rm -rf dirname         # Force remove (dangerous!)
-cp source dest         # Copy file
-cp -r source dest      # Copy directory
-mv source dest         # Move or rename
-```
-
-### Path Types
-```bash
-/absolute/path         # Absolute path from root
-relative/path          # Relative to current directory
-../parent              # Parent directory
-./current              # Current directory
-```
-
-## Best Practices and Tips
-
-### 1. Always Know Where You Are
-Before running commands, especially destructive ones like `rm -rf`, always check your current location with `pwd`.
-
-### 2. Use Tab Completion
-Tab completion is your friend. It saves time and prevents typos. Get in the habit of pressing Tab after typing a few characters.
-
-### 3. Be Careful with rm -rf
-The `rm -rf` command is powerful and permanent. There's no "undo" or "trash" in Linux command line. Double-check before executing.
-
-### 4. Use ls to Verify
-After operations like copy or move, use `ls` to verify that everything worked as expected.
-
-### 5. Practice in a Safe Environment
-Docker containers are perfect for practice. If you break something, just delete the container and start fresh:
+### Locating programs
 
 ```bash
-# Exit the container
-$ exit
-
-# The container is gone - no harm done!
+which ls           # where is the program that runs when I type ls?
+type cd            # builtin or program?
+whereis ls         # binary, source and man page locations
+command -v curl    # portable way to check something is installed (good in scripts)
 ```
 
-### 6. Learn the Difference Between Shells
-Zsh (%) and Bash ($) have different features. Bash is more universal, zsh has better tab completion and suggestions. Know which one you're using.
+---
 
-### 7. Understand File Permissions
-The long listing (`ls -l`) shows file permissions. While we didn't cover this in detail, understanding `drwxr-xr-x` will be important as you advance.
+## 11. Getting help
 
-## Common Mistakes and How to Avoid Them
-
-### Mistake 1: Forgetting Spaces in Echo Commands
 ```bash
-# Wrong - creates multiple files
-$ echo Hello World > file.txt
-# Creates: file.txt, Hello, World (three separate files!)
-
-# Correct - use quotes
-$ echo "Hello World" > file.txt
+ls --help                # short usage summary for most commands
+man ls                   # the manual page (q to quit); may be missing in minimal Docker images
+type -a echo             # what will actually run
+history | tail           # my recent commands
 ```
 
-### Mistake 2: Confusing > and >>
+**Minimal Docker images often exclude man pages** ("This system has been minimized"). Use `--help`, or read the manual online at man7.org, or `man` on your own computer.
+
+---
+
+## 12. A complete practice session
+
 ```bash
-# This overwrites the file each time
-$ echo "Line 1" > file.txt
-$ echo "Line 2" > file.txt
-# Result: Only "Line 2" remains
+# 1. Start at home and look around
+cd ~ && pwd && ls -la
 
-# This appends
-$ echo "Line 1" >> file.txt
-$ echo "Line 2" >> file.txt
-# Result: Both lines preserved
+# 2. Build a project
+mkdir -p projects/myapp/src projects/myapp/docs
+cd projects/myapp
+
+# 3. Create and fill files
+echo "print('Hello, World!')" > src/main.py
+echo "# My App" > docs/README.md
+echo "A sample project." >> docs/README.md
+
+# 4. Inspect
+ls -R
+cat docs/README.md
+wc -l docs/README.md
+
+# 5. Copy, rename, delete
+cp docs/README.md docs/README.bak
+mv docs/README.bak docs/OLD.md
+rm docs/OLD.md
+
+# 6. Search
+grep -rn "Hello" .
+
+# 7. Navigate using different path styles
+cd /                      # absolute
+cd ~/projects/myapp/src   # absolute with ~
+cd ../docs                # relative
+cd -                      # back to src
+pwd
 ```
 
-### Mistake 3: Forgetting -r with Directories
-```bash
-# This fails
-$ rm directory
-rm: cannot remove 'directory': Is a directory
+---
 
-# This works
-$ rm -r directory
-```
+## 13. Cheat sheet
 
-### Mistake 4: Using Relative Paths Without Understanding Current Location
-```bash
-$ pwd
-/home/user
+| Goal | Command |
+|---|---|
+| Where am I? | `pwd` |
+| List (details, hidden) | `ls -la` |
+| Go somewhere / home / back / up | `cd path` · `cd` · `cd -` · `cd ..` |
+| Make folder (with parents) | `mkdir -p a/b/c` |
+| Create empty file | `touch f` |
+| Write / append | `echo "x" > f` · `echo "x" >> f` |
+| Show file / start / end / follow | `cat f` · `head -n 5 f` · `tail -n 5 f` · `tail -f f` |
+| Page through a big file | `less f` |
+| Copy file / folder | `cp a b` · `cp -r a b` |
+| Move or rename | `mv a b` |
+| Delete file / folder / empty folder | `rm f` · `rm -r d` · `rmdir d` |
+| Search by name / by content | `find . -name "*.py"` · `grep -rn "text" .` |
+| Size of a folder / free disk | `du -sh dir` · `df -h` |
+| Help | `cmd --help` · `man cmd` |
 
-$ cd ../etc
-# Where are you now? Not in /etc!
-# You're in /etc because you went up from /home/user
-```
+---
 
-### Mistake 5: Not Checking Before rm -rf
-```bash
-# Dangerous - always verify first!
-$ rm -rf *
+## 14. Common mistakes and myths
 
-# Better approach
-$ ls              # Check what's here first
-$ rm -rf specific_directory  # Be specific
-```
+| Mistake or myth | Correction |
+|---|---|
+| "`echo Hello World > f` creates three files" | It writes `Hello World` into `f`. Redirection takes exactly one target |
+| "`>` and `>>` are the same" | `>` **overwrites**, `>>` **appends** |
+| "`rm` has a trash can" | No. Deleted means gone |
+| "`cd` with no argument does nothing" | It goes to your home directory |
+| "`/root` and `/` are the same" | `/` is the top of the tree, `/root` is root's home |
+| "`ls` shows all files" | Hidden files need `-a` |
+| "Exiting a container deletes it" | Only with `--rm` (or `docker rm`); otherwise it's just stopped |
+| "Case doesn't matter" | Linux is case-sensitive |
+| "A file's extension decides its type" | Linux mostly ignores extensions; use `file` to check |
+| "`$` means I'm safe" | Prompt symbols are only conventions; check with `whoami` |
+| "Spaces in names are fine unquoted" | `rm my file` tries to delete `my` and `file`. Quote: `rm "my file"` |
 
-## ASCII Diagram: Directory Navigation
+---
 
-```
-Root (/)
-    │
-    ├── bin/
-    ├── home/
-    │   └── user/           ← cd ~/user takes you here
-    ├── app/
-    │   ├── habib/
-    │   │   └── rahim/      ← You are here (pwd: /app/habib/rahim)
-    │   │       │
-    │   │       ├── cd ..   → Takes you to /app/habib
-    │   │       ├── cd ../.. → Takes you to /app
-    │   │       └── cd /    → Takes you to /
-    │   │
-    │   └── ataur/
-    │
-    └── usr/
-        └── bin/
+## 15. Summary
 
-Navigation Examples:
-• cd ~         → Go to /home/user (or /root for root user)
-• cd /         → Go to root directory
-• cd ..        → Go up one level
-• cd -         → Go to previous directory
-• cd /app      → Absolute path to /app
-• cd habib     → Relative path (only works if habib is in current dir)
-```
+- Prompt: `user@host:directory#`; `#` usually means root.
+- One tree rooted at `/`; know `/etc`, `/var`, `/home`, `/tmp`, `/usr`, `/proc`.
+- Absolute paths start with `/`; relative paths start from where you are; `.`, `..`, `~`, `-` are shortcuts.
+- Core commands: `pwd`, `ls`, `cd`, `mkdir`, `touch`, `cat`, `less`, `head`, `tail`, `cp`, `mv`, `rm`.
+- `>` overwrites, `>>` appends, `|` pipes; wildcards `* ? []`; search with `find` and `grep`.
+- No undo. Look before you delete.
 
-## Exercises
+---
 
-### Exercise 1: Directory Navigation
-1. Start in your home directory (`cd ~`)
-2. Check your location (`pwd`)
-3. List all contents including hidden files (`ls -la`)
-4. Go to the root directory (`cd /`)
-5. List contents (`ls`)
-6. Return to home (`cd ~`)
+## 16. Check your understanding
 
-### Exercise 2: Creating a Project Structure
-Create this directory structure:
-```
-projects/
-├── backend/
-│   ├── src/
-│   └── tests/
-└── frontend/
-    ├── components/
-    └── styles/
-```
+1. Your prompt is `alice@web:/var/log$`. Who are you, where are you, and are you root?
+2. What is the difference between `cd /app` and `cd app`?
+3. From `/app/habib/rahim`, what does `cd ../..` do?
+4. What does `mkdir -p a/b/c` do that `mkdir a/b/c` may not?
+5. What is the difference between `mv a b` when `b` is a directory and when it is not?
+6. How would you find every `.log` file under `/var` that is bigger than 10 MB?
+7. What will `echo "one" > f; echo "two" > f; cat f` print?
 
-Commands:
-```bash
-mkdir -p projects/backend/src
-mkdir -p projects/backend/tests
-mkdir -p projects/frontend/components
-mkdir -p projects/frontend/styles
-```
+<details>
+<summary>Answers</summary>
 
-### Exercise 3: File Operations
-1. Create a file called `notes.txt`
-2. Add "Day 1: Started learning Linux" to it
-3. Display the contents
-4. Add "Day 2: Learned basic commands" to it
-5. Display the contents again
-6. Copy the file to `notes_backup.txt`
-7. Rename `notes.txt` to `diary.txt`
-8. Delete `notes_backup.txt`
+1. User `alice`, on host `web`, in `/var/log`; `$` suggests a normal user (verify with `id`).
+2. `/app` is absolute (always from the root). `app` is relative to the current directory.
+3. It moves up two levels: to `/app`.
+4. It creates missing parent directories, and doesn't complain if they exist.
+5. If `b` is an existing directory, `a` is moved into it. Otherwise `a` is renamed to `b`.
+6. `find /var -name "*.log" -size +10M`
+7. `two`. The second `>` overwrote the first.
+</details>
 
-### Exercise 4: Path Practice
-Starting from `/app/habib/rahim`:
-1. Navigate to `/app` using relative path
-2. Navigate to `/bin` using absolute path
-3. Navigate back to `/app/habib/rahim` using absolute path
-4. Navigate to `/app/ataur` using relative path from rahim
-5. Return to home directory
+**Exercises**
 
-### Exercise 5: Advanced File Operations
-1. Create a file with 10 lines (use echo and >> 10 times)
-2. View only the first 3 lines
-3. View only the last 3 lines
-4. Copy the file to a subdirectory using relative path
-5. Verify the copy was successful
+1. Create `projects/backend/{src,tests}` and `projects/frontend/{components,styles}` with as few commands as possible (hint: brace expansion with `mkdir -p`).
+2. Create `notes.txt` with two lines using `echo`, copy it to `notes.bak`, rename `notes.txt` to `diary.txt`, delete `notes.bak`.
+3. Create a file with 10 lines (`seq 1 10 > numbers.txt`), show only the first 3 and last 3 lines, then count them with `wc -l`.
+4. From `/usr/share`, go to `/etc` with an absolute path, then back with `cd -`, then to `/var/log` using a relative path.
+5. Use `grep -rn root /etc/passwd /etc/group`, then `find /etc -name "*.conf" | wc -l`.
 
-## Key Takeaways
+---
 
-1. **The prompt tells a story**: Username, hostname, current directory, and shell type are all visible in your prompt.
-
-2. **/ is the root**: Everything in Linux starts from the root directory, and all paths branch from there.
-
-3. **Essential commands**: `pwd`, `ls`, `cd`, `mkdir`, `touch`, `cat`, `echo`, `head`, `tail`, `rm`, `cp`, and `mv` are your daily tools.
-
-4. **Two path types**: Absolute paths start with `/` and relative paths are relative to your current location.
-
-5. **Special directory shortcuts**:
-   - `~` = home directory
-   - `.` = current directory
-   - `..` = parent directory
-   - `-` = previous directory
-
-6. **Redirection operators**:
-   - `>` = overwrite file
-   - `>>` = append to file
-
-7. **Flags modify behavior**:
-   - `-r` = recursive (for directories)
-   - `-f` = force (skip confirmations)
-   - `-p` = parents (create parent directories)
-   - `-l` = long format listing
-   - `-a` = show all (including hidden files)
-
-8. **Tab completion saves time**: Use it liberally to avoid typos and speed up your workflow.
-
-9. **Practice in containers**: Docker containers are perfect for learning because mistakes don't matter - just delete and start fresh.
-
-10. **Be careful with rm -rf**: This command is permanent and powerful. Always verify your location and target before executing.
-
-## Looking Ahead
-
-You now have a solid foundation in Linux basic commands. In the next chapter, we'll build on this knowledge by exploring:
-- User and group management
-- File permissions and ownership
-- More advanced file manipulation techniques
-- Process management
-- Environment variables
-
-These basic commands might seem simple, but they're the building blocks for everything else. Practice them daily, and they'll become second nature. Remember: every Linux expert started exactly where you are now - learning `ls`, `cd`, and `pwd` for the first time.
-
-Happy commanding! 🐧
+**Next:** [Chapter 13 – Users, Groups and Permissions](13_managing_user_group_and_permission.md)

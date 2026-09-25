@@ -1,1963 +1,543 @@
-# Chapter 32: First Computer & First Router In Details
+# Chapter 32: The First Computer and the First Router
 
-## Overview
+> **In one sentence:** To put a computer on a network you need a **network interface** (hardware plus a driver) with a MAC address, an **IP address** (from DHCP, manual settings, or a self-assigned link-local fallback), a **subnet mask** and a **default gateway**; connecting to other networks and the internet requires a **router**, which forwards packets between networks and (at home) also does DHCP, NAT, Wi-Fi and a firewall.
 
-This chapter marks a transition from networking theory to **real, practical networking**. While previous chapters explored protocols (TCP, UDP, HTTP, DNS, TLS, IP) and frame structures, this chapter asks a fundamental question: *How does a computer actually get on a network in the first place?*
+**Level:** 🟢 Beginner → 🟡 Intermediate · **Reading time:** ~55 minutes
 
-We'll trace the journey every computer takes from being a standalone device with no network connectivity to becoming part of a local network, and eventually part of the global Internet. This isn't abstract theory—this is the story of your first computer, the Network Interface Card (NIC) that connects it to the world, the automatic IP addressing that makes it work, and the router that bridges your home network to the Internet.
-
-Understanding this foundation is critical because every networking concept builds on these basics. You cannot understand DHCP servers, subnet masks, default gateways, or routing tables until you understand what happens when you first plug a network cable into a computer. You cannot troubleshoot network connectivity issues until you understand APIPA addressing, NIC drivers, and router configuration.
-
-This chapter takes you back to the beginning: buying your first computer, connecting it to your first network, setting up your first router. We'll explore the hardware (NICs), the software (drivers), the addressing schemes (APIPA, static IPs), and the physical topology (point-to-point, star networks, router-based internetworks). By the end, you'll understand exactly what happens at the hardware and software level when you type `ifconfig` or `ipconfig` and see an IP address appear.
-
-**This is real networking. This is where it all begins.**
+**Prerequisites:** [Chapter 30](30_internet_protocol_ip_in_details.md) (IP addresses, routing) and [Chapter 31](31_data_link_layer_frame_in_details.md) (MACs, frames, switches).
 
 ---
 
-## The First Computer: A Networking Perspective
+## What you will learn
 
-### The Standalone Computer
-
-**Scenario:** You've just purchased your first computer and brought it home.
-
-**Classic Desktop Setup:**
-
-```
-┌─────────────────────────────────────────────────┐
-│                   Monitor                       │
-│  ┌─────────────────────────────────────────┐   │
-│  │         Display Output                  │   │
-│  └─────────────────────────────────────────┘   │
-└────────────────────┬────────────────────────────┘
-                     │ (Video Cable)
-                     │
-      ┌──────────────▼──────────────┐
-      │         PC Tower            │
-      │  ┌──────────────────────┐   │
-      │  │  CPU, RAM, Storage   │   │
-      │  │  Motherboard         │   │
-      │  └──────────────────────┘   │
-      └──────────────┬──────────────┘
-                     │
-         ┌───────────┴───────────┐
-         │                       │
-    ┌────▼────┐            ┌─────▼─────┐
-    │Keyboard │            │   Mouse   │
-    │ (Input) │            │  (Input)  │
-    └─────────┘            └───────────┘
-```
-
-**Components:**
-- **PC Tower:** The actual computer (CPU, RAM, storage)
-- **Monitor:** Output device (displays visual information)
-- **Keyboard:** Input device (text entry)
-- **Mouse:** Input device (pointer control)
-
-**Simplified Representation:**
-
-For networking discussions, we simplify this to a single box representing the entire computer:
-
-```
-┌─────────┐
-│    🖥    │
-│   PC    │
-└─────────┘
-```
+- What a **network interface (NIC)** is, how drivers make it usable, and how to see yours on Linux, Windows and macOS
+- The **four things** every host needs to communicate: IP address, subnet mask, default gateway, DNS
+- **How a computer gets an address**: DHCP, static configuration, and the **link-local (APIPA)** fallback `169.254.0.0/16`
+- **Two computers, one cable**: peer-to-peer, why cables used to be "crossover", and the `N(N−1)/2` scaling problem that led to switches
+- What a **router** is, how it differs from a **switch**, and what a typical **home router** really is (router + switch + Wi-Fi AP + DHCP + NAT + firewall, sometimes + modem)
+- A step-by-step journey from "no network" to "browsing the internet", including the exact packets
+- **Build your own routers** in a lab with Linux network namespaces (so nothing on your real network is touched)
+- Troubleshooting from the bottom up, and how Docker/VMs fit this same model
 
 ---
 
-### What's Missing? Networking Capability
+## 1. A computer with no network
 
-**When you first get a desktop computer:**
+A brand-new computer can run programs, store files and draw on a screen. What it *cannot* do is talk to other machines. A network interface on a computer is what gives it:
 
-```
-Computer State:
-✅ Can run programs (OS loaded, applications installed)
-✅ Can store files (hard drive, SSD)
-✅ Can display graphics (monitor connected)
-✅ Can receive input (keyboard, mouse connected)
-❌ Cannot communicate with other computers
-❌ No IP address
-❌ No MAC address
-❌ No network connectivity
-```
+- a **MAC address** (Layer 2 identity), and after configuration
+- an **IP address** (Layer 3 identity)
 
-**Why No IP Address?**
+Note the wording: an IP address identifies a **network interface**, not "the computer". A laptop with Ethernet and Wi-Fi has (at least) two interfaces, each with its own MAC and IP addresses. With no interface there is nothing to address.
 
-Without network hardware, there's nothing to address. An IP address identifies a network interface, not the computer itself. No network interface = no IP address.
-
-**Historical Context:**
-
-In the early days of personal computing (1980s-1990s), most home computers were standalone devices:
-- No Internet connectivity
-- No local networks
-- Files shared via floppy disks ("sneakernet")
-- Dialup modems for bulletin board systems (BBS)
-
-**What You Could Do:**
-
-```
-Standalone Computer Activities:
-- View files stored on hard drive
-- View photos (if stored locally)
-- Watch videos (if stored locally)
-- Play single-player games
-- Write documents in word processor
-- Create spreadsheets
-- Edit graphics
-- Program/develop software
-
-What You COULDN'T Do:
-- Browse websites (no Internet)
-- Send email (no network)
-- Share files with other computers (no network)
-- Play multiplayer games (no network)
-- Download software (no network)
-- Access remote resources (no network)
-```
-
-**The Problem:**
-
-Computers are far more useful when they can communicate with each other. To enable communication, we need **networking hardware**.
+Historically, computers stayed standalone and moved files with floppy disks ("sneakernet") or dial-up modems. Networking hardware turned computers from islands into a connected system.
 
 ---
 
-## Network Interface Card (NIC): The Gateway to Networking
+## 2. The Network Interface Card (NIC)
 
-### What Is a NIC?
+A **NIC** (network interface card/controller; also *network adapter*, *LAN card*) connects a computer to a network medium and handles Layers 1 and 2:
 
-**NIC: Network Interface Card**
+| Layer | What the NIC does |
+|---|---|
+| **1 (Physical)** | Converts digital data to electrical, optical or radio signals and back; auto-negotiates speed and duplex |
+| **2 (Data Link)** | Builds and parses **frames**, adds/checks the **FCS**, filters by **MAC address**, controls access to the medium (CSMA/CA in Wi-Fi) |
+| **Offloads** | Modern NICs also compute checksums, segment large TCP sends (TSO/GSO), and balance receive queues to reduce CPU load |
 
-**Definition:**
-A hardware component that enables a computer to connect to a network. It provides the physical interface for transmitting and receiving data over network cables (wired) or radio waves (wireless).
+### Kinds of NICs
+| Kind | Where it lives | Notes |
+|---|---|---|
+| **Integrated (onboard)** | On the motherboard/SoC | Standard today: Ethernet port (RJ-45), Wi-Fi/Bluetooth chip in laptops and phones |
+| **PCIe / PCI card** | Expansion slot | Server and workstation NICs: 2.5/10/25/40/100 Gbit/s, SFP+/QSFP fiber |
+| **USB adapter / dongle** | USB port | Handy for laptops without Ethernet |
+| **Virtual NIC (vNIC)** | Software | VMs, containers (`veth`), Docker bridges, VPN tunnels (`wg0`, `tun0`) |
 
-**Full Name:**
-- **N**etwork **I**nterface **C**ard
-- Also called: Network Adapter, LAN Card, Ethernet Card, WiFi Card
+Wired Ethernet uses the **RJ-45** connector and twisted-pair cables (**Cat5e** for gigabit, **Cat6/6a** for 10 Gbit/s, max 100 m per run); wireless uses **802.11** standards on 2.4/5/6 GHz (Wi-Fi 4/5/6/6E/7).
 
----
+### Drivers
+Hardware needs software that knows how to talk to it: a **driver**. It initializes the chip, hands frames to/from the OS network stack, handles interrupts, manages memory buffers and reports errors. Analogy: a translator between the operating system (which speaks "generic networking") and one specific chip (which speaks its own register language).
 
-### Types of NICs
+- **Then:** you installed a driver from a CD and rebooted.
+- **Now:** operating systems ship with thousands of drivers and load them automatically ("plug and play"). On **Linux** they are usually **kernel modules**; on **Windows** `.sys`/INF packages from Windows Update or the vendor; **macOS** bundles drivers for supported hardware.
+- If an interface doesn't appear, the usual culprit is a **missing driver or firmware** (Wi-Fi chips commonly need `linux-firmware`).
 
-#### 1. External NICs (Legacy Desktop Computers)
-
-**Historical Context:**
-
-Early desktop computers (1990s-early 2000s) often lacked built-in networking. Users had to purchase and install external NICs to enable network connectivity.
-
-**Physical Appearance:**
-
-```
-External NIC Examples:
-
-┌─────────────────────────────────────┐
-│  PCI Network Card (Internal slot)   │
-│  ┌───────────────────────────────┐  │
-│  │   [Ethernet chip]             │  │
-│  │   [LED indicators]            │  │
-│  └───────────────────────────────┘  │
-│          │                           │
-│          └──[RJ-45 Port]             │
-│             (Ethernet cable socket)  │
-└─────────────────────────────────────┘
-
-┌─────────────────────────────────────┐
-│  USB Network Adapter (External)     │
-│  ┌──┐                                │
-│  │  │──[USB connector]               │
-│  └──┘                                │
-│   │                                  │
-│   └──[RJ-45 Port]                    │
-└─────────────────────────────────────┘
-
-┌─────────────────────────────────────┐
-│  PCMCIA Card (Laptop - obsolete)    │
-│  ┌───────────────────────────────┐  │
-│  │  [Card body]                  │  │
-│  └───────────────────────────────┘  │
-│          │                           │
-│          └──[RJ-45 Port]             │
-└─────────────────────────────────────┘
+```bash
+# Linux: hardware, driver, interface
+lspci -k | grep -A3 -i -E 'ethernet|network'     # PCI NICs and "Kernel driver in use: e1000e / r8169 / iwlwifi ..."
+lsusb                                            # USB adapters
+ip -br link                                      # interface names and MACs
+ethtool -i eth0                                  # driver: e1000e, version, firmware-version, bus-info
+cat /sys/class/net/eth0/address                  # MAC address
+ls /sys/class/net                                # lo, eth0 (or enp3s0), wlan0 (or wlp2s0), docker0 ...
+lsmod | grep -iE 'e1000|r8169|iwlwifi|ath|mt76'  # loaded driver modules
+dmesg | grep -iE 'eth|wlan|firmware|link is'     # detection, firmware and link messages
 ```
 
-**Installation Process (External PCI NIC):**
+Names like `enp3s0` (Ethernet, PCI bus 3, slot 0) or `wlp2s0` are **predictable interface names** chosen by systemd based on hardware location, replacing the older `eth0`/`wlan0`.
+
+**Windows:** `ipconfig /all`, `Get-NetAdapter`, Device Manager → Network adapters. **macOS:** `ifconfig`, `networksetup -listallhardwareports`, System Settings → Network.
+
+### Unique identity
+Each NIC has a **MAC address** (Chapter 31), giving the interface a Layer-2 identity. Without an IP configuration it can still send and receive frames on its local link, but Layer-3 applications have nothing to bind to (except loopback).
 
 ```
-Step 1: Computer without NIC
-┌─────────────────────┐
-│                     │
-│   PC Tower          │
-│   (No networking)   │
-│                     │
-└─────────────────────┘
-
-Step 2: Open computer case, install PCI NIC
-┌─────────────────────┐
-│                     │
-│   PC Tower          │
-│   ┌──────────────┐  │
-│   │ Motherboard  │  │
-│   │  [NIC Card]←─┼──┼── PCI slot
-│   └──────────────┘  │
-│                     │
-└─────────────────────┘
-
-Step 3: NIC visible from back of PC
-┌─────────────────────┐
-│   Back Panel        │
-│   ┌──┐              │
-│   │🔌│ ← RJ-45 Port │
-│   └──┘              │
-└─────────────────────┘
-
-Step 4: Connect Ethernet cable
-┌─────────────────────┐
-│   Back Panel        │
-│   ┌──┐              │──────────── Ethernet Cable
-│   │🔌│════════════════════════
-│   └──┘              │
-└─────────────────────┘
-```
-
-**Types of External NICs:**
-- **PCI NIC:** Plugs into PCI slot on motherboard (most common in 1990s-2000s)
-- **USB NIC:** Plugs into USB port (convenient, no case opening required)
-- **PCMCIA NIC:** For laptops (obsolete, replaced by built-in WiFi)
-
----
-
-#### 2. Internal NICs (Integrated)
-
-**Modern Computers:**
-
-Today's computers have built-in network interfaces integrated into the motherboard:
-
-```
-Modern Motherboard:
-┌─────────────────────────────────────────────┐
-│                Motherboard                  │
-│  ┌────────────────────────────────────┐     │
-│  │  CPU Socket                        │     │
-│  └────────────────────────────────────┘     │
-│                                             │
-│  [RAM Slots]                                │
-│                                             │
-│  [Integrated Network Controller] ←──────────┼─ Built-in NIC
-│                                             │
-│  Back Panel I/O:                            │
-│  ┌──┐ ← Ethernet Port (RJ-45)              │
-│  │🔌│                                       │
-│  └──┘                                       │
-└─────────────────────────────────────────────┘
-```
-
-**Advantages:**
-- No installation required
-- Drivers often pre-installed in OS
-- Lower cost (included with motherboard)
-- More reliable (no loose connections)
-
----
-
-#### 3. Wired vs Wireless NICs
-
-**Wired NIC (Ethernet):**
-
-```
-Ethernet Port (RJ-45):
-┌─────────┐
-│  ┌───┐  │
-│  │   │  │ ← 8 pins for twisted-pair cable
-│  └───┘  │
-└─────────┘
-
-Standard: IEEE 802.3
-Speeds: 10 Mbps, 100 Mbps, 1 Gbps, 10 Gbps, 100 Gbps
-Cable: Cat5e, Cat6, Cat6a, Cat7
-Connector: RJ-45
-Medium: Copper wire (electrical signals)
-```
-
-**Wireless NIC (WiFi):**
-
-```
-WiFi Adapter:
-┌─────────────┐
-│   [Chip]    │
-│     │       │
-│   ┌─┴─┐     │
-│   │ ⚡ │ ← Antenna (internal or external)
-│   └───┘     │
-└─────────────┘
-
-Standard: IEEE 802.11 (a/b/g/n/ac/ax)
-Speeds: 54 Mbps (802.11g) to 9.6 Gbps (802.11ax/WiFi 6)
-Frequencies: 2.4 GHz, 5 GHz, 6 GHz (WiFi 6E)
-Medium: Radio waves
+No NIC → no MAC → no Layer 2 → no IP → no networking
+NIC + driver → MAC available → Layer 2 works → assign IP → networking works
 ```
 
 ---
 
-### NIC Functions
+## 3. What a host needs to be "on the network"
 
-**What Does a NIC Do?**
+| Setting | Question it answers | Example |
+|---|---|---|
+| **IP address** | Who am I? | `192.168.1.50` |
+| **Subnet mask / prefix** | Which addresses are on **my** local network? | `255.255.255.0` (`/24`) |
+| **Default gateway** | Where do I send packets for **everything else**? | `192.168.1.1` (the router) |
+| **DNS server(s)** | How do I turn names into addresses? | `192.168.1.1`, `1.1.1.1` |
 
-1. **Physical Layer (Layer 1):**
-   - Converts digital data to electrical signals (Ethernet) or radio waves (WiFi)
-   - Converts received signals back to digital data
-   - Handles signal encoding/decoding
+The subnet mask lets the host decide, for each destination: is it **local** (ARP for it, send directly) or **remote** (send to the default gateway)? Two hosts with the same address prefix on the same cable can talk directly; anything else needs a router. (Full details of masks: Chapters 33–34.)
 
-2. **Data Link Layer (Layer 2):**
-   - Assembles outgoing frames (adds Ethernet header and FCS)
-   - Disassembles incoming frames (strips Ethernet header, validates FCS)
-   - Implements MAC addressing
-   - Controls media access (CSMA/CD for Ethernet, CSMA/CA for WiFi)
+### How the settings are obtained
 
-3. **Device Identification:**
-   - Provides MAC address (burned into hardware)
-   - Enables IP address assignment (via APIPA, DHCP, or static configuration)
+| Method | How | Typical use |
+|---|---|---|
+| **DHCP** (dynamic) | A DHCP server hands out address, mask, gateway, DNS and a lease time | Nearly everything: homes, offices, Wi-Fi (Chapters 35–37) |
+| **Static** (manual) | An administrator types them in | Servers, routers, printers, infrastructure |
+| **Link-local / APIPA** | The host picks its own `169.254.x.y` address | Fallback when DHCP is absent |
 
-**NIC as Hardware Abstraction:**
+---
+
+## 4. Link-local addresses (APIPA / IPv4LL)
+
+If DHCP doesn't answer, most desktop operating systems self-assign an address from **`169.254.0.0/16`** (RFC 3927 "IPv4 Link-Local"; Microsoft calls it **APIPA**, Automatic Private IP Addressing).
+
+### The process
+1. The interface comes up; the OS sends **DHCP Discover** broadcasts and waits (about a minute total on some systems).
+2. No answer → the OS picks a **random** address in **`169.254.1.0 – 169.254.254.255`** (the first and last 256 addresses are reserved, so about **65,024** usable).
+3. It checks the address isn't taken by sending **ARP probes** ("does anyone own 169.254.x.y?"); if someone answers, it picks another.
+4. It configures the address with the `/16` mask and **no default gateway and no DNS**.
+5. It **keeps trying DHCP** in the background and abandons the link-local address as soon as a server appears.
+
+### What works and what doesn't
+| Works | Doesn't work |
+|---|---|
+| Talking to other devices on the **same link** (same cable/switch/Wi-Fi) that also have link-local or that are reachable at L2, e.g. two laptops joined by a cable, printers, some IoT/mDNS discovery | Reaching the **internet** (no gateway, and these addresses are **never routed**) |
+| ARP, ping, file sharing and app protocols between those devices | Talking to hosts on **other subnets**, using DNS, reaching most company resources |
+
+`169.254.169.254` is a well-known exception in a different role: the **cloud metadata service** address in AWS/GCP/Azure.
+
+### Recognizing it
+- **Windows:** `ipconfig` shows **"Autoconfiguration IPv4 Address . . . : 169.254.x.y"** (on newer Windows just "IPv4 Address" in that range).
+- **macOS:** `ifconfig en0` shows `inet 169.254.x.y netmask 0xffff0000`; System Settings says "Self-assigned IP address".
+- **Linux:** not automatic by default on most server setups. Desktops using NetworkManager can use *Link-Local* mode, and `avahi-autoipd` provides it: `ip addr` shows `inet 169.254.x.y/16 scope link`.
+
+> **In production, a `169.254.x.x` address means "I could not reach a DHCP server"**: check the cable and link lights, the switch port (VLAN, port security), whether the DHCP server is up and has free addresses in its pool, whether a relay/agent is configured (across VLANs), and try to renew.
+
+**IPv6 does the same by design:** every IPv6 interface automatically has a **link-local `fe80::/10` address** (plus, on most networks, a global one via router advertisements: SLAAC).
+
+---
+
+## 5. Two computers and a cable
+
+The simplest network: two computers, one Ethernet cable, no other equipment.
 
 ```
-Application Layer
-      ↓
-[Operating System Networking Stack]
-      ↓
-[NIC Driver] ← Software interface to hardware
-      ↓
-[Network Interface Card] ← Hardware
-      ↓
-[Physical Medium: Cable or Radio Waves]
+┌───────────┐      Ethernet cable      ┌───────────┐
+│ Computer A│══════════════════════════│ Computer B│
+│ 169.254.52.143/16                    169.254.100.50/16 │
+└───────────┘                          └───────────┘
+```
+
+### The old crossover cable
+Classic Ethernet (10/100BASE-T) used pins 1–2 to **transmit** and 3–6 to **receive** on a *computer*, but a *switch/hub* had them reversed. So:
+
+- **Straight-through** cable: computer ↔ switch. ✅
+- **Crossover** cable (transmit pair wired to the other end's receive pair): computer ↔ computer (or switch ↔ switch). ✅ (A straight cable between two computers would connect transmitters to transmitters.)
+
+Today **Auto-MDI/MDI-X** is universal on modern NICs (it is **mandatory for Gigabit Ethernet**, which uses all four pairs in both directions): the ports detect and swap pairs themselves, so **any cable works for any connection**.
+
+### Does it work?
+With DHCP absent, both computers self-assign link-local addresses; they're in the **same `/16`**, so:
+
+```
+Is 169.254.100.50 in my network 169.254.0.0/16 ?  yes → ARP for its MAC → send the frame directly
+```
+```bash
+ping 169.254.100.50
+# 1. A broadcasts ARP:  "who has 169.254.100.50? tell 169.254.52.143"
+# 2. B replies (unicast): "169.254.100.50 is at bb:bb:bb:bb:bb:bb"
+# 3. A sends ICMP Echo Request in an Ethernet frame to that MAC; B replies
+```
+They can now share files (e.g. `python3 -m http.server 8080` on one, `http://169.254.52.143:8080` on the other) but have no internet, no DNS, and no way to add a third machine to the cable.
+
+### Why a switch
+Connecting every machine to every other needs **N(N−1)/2 cables and N−1 NICs per machine**:
+
+| Machines | Cables |
+|---|---|
+| 2 | 1 |
+| 3 | 3 |
+| 5 | 10 |
+| 10 | 45 |
+| 100 | 4,950 |
+
+A **switch** (Chapter 31) gives every machine **one** cable to a central device that forwards frames by MAC address: N cables total, the **star topology** that all LANs use.
+
+---
+
+## 6. Routers
+
+### 6.1 Why a router
+A switch connects devices into **one network** (one subnet, one broadcast domain). To reach **another network**, whether a second office subnet or the whole internet, you need a device that operates at **Layer 3**: a **router**. It has **an interface in each network** and forwards **IP packets** between them according to a **routing table**.
+
+```
+   Network A 192.168.1.0/24            Network B 10.0.0.0/24            Network C (ISP)
+   ┌──────┐ ┌──────┐                    ┌────────┐                       
+   │ PC 1 │ │ PC 2 │                    │ Server │                       
+   └──┬───┘ └──┬───┘                    └───┬────┘                       
+      └───┬────┘                            │                               
+      [switch]                           [switch]                            
+          │ .1                              │ .1                    203.0.113.2/30 (WAN)
+          └──────────────── ROUTER ─────────┴────────────────────────────── ISP ─► Internet
+                  LAN 192.168.1.1/24   DMZ 10.0.0.1/24
+```
+
+### 6.2 Router vs switch
+
+| | **Switch** | **Router** |
+|---|---|---|
+| Layer | 2 | 3 |
+| Decides by | Destination **MAC** (learned table) | Destination **IP** (routing table, longest-prefix match) |
+| Connects | Devices within **one network** | **Different networks** |
+| Broadcasts | Forwards them within the VLAN | **Does not forward** L2 broadcasts (each interface is its own broadcast domain) |
+| Frame rewritten? | No | Yes: new L2 header per hop, TTL−1, checksum |
+| Configuration | Mostly plug-and-play (unmanaged) | Needs IP addressing/routes |
+
+### 6.3 What a "home router" actually is
+The little box from your ISP is several devices in one:
+
+| Function | Role |
+|---|---|
+| **Router** | Routes between your **LAN** (`192.168.1.0/24`) and the **WAN** (the ISP) |
+| **Ethernet switch** | The 4 LAN ports |
+| **Wireless access point** | Wi-Fi on the same LAN subnet (a bridge between 802.11 and Ethernet) |
+| **DHCP server** | Hands out `192.168.1.x` addresses, mask, gateway (the router itself), DNS |
+| **DNS forwarder** | Often relays DNS queries to the ISP or public resolvers |
+| **NAT** | Rewrites private sources to the single public WAN address so many devices share it (Chapter 30) |
+| **Stateful firewall** | Blocks unsolicited inbound traffic (NAT alone is not a firewall) |
+| **Modem** (sometimes) | Cable/DSL/fiber ONT that speaks the ISP's physical protocol |
+
+Typical configuration:
+
+```
+WAN:  address from the ISP by DHCP (or PPPoE / static)        e.g. 203.0.113.45   (or 100.64.x.x behind CGNAT)
+LAN:  192.168.1.1/24, DHCP server pool 192.168.1.10 – .254, lease 24 h, DNS = the router (relays to ISP/1.1.1.1)
+Wi-Fi: SSID "MyHomeNetwork", WPA3-Personal (or WPA2), channel auto → part of the same LAN
+```
+Good hygiene: change the router's **default admin password** (many ship with well-known defaults like `admin/admin`), keep firmware updated, disable WPS and remote administration, use WPA3/WPA2-AES with a strong passphrase, and set a guest network for visitors and IoT.
+
+### 6.4 What the router does with one packet
+`192.168.1.10` opens `https://142.250.185.206`:
+
+1. **PC decides:** destination isn't in `192.168.1.0/24` → send to the **default gateway** `192.168.1.1`. ARP for the gateway's MAC (cached after the first time).
+2. **Frame 1:** dst MAC = router LAN MAC, src MAC = PC; IP `192.168.1.10 → 142.250.185.206`, TTL 64.
+3. **Router:** accept the frame, strip L2, **look up** the destination (default route → ISP), **TTL 64→63**, **NAT** rewrite: source `192.168.1.10:54321 → 203.0.113.45:60001` and record it in its table, recompute checksums, ARP for the ISP gateway MAC, build **Frame 2** and send it out the WAN interface.
+4. **The reply** returns to `203.0.113.45:60001`; the router finds the NAT entry, rewrites the destination back to `192.168.1.10:54321`, decrements TTL and forwards on the LAN.
+
+**IP addresses** (apart from NAT) stay; **MAC addresses** change at each hop.
+
+---
+
+## 7. From "no network" to "browsing the web"
+
+| Step | State | What you can do |
+|---|---|---|
+| 1. Bare computer | No NIC/driver | Local apps only |
+| 2. NIC installed + driver | MAC available, link up | Frames on the local link; no IP yet |
+| 3. No DHCP present | **Link-local** `169.254.x.y/16` | Talk to devices on the same cable; no internet |
+| 4. Add a **switch** | Star topology, several machines | Local file/printer sharing |
+| 5. Add a **router with DHCP** | `192.168.1.x/24`, gateway, DNS | Full local network with proper addressing |
+| 6. Router's **WAN** connects to the ISP | Public (or CGNAT) address + **NAT** | **Internet access** |
+
+The first steps a host performs when you plug in a cable and open a browser (details in Chapters 35–39):
+
+```
+1. Link up (Layer 1/2)                       — NIC negotiates speed/duplex
+2. DHCP Discover (broadcast)                 — "I need an address"        → Offer → Request → Ack
+   result: IP 192.168.1.20/24, gateway 192.168.1.1, DNS 192.168.1.1, lease 24 h
+3. ARP for the gateway                       — learns the router's MAC
+4. DNS query (UDP 53) for example.com        — via the router/ISP
+5. TCP handshake to the server               — via the router (NAT)
+6. TLS handshake, HTTP request/response
 ```
 
 ---
 
-### MAC Address: Hardware Identity
+## 8. Configuring addresses by hand
 
-**Every NIC has a unique MAC address:**
+Only the *temporary* forms are shown (they vanish at reboot). Use your distribution's network manager/netplan/`nmcli` for persistent settings.
 
-```
-MAC Address: 48 bits (6 bytes)
-Format: XX:XX:XX:XX:XX:XX (hexadecimal)
-Example: 00:1A:2B:3C:4D:5E
+**Linux (`iproute2`)**
 
-Structure:
-┌──────────────────────┬─────────────────────────┐
-│ OUI (24 bits)        │ Device ID (24 bits)     │
-│ Manufacturer ID      │ Serial Number           │
-└──────────────────────┴─────────────────────────┘
-
-Example:
-00:1A:2B (Intel Corporation)
-3C:4D:5E (Unique device serial)
+```bash
+ip -br addr                                         # what do I have now?
+sudo ip addr flush dev eth0
+sudo ip addr add 192.168.1.100/24 dev eth0          # static address
+sudo ip link set eth0 up
+sudo ip route add default via 192.168.1.1 dev eth0  # default gateway
+echo "nameserver 1.1.1.1" | sudo tee /etc/resolv.conf   # (systemd-resolved systems: resolvectl dns eth0 1.1.1.1)
+ping -c 2 192.168.1.1     # gateway reachable? (L2/L3 works)
+ping -c 2 1.1.1.1         # internet by IP? (routing/NAT works)
+ping -c 2 example.com     # DNS works?
 ```
 
-**Where MAC Address Is Stored:**
+Persistent examples: **Ubuntu netplan** (`/etc/netplan/01-net.yaml`):
 
+```yaml
+network:
+  version: 2
+  ethernets:
+    eth0:
+      addresses: [192.168.1.100/24]
+      routes:
+        - to: default
+          via: 192.168.1.1
+      nameservers:
+        addresses: [1.1.1.1, 8.8.8.8]
 ```
-NIC Hardware:
-┌─────────────────────────────────────┐
-│  Network Interface Card             │
-│  ┌───────────────────────────────┐  │
-│  │  ROM/EEPROM                   │  │
-│  │  MAC: 00:1A:2B:3C:4D:5E       │  │ ← Burned in
-│  │  (Factory-programmed)         │  │
-│  └───────────────────────────────┘  │
-│                                     │
-│  [Ethernet Controller Chip]         │
-└─────────────────────────────────────┘
-```
+then `sudo netplan apply`. With **NetworkManager**: `nmcli con mod "Wired connection 1" ipv4.method manual ipv4.addresses 192.168.1.100/24 ipv4.gateway 192.168.1.1 ipv4.dns 1.1.1.1 && nmcli con up "Wired connection 1"`. (The old `/etc/network/interfaces` with `ifupdown` still works on Debian.)
 
-**Why MAC Address Matters:**
-
-Without a NIC, your computer has no MAC address. Without a MAC address, Layer 2 (Data Link) cannot function. Without Layer 2, you cannot send or receive frames on a local network.
-
-**Chicken-and-Egg Problem:**
-
-```
-No NIC → No MAC address → No Layer 2 → No Layer 3 → No IP address → No networking
-```
-
-**Solution:**
-
-```
-Install NIC → MAC address available → Layer 2 functional → Layer 3 can assign IP → Networking works
-```
-
----
-
-## Driver Installation: Software Meets Hardware
-
-### The Driver Requirement
-
-**Problem:** Hardware alone is not enough. The operating system must be able to communicate with the NIC.
-
-**Solution:** Device drivers act as translators between the OS and hardware.
-
----
-
-### What Is a Device Driver?
-
-**Definition:**
-A software component that enables the operating system to communicate with hardware devices.
-
-**Analogy:**
-- **Hardware (NIC):** A person who only speaks Japanese
-- **Operating System:** A person who only speaks English
-- **Driver:** A translator who speaks both languages
-
-**Without Driver:**
-```
-OS: "Send this packet"
-NIC: ???
-(No communication, NIC doesn't work)
-```
-
-**With Driver:**
-```
-OS: "Send this packet"
-Driver: [Translates OS command to NIC-specific instructions]
-NIC: [Receives instructions, sends packet]
-```
-
----
-
-### Driver Installation Process
-
-**Historical (1990s-2000s):**
-
-```
-Step 1: Purchase NIC
-Step 2: Install NIC hardware in computer
-Step 3: Boot computer
-Step 4: OS detects new hardware
-Step 5: Insert driver CD that came with NIC
-Step 6: Run driver installer
-Step 7: Reboot computer
-Step 8: NIC now functional
-```
-
-**Modern (2010s-present):**
-
-```
-Step 1: Connect USB NIC (or laptop has built-in WiFi)
-Step 2: OS automatically detects hardware
-Step 3: OS searches built-in driver database
-Step 4: Driver automatically installed
-Step 5: NIC functional within seconds (no reboot)
-```
-
-**Why Modern Is Easier:**
-
-Modern operating systems (Windows 10/11, Linux, macOS) include thousands of drivers for common hardware:
-- Generic Ethernet drivers (covers most wired NICs)
-- Intel WiFi drivers
-- Realtek Ethernet drivers
-- Broadcom WiFi drivers
-
-**Driver Database:**
-
-```
-Operating System Installation:
-┌────────────────────────────────────┐
-│  OS Installation Media            │
-│  ├── Kernel                       │
-│  ├── System Files                 │
-│  └── Driver Database              │
-│      ├── network_drivers/         │
-│      │   ├── intel_eth.sys        │
-│      │   ├── realtek_eth.sys      │
-│      │   ├── broadcom_wifi.sys    │
-│      │   └── ... (thousands more) │
-│      ├── graphics_drivers/        │
-│      ├── sound_drivers/           │
-│      └── ...                      │
-└────────────────────────────────────┘
-```
-
----
-
-### Driver Functions
-
-**What Does a NIC Driver Do?**
-
-1. **Initialize Hardware:**
-   - Power on the NIC
-   - Configure registers and memory buffers
-   - Enable interrupts
-
-2. **Provide OS Interface:**
-   - Expose standard networking functions to OS
-   - Examples: `send_packet()`, `receive_packet()`, `get_mac_address()`
-
-3. **Handle Interrupts:**
-   - NIC signals driver when packet arrives
-   - Driver reads packet from NIC buffer
-   - Driver passes packet to OS networking stack
-
-4. **Manage Buffers:**
-   - Transmit buffer: Holds outgoing packets
-   - Receive buffer: Holds incoming packets
-   - Driver manages memory allocation
-
-5. **Error Handling:**
-   - Detects hardware errors
-   - Reports errors to OS
-   - Attempts recovery when possible
-
-**Driver Communication:**
-
-```
-Application: Send HTTP request
-         ↓
-OS Networking Stack: Create TCP/IP packet
-         ↓
-Driver Interface: send_packet(packet_data)
-         ↓
-NIC Driver: [Translates to hardware commands]
-         ↓
-NIC Hardware: [Converts to electrical signals]
-         ↓
-Physical Medium: [Packets transmitted on network]
-```
-
----
-
-## APIPA: Automatic Private IP Addressing
-
-### The IP Address Problem
-
-**Scenario:**
-1. You install a NIC in your computer
-2. Driver loads successfully
-3. Now you have a MAC address
-4. But... you still don't have an IP address
-
-**Why Is This a Problem?**
-
-The operating system wants to have an IP address for several reasons:
-- Applications expect network interfaces to have IPs
-- Networking tools (`ping`, `netstat`) require IP addressing
-- Self-communication via loopback (`127.0.0.1`) needs IP layer functional
-
-**What Should Happen?**
-
-Ideally, a DHCP server would assign an IP address automatically. But what if:
-- No DHCP server available (standalone computer)
-- DHCP server offline or misconfigured
-- Network cable unplugged
-- You're setting up your first network (no servers yet)
-
-**Solution:** APIPA provides a fallback IP addressing mechanism.
-
----
-
-### What Is APIPA?
-
-**APIPA: Automatic Private IP Addressing**
-
-**Definition:**
-A feature in modern operating systems that automatically assigns a self-configured IP address when no DHCP server is available.
-
-**Purpose:**
-- Enable local communication between computers on same network
-- Provide basic networking functionality without infrastructure
-- Allow computers to have IP addresses even without DHCP
-
-**Standard:** RFC 3927 (Dynamic Configuration of IPv4 Link-Local Addresses)
-
----
-
-### APIPA Address Range
-
-**Reserved Range:**
-
-```
-Start: 169.254.0.0
-End:   169.254.255.255
-
-CIDR Notation: 169.254.0.0/16
-
-Subnet Mask: 255.255.0.0
-
-Total Addresses: 65,536 (2^16)
-Usable Addresses: 65,534 (excluding network and broadcast)
-```
-
-**Binary Representation:**
-
-```
-169.254.0.0
-10101001.11111110.00000000.00000000
-|--Fixed--|--Random-|
-
-First 16 bits: Fixed (169.254)
-Last 16 bits: Randomly selected by OS
-```
-
-**Example APIPA Addresses:**
-
-```
-169.254.1.1
-169.254.52.143
-169.254.128.200
-169.254.255.254
-
-All valid APIPA addresses (169.254.x.x range)
-```
-
----
-
-### APIPA Assignment Process
-
-**Step-by-Step:**
-
-```
-Step 1: NIC installed, driver loaded
-        Computer has MAC address: 00:1A:2B:3C:4D:5E
-        Computer has no IP address yet
-
-Step 2: OS detects NIC with no IP configuration
-        OS: "I need an IP address for this interface"
-
-Step 3: OS attempts DHCP first
-        OS broadcasts DHCP DISCOVER message:
-        "Is there a DHCP server on this network?"
-        
-        [Wait 5-10 seconds for DHCP response]
-
-Step 4a: If DHCP server responds:
-         DHCP server: "Here's your IP: 192.168.1.100"
-         OS: "Great! Using 192.168.1.100"
-         APIPA not needed ✓
-
-Step 4b: If no DHCP response (our case):
-         OS: "No DHCP server found"
-         OS: "Falling back to APIPA"
-
-Step 5: OS randomly selects APIPA address
-        Random selection from 169.254.0.1 to 169.254.255.254
-        Example: 169.254.52.143
-
-Step 6: OS performs duplicate address detection
-        OS broadcasts ARP request:
-        "Is anyone using 169.254.52.143?"
-        
-        [Wait for ARP replies]
-
-Step 7a: If someone replies (address conflict):
-         OS: "Oops, that IP is taken"
-         Go back to Step 5, choose different random IP
-
-Step 7b: If no one replies:
-         OS: "Address is available!"
-         OS assigns 169.254.52.143 to NIC
-
-Step 8: NIC now has IP address
-        Interface: eth0
-        IP: 169.254.52.143
-        Subnet: 255.255.0.0
-        Gateway: None (APIPA is link-local only)
-        DNS: None
-```
-
----
-
-### Viewing APIPA Addresses
-
-**Windows:**
+**Windows:** Settings → Network → adapter → Edit IP assignment; or
 
 ```cmd
-C:\> ipconfig
-
-Ethernet adapter Local Area Connection:
-
-   Connection-specific DNS Suffix  . : 
-   Autoconfiguration IPv4 Address. . : 169.254.52.143
-   Subnet Mask . . . . . . . . . . . : 255.255.0.0
-   Default Gateway . . . . . . . . . : 
-   
-Note: "Autoconfiguration IPv4 Address" = APIPA address
+netsh interface ip set address "Ethernet" static 192.168.1.100 255.255.255.0 192.168.1.1
+netsh interface ip set dns "Ethernet" static 1.1.1.1
+ipconfig /all
+ipconfig /release & ipconfig /renew        # DHCP
+ipconfig /flushdns
 ```
 
-**Linux:**
+**macOS:** `networksetup -setmanual "Wi-Fi" 192.168.1.100 255.255.255.0 192.168.1.1`; `networksetup -setdnsservers Wi-Fi 1.1.1.1`; `networksetup -setdhcp Wi-Fi`.
+
+---
+
+## 9. Lab: build your own two-network topology with a router (Linux namespaces)
+
+Network namespaces are like tiny isolated computers on your machine; `veth` pairs are virtual cables. This lab builds **two LANs joined by a router**, then gives the router a **WAN and NAT**. Nothing touches your real network. (Needs `sudo`; install `iproute2`, `iputils-ping`, `traceroute`, `tcpdump`, `iptables`.)
+
+```
+  h1 10.0.1.10/24 ──┐                           ┌── h2 10.0.2.10/24
+       gw 10.0.1.1  │                           │  gw 10.0.2.1
+                    └── r1 (10.0.1.1 | 10.0.2.1) ┘
+                         router namespace "r"
+                              │ 203.0.113.1/24  (WAN)
+                              └────────── "inet" 203.0.113.2/24  (a pretend internet host)
+```
+
+### 9.1 Two LANs and one router
 
 ```bash
-$ ip addr show eth0
-2: eth0: <BROADCAST,MULTICAST,UP,LOWER_UP>
-    link/ether 00:1a:2b:3c:4d:5e
-    inet 169.254.52.143/16 scope link eth0
-       valid_lft forever preferred_lft forever
+# namespaces
+for n in h1 h2 r inet; do sudo ip netns add $n; sudo ip netns exec $n ip link set lo up; done
 
-Note: "scope link" = Link-local address (APIPA)
+# cables (veth pairs)
+sudo ip link add h1-r type veth peer name r-h1
+sudo ip link add h2-r type veth peer name r-h2
+sudo ip link add r-inet type veth peer name inet-r
+sudo ip link set h1-r netns h1;   sudo ip link set r-h1 netns r
+sudo ip link set h2-r netns h2;   sudo ip link set r-h2 netns r
+sudo ip link set r-inet netns r;  sudo ip link set inet-r netns inet
+
+# addresses (like the NIC configuration of each machine)
+sudo ip netns exec h1 ip addr add 10.0.1.10/24 dev h1-r
+sudo ip netns exec h2 ip addr add 10.0.2.10/24 dev h2-r
+sudo ip netns exec r  ip addr add 10.0.1.1/24  dev r-h1
+sudo ip netns exec r  ip addr add 10.0.2.1/24  dev r-h2
+sudo ip netns exec r  ip addr add 203.0.113.1/24 dev r-inet
+sudo ip netns exec inet ip addr add 203.0.113.2/24 dev inet-r
+for x in "h1 h1-r" "h2 h2-r" "r r-h1" "r r-h2" "r r-inet" "inet inet-r"; do set -- $x; sudo ip netns exec $1 ip link set $2 up; done
+
+# default gateways for the hosts
+sudo ip netns exec h1 ip route add default via 10.0.1.1
+sudo ip netns exec h2 ip route add default via 10.0.2.1
 ```
 
-**macOS:**
+**Test before the router forwards:** the router namespace doesn't forward packets between interfaces by default.
 
 ```bash
-$ ifconfig en0
-en0: flags=8863<UP,BROADCAST,SMART,RUNNING,SIMPLEX,MULTICAST>
-    ether 00:1a:2b:3c:4d:5e 
-    inet 169.254.52.143 netmask 0xffff0000
+sudo ip netns exec h1 ping -c 2 10.0.1.1      # OK: router is on h1's own network (L2 delivery)
+sudo ip netns exec h1 ping -c 2 10.0.2.10     # FAILS: h1 → router → (router not forwarding)
+sudo ip netns exec r sysctl -w net.ipv4.ip_forward=1     # turn the machine into a ROUTER
+sudo ip netns exec h1 ping -c 2 10.0.2.10     # NOW works!
 ```
+That single sysctl is what distinguishes a router from an ordinary host.
 
----
-
-### APIPA Characteristics
-
-**What You CAN Do with APIPA:**
-
-```
-✅ Communicate with other APIPA devices on same network
-   - File sharing (if both computers have APIPA IPs)
-   - Network gaming (peer-to-peer)
-   - Printer sharing (if printer has APIPA IP)
-
-✅ Ping other APIPA addresses
-   $ ping 169.254.52.200  (if another computer has this IP)
-
-✅ Basic networking functionality
-   - ARP works
-   - Layer 2 communication works
-   - Application protocols work (HTTP, SMB, etc.)
-```
-
-**What You CANNOT Do with APIPA:**
-
-```
-❌ Access the Internet
-   - No default gateway configured
-   - APIPA is link-local only (same network segment)
-
-❌ Communicate with devices on other subnets
-   - Cannot route beyond local network
-   - No routing table entries
-
-❌ DNS resolution
-   - No DNS server configured
-   - Must use IP addresses directly
-
-❌ Access corporate network resources
-   - Typically requires proper DHCP-assigned IP
-   - APIPA indicates network misconfiguration
-```
-
-**When You See APIPA:**
-
-In production environments, APIPA addresses usually indicate a problem:
-- DHCP server offline
-- Network cable unplugged
-- Switch port disabled
-- VLAN misconfiguration
-
-**Troubleshooting:**
-
-```
-Problem: Computer has 169.254.x.x address
-
-Diagnosis:
-1. Check physical connection (cable plugged in?)
-2. Check link lights on NIC (blinking = good)
-3. Check DHCP server (is it running?)
-4. Check network switch (is port active?)
-5. Release and renew IP:
-   Windows: ipconfig /release && ipconfig /renew
-   Linux: sudo dhclient -r && sudo dhclient eth0
-```
-
----
-
-## Connecting Two Computers: Peer-to-Peer Networking
-
-### The Simplest Network
-
-**Scenario:** You have two computers, both with NICs. Can they communicate?
-
-**Answer:** Yes! You can connect them directly with an Ethernet cable.
-
----
-
-### Direct Connection Topology
-
-**Point-to-Point Network:**
-
-```
-┌─────────────┐     Ethernet Cable     ┌─────────────┐
-│ Computer A  │========================│ Computer B  │
-│             │                        │             │
-│ NIC: eth0   │                        │ NIC: eth0   │
-│ MAC: AA...  │                        │ MAC: BB...  │
-└─────────────┘                        └─────────────┘
-```
-
-**Physical Connection:**
-
-```
-Computer A (Back Panel)         Computer B (Back Panel)
-┌────────────┐                 ┌────────────┐
-│  ┌──┐      │                 │  ┌──┐      │
-│  │🔌│══════╪═════════════════╪══│🔌│      │
-│  └──┘ NIC  │  Ethernet Cable │  └──┘ NIC  │
-└────────────┘                 └────────────┘
-        ↓                               ↓
-     RJ-45 Port                     RJ-45 Port
-```
-
----
-
-### Cable Type: Crossover vs Straight-Through
-
-**Historical Requirement:**
-
-Old NICs required different cable types depending on device:
-- **Straight-Through Cable:** Computer to switch/hub
-- **Crossover Cable:** Computer to computer (or switch to switch)
-
-**Why?**
-
-Ethernet uses separate wire pairs for transmit (TX) and receive (RX):
-
-**Straight-Through Cable:**
-
-```
-Computer A                           Switch
-Pin 1 (TX+) ─────────────────────→ Pin 1 (RX+)
-Pin 2 (TX-) ─────────────────────→ Pin 2 (RX-)
-Pin 3 (RX+) ←───────────────────── Pin 3 (TX+)
-Pin 6 (RX-) ←───────────────────── Pin 6 (TX-)
-
-Computer transmits on 1,2 → Switch receives on 1,2
-Switch transmits on 3,6 → Computer receives on 3,6
-✓ Works correctly
-```
-
-**Problem: Computer to Computer with Straight-Through:**
-
-```
-Computer A                       Computer B
-Pin 1 (TX+) ─────────────────→ Pin 1 (TX+)  ❌
-Pin 2 (TX-) ─────────────────→ Pin 2 (TX-)  ❌
-Pin 3 (RX+) ─────────────────→ Pin 3 (RX+)  ❌
-Pin 6 (RX-) ─────────────────→ Pin 6 (RX-)  ❌
-
-Both computers transmit on 1,2 (collision!)
-Both computers expect to receive on 3,6 (but nothing arrives!)
-✗ Does NOT work
-```
-
-**Solution: Crossover Cable:**
-
-```
-Computer A                       Computer B
-Pin 1 (TX+) ──┐              ┌→ Pin 3 (RX+)  ✓
-Pin 2 (TX-) ──┼──── Cross ───┼→ Pin 6 (RX-)  ✓
-Pin 3 (RX+) ←─┼──── Over ────┼─ Pin 1 (TX+)  ✓
-Pin 6 (RX-) ←─┘              └─ Pin 2 (TX-)  ✓
-
-Computer A transmits on 1,2 → Computer B receives on 3,6
-Computer B transmits on 1,2 → Computer A receives on 3,6
-✓ Works correctly
-```
-
-**Modern Solution: Auto-MDI/MDI-X:**
-
-Modern NICs (Gigabit Ethernet and newer) automatically detect cable type and adjust:
-- Auto-MDI/MDI-X (Automatic Medium Dependent Interface crossover)
-- NIC detects whether wires are crossed or straight
-- Adjusts internal circuitry to match
-- Result: Any cable works for any connection
-
-**Today:**
-You can use any Ethernet cable (straight-through or crossover) for any connection. The NICs figure it out automatically.
-
----
-
-### IP Configuration
-
-**Computer A Configuration:**
-
-With APIPA:
-```
-$ ip addr show eth0
-2: eth0: <BROADCAST,MULTICAST,UP,LOWER_UP>
-    inet 169.254.52.143/16
-
-Computer A automatically assigned: 169.254.52.143
-```
-
-**Computer B Configuration:**
-
-With APIPA:
-```
-$ ip addr show eth0
-2: eth0: <BROADCAST,MULTICAST,UP,LOWER_UP>
-    inet 169.254.100.50/16
-
-Computer B automatically assigned: 169.254.100.50
-```
-
-**Can They Communicate?**
-
-Yes! Both addresses in same subnet (169.254.0.0/16):
-
-```
-Computer A: 169.254.52.143/16
-Computer B: 169.254.100.50/16
-
-Subnet mask: 255.255.0.0
-Network portion: 169.254 (same for both)
-Host portion: Different (52.143 vs 100.50)
-
-Result: Both on same network, can communicate directly
-```
-
----
-
-### Testing Connectivity
-
-**Ping from Computer A to Computer B:**
+**Observe what a router does**
 
 ```bash
-$ ping 169.254.100.50
-
-ICMP Process:
-
-1. Computer A creates ICMP Echo Request
-   Source IP: 169.254.52.143
-   Dest IP: 169.254.100.50
-
-2. Computer A needs Computer B's MAC address
-   ARP Request broadcast:
-   "Who has 169.254.100.50? Tell 169.254.52.143"
-
-3. Computer B receives ARP request
-   ARP Reply (unicast):
-   "169.254.100.50 is at BB:BB:BB:BB:BB:BB"
-
-4. Computer A caches ARP entry
-   169.254.100.50 → BB:BB:BB:BB:BB:BB
-
-5. Computer A sends ICMP packet in Ethernet frame
-   Frame:
-   - Dest MAC: BB:BB:BB:BB:BB:BB
-   - Source MAC: AA:AA:AA:AA:AA:AA
-   - Payload: IP packet with ICMP Echo Request
-
-6. Computer B receives frame, processes ICMP
-   ICMP Echo Reply sent back to Computer A
-
-7. Computer A receives reply
-   Output:
-   64 bytes from 169.254.100.50: icmp_seq=1 ttl=64 time=0.5 ms
-   64 bytes from 169.254.100.50: icmp_seq=2 ttl=64 time=0.3 ms
-   64 bytes from 169.254.100.50: icmp_seq=3 ttl=64 time=0.4 ms
-
-Success! ✓
+sudo ip netns exec h1 ping -c 1 10.0.2.10 | grep ttl          # "ttl=63": started at 64, decremented once by the router
+sudo ip netns exec h1 traceroute -n 10.0.2.10                 # hop 1: 10.0.1.1 (the router), hop 2: 10.0.2.10
+sudo ip netns exec h1 ip neigh                                # h1 knows the ROUTER's MAC (10.0.1.1), never h2's
+sudo ip netns exec h2 ip neigh                                # h2 knows the router's other-side MAC
+sudo ip netns exec r tcpdump -nn -e -i r-h1 -c 4 icmp &       # frames on side 1: dst MAC = the router
+sleep 1; sudo ip netns exec h1 ping -c 1 10.0.2.10
+sudo ip netns exec r tcpdump -nn -e -i r-h2 -c 2 icmp         # frames on side 2: different MACs, SAME IP addresses
 ```
+You have just seen the central rule live: **IPs unchanged, MACs rewritten at the router, TTL decremented**.
 
----
-
-### File Sharing Example
-
-**Computer A shares a folder:**
+### 9.2 Give it an "internet" and NAT
 
 ```bash
-# Linux - Start simple HTTP server
-$ cd ~/shared_files
-$ python3 -m http.server 8080
-Serving HTTP on 0.0.0.0 port 8080 ...
+sudo ip netns exec inet python3 -m http.server 80 --bind 203.0.113.2 &      # a pretend web server on the "internet"
+sudo ip netns exec r ip route add default via 203.0.113.2                   # router's default route: toward the ISP
+sudo ip netns exec h1 curl -s --max-time 3 http://203.0.113.2/ | head -3    # request reaches inet...
+sudo ip netns exec inet ip route                                            # ...but inet has no route back to 10.0.1.0/24 → the reply is lost
 ```
-
-**Computer B accesses shared files:**
+This is exactly why NAT exists: the "internet" knows nothing about private networks. Add **masquerading** on the router's WAN interface:
 
 ```bash
-# Open web browser to Computer A's IP
-$ firefox http://169.254.52.143:8080
-
-Browser displays directory listing of ~/shared_files
-User can download files from Computer A
+sudo ip netns exec r iptables -t nat -A POSTROUTING -o r-inet -j MASQUERADE
+sudo ip netns exec inet tcpdump -nn -i inet-r -c 6 'tcp port 80' &
+sleep 1
+sudo ip netns exec h1 curl -s http://203.0.113.2/ | head -3                # works; tcpdump shows the SOURCE as 203.0.113.1 (the router), not 10.0.1.10
+sudo ip netns exec h2 curl -s http://203.0.113.2/ | head -3                # both LANs share the router's single "public" address
+sudo ip netns exec r conntrack -L 2>/dev/null | head                       # the NAT table (if conntrack-tools is installed)
 ```
 
-**SMB/Windows File Sharing:**
-
-```
-Computer A (Windows):
-1. Right-click folder → Properties → Sharing
-2. Click "Share"
-3. Add "Everyone" with Read permissions
-4. Folder now shared at: \\169.254.52.143\SharedFolder
-
-Computer B (Windows):
-1. Open File Explorer
-2. Type in address bar: \\169.254.52.143\SharedFolder
-3. Folder contents displayed
-4. Can copy files to/from shared folder
-```
-
----
-
-### Limitations of Two-Computer Networks
-
-**What Works:**
-- Direct communication between the two computers
-- File sharing, printer sharing
-- Peer-to-peer gaming
-- Local network applications
-
-**What Doesn't Work:**
-- Adding a third computer (requires switch/hub)
-- Internet access (requires router and ISP connection)
-- Communication with devices on other networks
-
-**Scalability Problem:**
-
-```
-2 Computers: 1 cable needed
-3 Computers: 3 cables needed (each pair connected)
-4 Computers: 6 cables needed
-5 Computers: 10 cables needed
-N Computers: N×(N-1)/2 cables needed
-
-Example: 10 computers = 45 cables!
-```
-
-**Solution:** Network switch or hub (centralized connectivity).
-
----
-
-## The Need for Routers
-
-### Beyond the Local Network
-
-**Scenario:** You have multiple computers on a local network. Now you want to connect them to:
-- Another local network (e.g., office branch)
-- The Internet
-- A remote server
-
-**Problem:** Devices on your local network can only communicate with each other. How do you reach devices on other networks?
-
-**Solution:** Router
-
----
-
-### What Is a Router?
-
-**Definition:**
-A network device that forwards packets between different networks based on IP addresses.
-
-**Primary Function:**
-- Connect multiple networks together
-- Make forwarding decisions based on destination IP
-- Enable communication between different network segments
-
-**Analogy:**
-- **Switch:** Like a mail sorter in a single post office (handles mail within one city)
-- **Router:** Like a regional mail distribution center (forwards mail between cities)
-
----
-
-### Router vs Switch
-
-**Switch (Layer 2):**
-
-```
-┌─────────────────────────────────────┐
-│            Switch                   │
-│                                     │
-│  All ports on same network:         │
-│  192.168.1.0/24                     │
-│                                     │
-│  Port 1  Port 2  Port 3  Port 4    │
-│    │       │       │       │        │
-└────┼───────┼───────┼───────┼────────┘
-     │       │       │       │
-  ┌──▼──┐ ┌──▼──┐ ┌──▼──┐ ┌──▼──┐
-  │ PC1 │ │ PC2 │ │ PC3 │ │ PC4 │
-  └─────┘ └─────┘ └─────┘ └─────┘
-  .10     .20     .30     .40
-
-All devices on same subnet: 192.168.1.0/24
-Switch forwards frames based on MAC addresses
-No routing, no inter-network communication
-```
-
-**Router (Layer 3):**
-
-```
-┌─────────────────────────────────────────────┐
-│               Router                        │
-│                                             │
-│  Port 1 (LAN):     192.168.1.1/24          │
-│  Port 2 (DMZ):     10.0.0.1/24             │
-│  Port 3 (WAN):     203.0.113.1/30          │
-│                                             │
-└───┬─────────────────┬─────────────────┬─────┘
-    │                 │                 │
-    │                 │                 │
- Network A         Network B         Network C
-192.168.1.0/24    10.0.0.0/24     203.0.113.0/30
-    │                 │                 │
-┌───┴───┐         ┌───┴───┐         ┌───┴───┐
-│Switch │         │Server │         │  ISP  │
-│  │ │  │         └───────┘         └───────┘
-│  │ │  │
-└──┼─┼──┘
-   │ │
-PC1│ PC2
-
-Router connects three different networks
-Makes forwarding decisions based on IP addresses
-Enables inter-network communication
-```
-
-**Key Differences:**
-
-| Feature | Switch | Router |
-|---------|--------|--------|
-| OSI Layer | Layer 2 (Data Link) | Layer 3 (Network) |
-| Addressing | MAC addresses | IP addresses |
-| Forwarding | Based on MAC table | Based on routing table |
-| Broadcast Domain | Forwards broadcasts | Blocks broadcasts |
-| Networks | Single network | Multiple networks |
-| Purpose | Connect devices locally | Connect networks together |
-
----
-
-### Your First Router: Home Network Setup
-
-**Typical Home Network:**
-
-```
-                    Internet (ISP)
-                         │
-                         │ (WAN Connection)
-                         │
-              ┌──────────▼──────────┐
-              │   Home Router       │
-              │                     │
-              │  WAN Port: Public IP│
-              │  LAN Ports: Private │
-              │  WiFi: Private      │
-              └──┬────┬────┬────┬───┘
-                 │    │    │    │
-          ┌──────┘    │    │    └──────┐
-          │           │    │           │
-     ┌────▼───┐  ┌────▼───┐  ┌─────▼──────┐
-     │ PC     │  │Laptop  │  │   Printer  │
-     │.10     │  │.20     │  │   .30      │
-     └────────┘  └────────┘  └────────────┘
-          │           │            │
-          └───────────┴────────────┘
-         Local Network: 192.168.1.0/24
-```
-
-**Router Configuration:**
-
-```
-WAN Interface (Connected to ISP):
-- IP Address: 203.0.113.45 (public IP assigned by ISP)
-- Subnet Mask: 255.255.255.252 (/30)
-- Gateway: 203.0.113.46 (ISP's router)
-- DNS: 8.8.8.8, 8.8.4.4 (Google DNS)
-
-LAN Interface (Connected to home devices):
-- IP Address: 192.168.1.1 (router's internal IP)
-- Subnet Mask: 255.255.255.0 (/24)
-- DHCP Server: Enabled
-  - Range: 192.168.1.10 to 192.168.1.254
-  - Lease Time: 24 hours
-
-WiFi Interface (Wireless devices):
-- Same as LAN (192.168.1.0/24 network)
-- SSID: MyHomeNetwork
-- Security: WPA3-Personal
-```
-
----
-
-### Router Functions
-
-**1. Packet Forwarding:**
-
-```
-Example: PC (192.168.1.10) wants to access google.com (142.250.185.206)
-
-PC creates IP packet:
-- Source: 192.168.1.10
-- Dest: 142.250.185.206
-
-PC checks routing table:
-- Destination 142.250.185.206 not on local network
-- Default gateway: 192.168.1.1 (router)
-- Send packet to router
-
-PC sends Ethernet frame to router:
-- Dest MAC: Router's MAC (via ARP)
-- Source MAC: PC's MAC
-- Payload: IP packet
-
-Router receives frame:
-1. Strip Ethernet header
-2. Read destination IP: 142.250.185.206
-3. Check routing table:
-   - 0.0.0.0/0 → Next-hop: 203.0.113.46 (ISP router)
-4. Decrement TTL: 64 → 63
-5. Recalculate IP checksum
-6. Create new Ethernet frame:
-   - Dest MAC: ISP router's MAC
-   - Source MAC: Router's WAN interface MAC
-   - Payload: Modified IP packet
-7. Forward frame to ISP
-
-IP addresses unchanged (end-to-end)
-MAC addresses changed (hop-by-hop)
-```
-
----
-
-**2. NAT (Network Address Translation):**
-
-```
-Problem: Multiple devices (192.168.1.x) need Internet access
-         But only one public IP (203.0.113.45) available
-
-Solution: NAT translates private IPs to public IP
-
-Outbound (PC → Internet):
-┌──────────────────────────────────────┐
-│ Original Packet (from PC)            │
-│ Source: 192.168.1.10:54321           │
-│ Dest: 142.250.185.206:443            │
-└──────────────────────────────────────┘
-              ↓
-       [Router NAT Table]
-┌──────────────────────────────────────┐
-│ Internal           │ External         │
-│ 192.168.1.10:54321 │ 203.0.113.45:60001│
-└────────────────────┴──────────────────┘
-              ↓
-┌──────────────────────────────────────┐
-│ NATed Packet (to Internet)           │
-│ Source: 203.0.113.45:60001           │
-│ Dest: 142.250.185.206:443            │
-└──────────────────────────────────────┘
-
-Inbound (Internet → PC):
-┌──────────────────────────────────────┐
-│ Reply Packet (from Internet)         │
-│ Source: 142.250.185.206:443          │
-│ Dest: 203.0.113.45:60001             │
-└──────────────────────────────────────┘
-              ↓
-       [Router NAT Table Lookup]
-       60001 → 192.168.1.10:54321
-              ↓
-┌──────────────────────────────────────┐
-│ De-NATed Packet (to PC)              │
-│ Source: 142.250.185.206:443          │
-│ Dest: 192.168.1.10:54321             │
-└──────────────────────────────────────┘
-```
-
-**NAT Benefits:**
-- Allows multiple devices to share one public IP
-- Conserves IPv4 address space
-- Provides basic firewall protection (unsolicited inbound packets dropped)
-
----
-
-**3. DHCP Server:**
-
-```
-Router provides IP addresses to local devices automatically
-
-PC boots up:
-1. Broadcasts DHCP DISCOVER:
-   "I need an IP address!"
-
-2. Router receives DISCOVER
-
-3. Router sends DHCP OFFER:
-   "I can give you 192.168.1.20"
-
-4. PC sends DHCP REQUEST:
-   "I accept 192.168.1.20"
-
-5. Router sends DHCP ACK:
-   "Confirmed. Here are your settings:"
-   - IP: 192.168.1.20
-   - Subnet: 255.255.255.0
-   - Gateway: 192.168.1.1
-   - DNS: 8.8.8.8, 8.8.4.4
-   - Lease: 24 hours
-
-6. PC configures network interface with provided settings
-
-No APIPA needed! ✓
-```
-
----
-
-**4. Firewall:**
-
-```
-Router blocks unwanted inbound traffic:
-
-Stateful Firewall:
-- Tracks outbound connections
-- Allows replies to outbound connections
-- Blocks unsolicited inbound packets
-
-Example:
-
-PC initiates connection to web server:
-PC → Router → Internet → Web Server
-(Allowed: outbound traffic)
-
-Web server replies:
-Web Server → Internet → Router → PC
-(Allowed: reply to established connection)
-
-Hacker attempts connection to PC:
-Hacker → Internet → Router ✗ (Blocked: unsolicited inbound)
-
-Result: PC can access Internet, but Internet cannot initiate connections to PC
-```
-
----
-
-**5. Routing Table:**
-
-```
-Router maintains routing table:
-
-$ ip route show
-default via 203.0.113.46 dev eth0  # Internet via ISP
-192.168.1.0/24 dev eth1  # LAN directly connected
-10.0.0.0/24 via 192.168.1.254 dev eth1  # Remote office via VPN
-
-Forwarding decision:
-- Packet dest 192.168.1.50? → Forward to eth1 (local)
-- Packet dest 10.0.0.25? → Forward to 192.168.1.254 (VPN gateway)
-- Packet dest 142.250.185.206? → Forward to 203.0.113.46 (default route/Internet)
-```
-
----
-
-## Complete Network Example: From First Computer to Internet Access
-
-### The Journey
-
-**Step 1: First Computer (No Networking)**
-
-```
-┌─────────────┐
-│ Desktop PC  │
-│ (New)       │
-│             │
-│ No NIC      │
-│ No IP       │
-│ No MAC      │
-│ No Internet │
-└─────────────┘
-
-Status: Standalone computer, can only run local applications
-```
-
----
-
-**Step 2: Install NIC**
-
-```
-┌─────────────┐
-│ Desktop PC  │
-│             │
-│ ┌─────────┐ │
-│ │   NIC   │ │ ← External PCI NIC installed
-│ │ [Port]  │ │
-│ └─────────┘ │
-└─────────────┘
-
-Status: Hardware capable of networking, driver needed
-```
-
----
-
-**Step 3: Install Driver, APIPA Assigns IP**
-
-```
-┌─────────────┐
-│ Desktop PC  │
-│             │
-│ eth0:       │
-│ IP: 169.254.52.143
-│ MAC: AA:AA:AA:AA:AA:AA
-│             │
-└─────────────┘
-
-Status: Has IP address (APIPA), can communicate with other APIPA devices on same cable
-```
-
----
-
-**Step 4: Connect to Another Computer APIPA)**
-
-```
-┌─────────────┐          ┌─────────────┐
-│ Computer A  │══════════│ Computer B  │
-│             │          │             │
-│ eth0:       │          │ eth0:       │
-│ 169.254.    │          │ 169.254.    │
-│   52.143    │          │   100.50    │
-└─────────────┘          └─────────────┘
-
-Status: Two computers can communicate, share files, but no Internet
-```
-
----
-
-**Step 5: Add Router (First Router)**
-
-```
-                ┌──────────────────┐
-                │  Home Router     │
-                │  LAN: 192.168.1.1│
-                │  (DHCP Server)   │
-                └──┬────────────┬──┘
-                   │            │
-        ┌──────────┘            └──────────┐
-        │                                  │
-┌───────▼─────┐                    ┌───────▼─────┐
-│ Computer A  │                    │ Computer B  │
-│             │                    │             │
-│ eth0:       │                    │ eth0:       │
-│ 192.168.1.10│                    │ 192.168.1.20│
-│ (from DHCP) │                    │ (from DHCP) │
-└─────────────┘                    └─────────────┘
-
-Status: Proper IP addresses, can communicate locally, but still no Internet
-```
-
----
-
-**Step 6: Connect Router to ISP (Internet Access)**
-
-```
-                    Internet (ISP)
-                         │
-                         │ Cable/DSL Modem
-                         │
-              ┌──────────▼──────────┐
-              │   Home Router       │
-              │  WAN: 203.0.113.45  │ ← Public IP from ISP
-              │  LAN: 192.168.1.1   │ ← Private IP for local devices
-              │  (DHCP + NAT)       │
-              └──┬────────────┬─────┘
-                 │            │
-      ┌──────────┘            └──────────┐
-      │                                  │
-┌─────▼─────┐                    ┌───────▼─────┐
-│Computer A │                    │ Computer B  │
-│.10        │                    │ .20         │
-└───────────┘                    └─────────────┘
-
-Status: Full Internet access! ✓
-- Local communication: Direct
-- Internet communication: Via router NAT
-```
-
----
-
-### Packet Flow: Computer A to Google
-
-**Complete Journey:**
-
-```
-Step 1: DNS Resolution
-Computer A: "What's the IP of google.com?"
-→ DNS query to 8.8.8.8 (Google DNS)
-→ Reply: "google.com is 142.250.185.206"
-
-Step 2: Routing Decision
-Computer A checks: Is 142.250.185.206 local?
-192.168.1.0/24 network: 192.168.1.0 to 192.168.1.255
-142.250.185.206 outside range → Use default gateway (192.168.1.1)
-
-Step 3: ARP for Gateway
-Computer A: "Who has 192.168.1.1?"
-Router replies: "192.168.1.1 is at RR:RR:RR:RR:RR:RR"
-Computer A caches: 192.168.1.1 → RR:RR:RR:RR:RR:RR
-
-Step 4: Create and Send Packet
-Computer A creates:
-┌──────────────────────────────────────┐
-│ Ethernet Frame:                      │
-│   Dest MAC: RR:RR:RR:RR:RR:RR        │
-│   Source MAC: AA:AA:AA:AA:AA:AA      │
-│                                      │
-│ IP Packet:                           │
-│   Source: 192.168.1.10               │
-│   Dest: 142.250.185.206              │
-│   TTL: 64                            │
-│                                      │
-│ TCP Segment:                         │
-│   Source Port: 54321                 │
-│   Dest Port: 443 (HTTPS)             │
-│                                      │
-│ HTTP Request:                        │
-│   GET / HTTP/1.1                     │
-│   Host: google.com                   │
-└──────────────────────────────────────┘
-
-Step 5: Router Receives Packet
-Router (192.168.1.1):
-1. Receives frame on LAN interface
-2. Dest MAC matches → Accept frame
-3. Strip Ethernet header
-4. Read IP dest: 142.250.185.206
-5. Check routing table: 0.0.0.0/0 → WAN interface
-6. Apply NAT:
-   - Original source: 192.168.1.10:54321
-   - NATed source: 203.0.113.45:60001
-   - Record in NAT table
-7. Decrement TTL: 64 → 63
-8. Recalculate checksums
-9. Create new frame:
-   - Dest MAC: ISP router MAC
-   - Source MAC: Router WAN interface MAC
-   - Payload: NATed IP packet
-10. Forward to ISP
-
-Step 6: ISP Forwards to Internet
-ISP Router → Internet backbone → Google's network → Google server
-
-Step 7: Google Replies
-Google server sends reply:
-- Source: 142.250.185.206:443
-- Dest: 203.0.113.45:60001
-
-Step 8: Router Receives Reply
-Router:
-1. Receives packet on WAN interface
-2. Dest IP: 203.0.113.45:60001 (router's public IP)
-3. Check NAT table:
-   - 60001 → 192.168.1.10:54321
-4. De-NAT packet:
-   - Original dest: 203.0.113.45:60001
-   - De-NATed dest: 192.168.1.10:54321
-5. Forward to Computer A via LAN interface
-
-Step 9: Computer A Receives Reply
-Computer A:
-1. Receives frame on eth0
-2. Dest MAC matches → Accept
-3. Strip frame, process IP packet
-4. Dest IP matches → Accept
-5. Pass to TCP layer
-6. Port 54321 matches open socket
-7. Pass to application (web browser)
-8. Browser renders Google homepage
-
-Success! ✓
-```
-
----
-
-## Practical Configuration Examples
-
-### Linux: Manual IP Configuration
-
-**Viewing Current Configuration:**
+### 9.3 Try link-local (APIPA-style) on a "cable"
 
 ```bash
-# Show all network interfaces
-$ ip addr show
-
-# Show specific interface
-$ ip addr show eth0
-2: eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500
-    link/ether aa:aa:aa:aa:aa:aa brd ff:ff:ff:ff:ff:ff
-    inet 192.168.1.10/24 brd 192.168.1.255 scope global eth0
-       valid_lft forever preferred_lft forever
+sudo ip netns add a; sudo ip netns add b
+sudo ip link add a-b type veth peer name b-a
+sudo ip link set a-b netns a; sudo ip link set b-a netns b
+sudo ip netns exec a ip addr add 169.254.52.143/16 dev a-b; sudo ip netns exec a ip link set a-b up
+sudo ip netns exec b ip addr add 169.254.100.50/16 dev b-a; sudo ip netns exec b ip link set b-a up
+sudo ip netns exec a ping -c 2 169.254.100.50     # works: same link, same /16, ARP resolves directly
+sudo ip netns exec a ping -c 1 8.8.8.8            # "Network is unreachable": no gateway
+sudo ip netns del a; sudo ip netns del b
 ```
 
-**Configuring Static IP:**
+### 9.4 Clean up
 
 ```bash
-# Remove existing IP (if any)
-$ sudo ip addr flush dev eth0
-
-# Assign static IP
-$ sudo ip addr add 192.168.1.100/24 dev eth0
-
-# Bring interface up
-$ sudo ip link set eth0 up
-
-# Add default gateway
-$ sudo ip route add default via 192.168.1.1 dev eth0
-
-# Test connectivity
-$ ping 192.168.1.1  # Ping gateway
-$ ping 8.8.8.8      # Ping Internet
+sudo pkill -f "http.server 80" 2>/dev/null
+for n in h1 h2 r inet; do sudo ip netns del $n; done      # deleting the namespaces removes their veth ends
 ```
 
-**Persistent Configuration (Debian/Ubuntu):**
-
-```bash
-# Edit /etc/network/interfaces
-$ sudo nano /etc/network/interfaces
-
-# Add configuration:
-auto eth0
-iface eth0 inet static
-    address 192.168.1.100
-    netmask 255.255.255.0
-    gateway 192.168.1.1
-    dns-nameservers 8.8.8.8 8.8.4.4
-
-# Restart networking
-$ sudo systemctl restart networking
-```
+**Ideas to extend:** add a third LAN; add a **DHCP server** (`dnsmasq` in namespace `r` with `--interface=r-h1 --dhcp-range=10.0.1.100,10.0.1.200`) and use `dhclient` in `h1`; block h1 from h2 with an `iptables -A FORWARD` rule on the router; add a static route and a second router; use `tcpdump` to watch DHCP (`udp port 67 or 68`) and ARP.
 
 ---
 
-### Windows: Manual IP Configuration
+## 10. Docker and VMs are the same model
 
-**GUI Method:**
+| Home network concept | Docker equivalent |
+|---|---|
+| Computer + NIC | Container + `eth0` (one end of a **veth pair**) |
+| Ethernet switch | Linux **bridge** `docker0` / `br-<id>` |
+| Router + default gateway | The **host**, at the bridge address (`172.17.0.1`), forwarding with `ip_forward=1` |
+| NAT (masquerade) | iptables `MASQUERADE` rule on outbound traffic |
+| Port forwarding on the router | `docker run -p 8080:80` (DNAT) |
+| DHCP server | Docker's IPAM assigns addresses when containers start (or `--ip`) |
+| DNS forwarder | Embedded DNS at `127.0.0.11` |
 
-```
-1. Open Control Panel
-2. Network and Sharing Center
-3. Change adapter settings
-4. Right-click network adapter → Properties
-5. Select "Internet Protocol Version 4 (TCP/IPv4)"
-6. Click "Properties"
-7. Select "Use the following IP address"
-8. Enter:
-   IP address: 192.168.1.100
-   Subnet mask: 255.255.255.0
-   Default gateway: 192.168.1.1
-   Preferred DNS: 8.8.8.8
-   Alternate DNS: 8.8.4.4
-9. Click OK
-```
-
-**Command Line Method:**
-
-```cmd
-REM View current configuration
-C:\> ipconfig /all
-
-REM Set static IP
-C:\> netsh interface ip set address "Ethernet" static 192.168.1.100 255.255.255.0 192.168.1.1
-
-REM Set DNS servers
-C:\> netsh interface ip set dns "Ethernet" static 8.8.8.8
-C:\> netsh interface ip add dns "Ethernet" 8.8.4.4 index=2
-
-REM Verify
-C:\> ipconfig
-```
+Check them: `docker network inspect bridge`, `ip route`, `sudo iptables -t nat -S | grep -i -E 'MASQ|DNAT'`, `sysctl net.ipv4.ip_forward`. **VMs:** a *NAT'd* vNIC (VirtualBox/VMware "NAT") is a private network behind a host-side router; a *bridged* vNIC joins your real LAN like a physical machine; "host-only" is a private switch between host and VMs.
 
 ---
 
-### Router Configuration (Consumer Router)
+## 11. Troubleshooting: bottom-up
 
-**Web Interface Access:**
+| Step | Check | Fails? |
+|---|---|---|
+| 1. **Interface exists and is up** | `ip -br link` (`UP`, `LOWER_UP`), driver loaded (`lspci -k`, `dmesg`) | Driver/firmware, cable, disabled adapter, airplane mode |
+| 2. **Link** | Link lights, `ethtool eth0` (`Link detected: yes`, speed) | Cable/port/switch |
+| 3. **Address** | `ip -br addr`: DHCP address or **`169.254.x.x`** (= DHCP failed) | DHCP server/pool, VLAN, cable; `dhclient -r && dhclient`, `ipconfig /renew` |
+| 4. **Gateway** | `ip route` has `default via …`; `ping <gateway>` | Wrong mask/subnet, no default route, ARP failing |
+| 5. **Internet by IP** | `ping 1.1.1.1` | Router WAN down, ISP, NAT/firewall, no default route on the router |
+| 6. **DNS** | `ping example.com` fails but `ping 1.1.1.1` works; `dig example.com` | Wrong DNS servers; fix DHCP/`resolv.conf` |
+| 7. **Application** | `curl -v https://example.com`, firewall, proxy | Proxy/firewall/app problem |
 
-```
-1. Connect computer to router (Ethernet or WiFi)
-2. Computer receives DHCP IP (e.g., 192.168.1.10)
-3. Open web browser
-4. Navigate to router IP (typically 192.168.1.1, 192.168.0.1, or 10.0.0.1)
-5. Login with default credentials:
-   Common defaults:
-   - admin / admin
-   - admin / password
-   - admin / (blank)
-   - root / admin
-   (Check router label or manual for specifics)
-```
+Specific patterns:
 
-**Basic Router Settings:**
-
-```
-WAN Settings (Internet Connection):
-- Connection Type: DHCP (most home ISPs)
-  OR Static IP (if ISP provides)
-  OR PPPoE (DSL connections)
-- DNS Servers: Automatic (from ISP)
-  OR Manual (8.8.8.8, 8.8.4.4)
-
-LAN Settings (Local Network):
-- IP Address: 192.168.1.1
-- Subnet Mask: 255.255.255.0
-- DHCP Server: Enabled
-  - Start IP: 192.168.1.10
-  - End IP: 192.168.1.254
-  - Lease Time: 86400 seconds (24 hours)
-
-WiFi Settings:
-- SSID: MyHomeNetwork
-- Security: WPA3-Personal (or WPA2)
-- Password: (strong password)
-- Channel: Auto (or manual 1, 6, 11 for 2.4GHz)
-```
+| Symptom | Likely cause |
+|---|---|
+| **`169.254.x.x` address** | DHCP unreachable or none exists |
+| Local devices reachable, internet not | No/incorrect default gateway; router WAN down; ISP outage; NAT disabled |
+| Can ping IPs but not names | DNS |
+| Can't ping a neighbor on the same subnet | **Mask mismatch** (e.g. one host `/24`, the other `/16`), firewall blocking ICMP, wrong VLAN, isolation ("client isolation" on Wi-Fi), duplicate IP |
+| Slow or flaky | Wi-Fi interference, cable fault (check counters), overloaded router, duplex mismatch |
+| Two devices fight/random drops | **IP conflict** (a static address inside the DHCP pool): `arping -D -I eth0 192.168.1.20` |
+| Router login page unreachable | Wrong address (try `ip route | grep default`), or you're on the guest network |
+| After router reset nothing works | Default IP range/DHCP changed; renew leases |
 
 ---
 
-## Troubleshooting Common Issues
+## 12. Common misconceptions
 
-### Issue 1: APIPA Address (169.254.x.x)
-
-**Problem:**
-```
-$ ipconfig
-Ethernet adapter:
-   Autoconfiguration IPv4 Address: 169.254.52.143
-```
-
-**Diagnosis:**
-APIPA indicates no DHCP server found.
-
-**Solutions:**
-
-```
-1. Check physical connection:
-   - Is cable plugged in?
-   - Are link lights on NIC blinking?
-   - Try different cable
-   - Try different port on switch/router
-
-2. Check DHCP server:
-   - Is router powered on?
-   - Is DHCP enabled on router?
-   - Is DHCP pool exhausted? (too many devices)
-
-3. Release and renew:
-   Windows: ipconfig /release && ipconfig /renew
-   Linux: sudo dhclient -r eth0 && sudo dhclient eth0
-
-4. Restart network interface:
-   Linux: sudo ip link set eth0 down && sudo ip link set eth0 up
-
-5. Reboot computer and router
-```
+| Misconception | Reality |
+|---|---|
+| "A computer has an IP address" | Each **interface** has one (or several) |
+| "APIPA gives internet access" | It's link-local only: no gateway, never routed |
+| "`169.254.x.x` is normal" | On a real network it signals DHCP failure |
+| "You need a crossover cable for two PCs" | Not anymore (Auto-MDI-X) |
+| "A router and a switch are the same" | Different layers; a home 'router' contains both |
+| "NAT is a firewall" | NAT rewrites addresses; the firewall is a separate (stateful) function |
+| "The router forwards Ethernet broadcasts" | It doesn't; each interface is its own broadcast domain |
+| "The modem, the router and the access point are one thing" | Often combined in one box, but they are distinct functions |
+| "My router's public IP is unique to me" | May be shared via **CGNAT** (100.64.0.0/10 on the WAN side) |
+| "Any device with a driver-less NIC will work" | Without a driver, the OS can't use the hardware |
+| "IP addresses are burned into hardware" | MACs are (mostly); IPs are configured |
+| "A default gateway is optional" | Without one, a host can't reach anything off its own subnet |
 
 ---
 
-### Issue 2: No Internet Access (But Local Works)
+## 13. Summary
 
-**Problem:**
-```
-$ ping 192.168.1.1  # Works
-$ ping 8.8.8.8      # Fails
-```
-
-**Diagnosis:**
-Local network functional, but cannot reach Internet.
-
-**Solutions:**
-
-```
-1. Check default gateway:
-   $ ip route show
-   Should show: default via 192.168.1.1 dev eth0
-   
-   If missing:
-   $ sudo ip route add default via 192.168.1.1 dev eth0
-
-2. Check router's WAN connection:
-   - Login to router web interface
-   - Check WAN status (should show public IP)
-   - If "Disconnected", check ISP connection
-
-3. Check DNS resolution:
-   $ ping 8.8.8.8       # If works, DNS issue
-   $ ping google.com    # If fails, DNS not working
-   
-   Fix DNS:
-   $ sudo nano /etc/resolv.conf
-   Add: nameserver 8.8.8.8
-
-4. Check NAT on router:
-   - NAT should be enabled for Internet access
-   - Check router firewall settings
-
-5. Contact ISP:
-   - Verify service active
-   - Check for outages
-   - Verify modem connection
-```
+- A host needs a **NIC + driver** (MAC address), then an **IP address, subnet mask, default gateway and DNS**, from **DHCP**, **manual** config, or the **link-local `169.254.0.0/16`** fallback (no gateway, never routed; seeing it means DHCP failed).
+- **Two machines + a cable** form the smallest network; **switches** avoid the N(N−1)/2 cabling problem (star topology); **Auto-MDI-X** ended the crossover-cable era.
+- A **router** connects different networks at Layer 3, forwarding by routing table: destination IP unchanged, **MAC rewritten**, **TTL decremented**; `net.ipv4.ip_forward=1` is what makes a Linux host a router.
+- A **home router** = router + switch + Wi-Fi AP + DHCP + DNS forwarder + NAT + firewall (+ maybe modem).
+- Build the journey in layers (NIC → address → gateway → internet → DNS → app) and **troubleshoot bottom-up**.
+- Docker bridges, veths, NAT and `-p` are the same building blocks in software.
 
 ---
 
-### Issue 3: Cannot Ping Other Computers
+## 14. Check your understanding
 
-**Problem:**
-```
-Computer A: 192.168.1.10
-Computer B: 192.168.1.20
+1. Why does an IP address belong to an interface, not a computer?
+2. A Windows PC shows `169.254.17.203`. What does it mean, what works, what doesn't, and what would you check first?
+3. What are the four settings a host needs to communicate beyond its own subnet?
+4. How does a host decide whether to send a packet directly or to the default gateway?
+5. Why did two-computer links need crossover cables, and why don't they now?
+6. How many cables would a full mesh of 12 computers need? What's the star alternative?
+7. In the namespace lab, `h1` can ping the router but not `h2` until one command is run on the router. Which, and why?
+8. `ping` from `h1` to `h2` shows `ttl=63`. Explain.
+9. Why does `curl` from `h1` to the "internet" host reach it but never get a reply until NAT is enabled?
+10. List the functions of a typical home router.
 
-$ ping 192.168.1.20
-Request timed out
-```
+<details>
+<summary>Answers</summary>
 
-**Diagnosis:**
-Same subnet but cannot communicate.
+1. A computer may have several interfaces (Ethernet, Wi-Fi, virtual ones), each connected to a network and each needing its own address; the address identifies the attachment point on a network.
+2. A link-local (APIPA) address: DHCP failed. It works with other devices on the same link, but not for the internet, other subnets or DNS (no gateway). Check the cable/link lights, whether the router/DHCP server is on and has free leases, the switch port/VLAN, then renew (`ipconfig /renew`).
+3. IP address, subnet mask (prefix), default gateway, DNS server(s).
+4. It ANDs the destination with its mask: if the destination is inside its own subnet it ARPs and sends directly, otherwise it sends the packet to the default gateway.
+5. Transmit and receive pairs were on different pins on hosts vs switches, so a computer-to-computer link needed the pairs crossed. Auto-MDI/MDI-X (mandatory on Gigabit) lets ports swap pairs automatically.
+6. 12 × 11 / 2 = 66 cables (and 11 NICs per computer). A star with a switch needs 12 cables and one NIC per computer.
+7. `sudo ip netns exec r sysctl -w net.ipv4.ip_forward=1`. Enabling IP forwarding lets the machine forward packets between its interfaces (acting as a router); otherwise it only accepts packets addressed to itself.
+8. The initial TTL of 64 was decremented once by the router (hosts on the same subnet would show 64).
+9. The pretend internet host has no route to the private `10.0.1.0/24` network, so replies to the private source address are lost. NAT rewrites the source to the router's public-side address, which the server can reply to.
+10. Routing, Ethernet switching, Wi-Fi access point, DHCP server, DNS forwarding, NAT, stateful firewall, sometimes a modem.
+</details>
 
-**Solutions:**
+**Practice**
 
-```
-1. Check firewall:
-   Computer B may be blocking ICMP (ping)
-   Windows: Control Panel → Firewall → Allow ping
-   Linux: sudo iptables -I INPUT -p icmp -j ACCEPT
-
-2. Verify subnet masks match:
-   Both should have 255.255.255.0 (or same value)
-   
-   Computer A: 192.168.1.10/24
-   Computer B: 192.168.1.20/24
-   ✓ Same subnet
-   
-   Computer A: 192.168.1.10/24 (255.255.255.0)
-   Computer B: 192.168.1.20/16 (255.255.0.0)
-   ✗ Different subnet masks → Communication fails
-
-3. Check ARP:
-   $ arp -a
-   Should show Computer B's MAC address
-   
-   If missing, ARP not working:
-   - Check switch connection
-   - Verify cables
-   - Check for VLAN isolation
-
-4. Use tcpdump to diagnose:
-   Computer A:
-   $ sudo tcpdump -i eth0 icmp
-   
-   Computer B:
-   $ ping 192.168.1.10
-   
-   Check if Computer A sees ICMP packets arriving
-```
+1. On your machine, document every interface: name, MAC, IPv4/IPv6 addresses, driver (`ethtool -i`), and which routes use it. Identify the default gateway and confirm its MAC in `ip neigh`.
+2. Unplug the cable (or disconnect from Wi-Fi) and reconnect while running `sudo tcpdump -i <if> -nn -e 'udp port 67 or 68 or arp'`; annotate the DHCP and ARP packets you see.
+3. Run the namespace lab; then add a third LAN (`10.0.3.0/24`) and prove `h3` reaches `h1` and `h2` through the router. Add a firewall rule on the router that blocks h1 → h3 but allows h2 → h3.
+4. Log in to your home router (from your default-gateway address), list its DHCP leases, and match a device's MAC (from `ip neigh`) to a lease entry.
+5. Create the static/DHCP configurations in section 8 on a VM and deliberately break each element (wrong mask, missing gateway, wrong DNS) to see the exact symptom.
 
 ---
 
-##Summary and Key Takeaways
-
-### Essential Concepts
-
-**1. NIC (Network Interface Card):**
-- Hardware that enables network connectivity
-- Provides MAC address (burned into hardware)
-- Requires driver to function
-- External (PCI, USB) or integrated (motherboard)
-
-**2. APIPA (Automatic Private IP Addressing):**
-- Fallback IP addressing (169.254.0.0/16)
-- Assigned when no DHCP server available
-- Enables local communication without infrastructure
-- Indicates missing DHCP in production environments
-
-**3. Point-to-Point Networking:**
-- Two computers connected directly (crossover cable historically, any cable now)
-- Both need compatible IP addressing (same subnet)
-- APIPA works for peer-to-peer setup
-- Limited to two devices without switch/hub
-
-**4. Router Fundamentals:**
-- Connects multiple networks together
-- Layer 3 device (IP-based forwarding)
-- Provides NAT (multiple private IPs → one public IP)
-- Runs DHCP server for automatic IP assignment
-- Blocks broadcasts between networks
-- Maintains routing table for forwarding decisions
-
-**5. Home Network Setup:**
-- Router connects LAN (private) to WAN (public/Internet)
-- LAN devices get private IPs (192.168.x.x, 10.x.x.x)
-- Router performs NAT for Internet access
-- DHCP eliminates manual IP configuration
-
----
-
-### Complete Network Setup Progression
-
-```
-Step 1: Standalone Computer
-- No NIC → No networking
-
-Step 2: Install NIC + Driver
-- Has MAC, gets APIPA IP → Basic functionality
-
-Step 3: Connect to Router
-- Gets proper IP from DHCP → Local network access
-
-Step 4: Router Connects to ISP
-- NAT enabled → Full Internet access
-```
-
----
-
-### Common IP Ranges
-
-**APIPA (Link-Local):**
-```
-Range: 169.254.0.0 to 169.254.255.255
-CIDR: 169.254.0.0/16
-Usage: Automatic fallback when no DHCP
-```
-
-**Private Networks (RFC 1918):**
-```
-Class A: 10.0.0.0 to 10.255.255.255 (10.0.0.0/8)
-Class B: 172.16.0.0 to 172.31.255.255 (172.16.0.0/12)
-Class C: 192.168.0.0 to 192.168.255.255 (192.168.0.0/16)
-Usage: Home/office networks, NAT to public IP
-```
-
-**Public IPs:**
-```
-All other IPv4 addresses
-Examples: 8.8.8.8, 142.250.185.206, 203.0.113.45
-Usage: Internet-routable addresses
-```
-
----
-
-## Conclusion
-
-This chapter took you from the very beginning of networking: the moment you first connect a network card to a computer, the automatic configuration that happens behind the scenes, the peer-to-peer networks you can build with just two computers and a cable, and finally the router that bridges your local network to the global Internet.
-
-You now understand what happens when you plug in a network cable:
-1. NIC provides hardware connectivity and MAC address
-2. Driver enables OS to control the NIC
-3. APIPA provides fallback IP addressing (169.254.x.x)
-4. DHCP (from router) assigns proper private IP (192.168.x.x)
-5. Router's NAT translates private IP to public IP
-6. Packets flow through router to ISP to Internet
-
-Every network—from the smallest two-computer peer-to-peer connection to the largest enterprise network to the global Internet itself—builds on these fundamentals. The NIC connects you physically. The driver connects you logically. APIPA or DHCP gives you an identity (IP address). The router connects you to other networks. NAT allows many devices to share one public IP. These concepts never change, even as networks scale to billions of devices.
-
-When you troubleshoot network issues, you now know where to start: Is the NIC installed? Is the driver loaded? Do I have an IP? Is it APIPA (problem) or DHCP (good)? Can I ping the gateway? Can I ping the Internet? Is NAT working? Is DNS resolving? Each question targets a specific component in the networking stack you've just mastered.
-
-**This is real networking. This is where every network engineer, every system administrator, every DevOps professional, every software engineer who deploys networked applications begins. Master these basics, and you've built the foundation for understanding everything else.**
-
----
-
-## Further Reading
-
-- **RFC 3927:** Dynamic Configuration of IPv4 Link-Local Addresses (APIPA)
-- **RFC 1918:** Address Allocation for Private Internets
-- **IEEE 802.3:** Ethernet standard
-- **"Computer Networks" by Andrew S. Tanenbaum:** Chapters on Physical and Data Link layers
-- **Cisco CCNA Study Guides:** Router and switch configuration
-- **RFC 2131:** Dynamic Host Configuration Protocol (DHCP)
-- **"TCP/IP Illustrated, Volume 1" by W. Richard Stevens:** Chapters on IP addressing and routing
-- **Linux Network Administrator's Guide:** Practical Linux networking configuration
-- **Windows Server documentation:** DHCP and DNS server setup
-- **Home networking forums:** Practical troubleshooting for consumer routers
+**Next:** [Chapter 33 – Subnetting and Subnet Masks](33_subnetting_and_subnet_masks_in_details.md)

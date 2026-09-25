@@ -1,1917 +1,400 @@
-# Chapter 39: Networking Inside A Network - ARP Protocol In Details
+# Chapter 39: Networking Inside a Network: ARP
 
-## Overview
+> **In one sentence:** **ARP** (Address Resolution Protocol) answers the question "I know the **IP address** of the machine I want to reach on my own network; what is its **MAC address**?", by **broadcasting a question** to everyone on the local link and receiving a **unicast answer** from the owner, then caching the result so it doesn't have to ask again.
 
-You understand hubs, switches, and routers. You know how devices decide whether to send directly to another computer or through a gateway based on subnet mask calculations. You've seen simplified examples with a few computers on a switch.
+**Level:** 🟡 Intermediate · **Reading time:** ~55 minutes
 
-**But what happens in a real, complex network?**
-
-A network with multiple switches, hubs, routers, and dozens of devices. A network where data must traverse multiple hops, where switches and hubs are daisy-chained, where the internal router switch handles local traffic while the router component stays idle. A network where you run a simple HTTP server on one computer and a friend on another computer tries to access it using your IP address.
-
-**This chapter explores internal network communication—the complete journey of data within a network.**
-
-We'll follow a real-world scenario: You've learned Go programming, built a simple HTTP server with a `/hello` route that returns "Hello World," and you're running it on port 3000. Your friend sits next to you on the same router, and you give them your IP address: `192.168.1.5`. They open their browser and hit `http://192.168.1.5:3000/hello`.
-
-**What happens next? How does the HTTP request travel from their computer to yours?**
-
-The answer involves a complex dance of:
-- **ARP (Address Resolution Protocol):** The critical protocol that resolves IP addresses to MAC addresses
-- **Multiple network devices:** Switches learning MAC addresses, hubs blindly flooding, routers staying dormant
-- **Layer-by-layer processing:** Every device processing frames, packets, segments, and data at appropriate layers
-- **CAM tables updating:** Switches building their MAC-to-port mappings dynamically
-- **ARP tables caching:** Computers saving learned MAC addresses to avoid repeated ARP requests
-
-By the end of this chapter, you'll understand **exactly** how data flows through a complex network topology, why ARP is essential, how devices cooperate (or don't), and why "magic" doesn't exist—only protocols and logic.
+**Prerequisites:** Chapters [30](30_internet_protocol_ip_in_details.md) (IP), [31](31_data_link_layer_frame_in_details.md) (frames, MACs), [33](33_subnetting_and_subnet_masks_in_details.md) (same network vs different) and [38](38_hub_switch_router_network_devices_in_details.md) (hubs, switches, routers).
 
 ---
 
-## The Network Topology
+## What you will learn
 
-### Complete Network Diagram
-
-```
-                         Internet (WAN)
-                              |
-                              | WAN Interface
-                    ┌─────────┴────────────┐
-                    │      HOME ROUTER     │
-                    │  (Switch + Router)   │
-                    │  LAN: 192.168.1.1    │
-                    │  MAC: R              │
-                    └─────────┬────────────┘
-                              | LAN Interface
-                    ┌─────────┴────────────┐
-                    │   Internal Switch    │  ← Router's built-in switch
-                    │    (Switch Zero)     │
-                    └──┬────┬────┬────┬────┘
-                       │    │    │    │
-                  Port 1  Port 2 Port 3 Port 4
-                       │    │    │    │
-                       │    │    │    └──────────► Switch 1
-                       │    │    │
-                       │    │    └───────────────► Computer F
-                       │    │                      IP: 192.168.1.6
-                       │    │                      MAC: F
-                       │    │
-                       │    └────────────────────► Hub 2 ───┐
-                       │                                     │
-                       │                          ┌──────────┘
-                       │                          │
-                       │                     ┌────┴────┐
-                       │                     │  Hub 2  │
-                       │                     └─┬────┬──┘
-                       │                       │    │
-                       │                       │    └─────► Computer G
-                       │                       │           IP: 192.168.1.7
-                       │                       │           MAC: G
-                       │                       │
-                       │                       └──────────► Hub 1
-                       │
-                       └───────────────────────────► Hub 1
-                                                     └──┬──┬──┬──┘
-                                                        │  │  │
-                                                   Port 1 2  3  4
-                                                        │  │  │  │
-                                                        │  │  │  └──► (to Hub 2)
-                                                        │  │  │
-                                                        │  │  └─────► Computer C
-                                                        │  │         IP: 192.168.1.3
-                                                        │  │         MAC: C
-                                                        │  │
-                                                        │  └────────► Computer B
-                                                        │            IP: 192.168.1.4
-                                                        │            MAC: B
-                                                        │
-                                                        └───────────► Computer A
-                                                                     IP: 192.168.1.2
-                                                                     MAC: A
-
-Switch 1 (from Router's Switch Port 4):
-┌────────────────────────────┐
-│        Switch 1            │
-└─┬────┬────┬────┘
-  │    │    │
-Port 1 2    3
-  │    │    │
-  │    │    └────────► Switch 2
-  │    │
-  │    └─────────────► Hub (another hub)
-  │                    └──┬──┬──┘
-  │                       │  │
-  │                       │  └──► Computer H
-  │                       │       IP: 192.168.1.8
-  │                       │       MAC: H
-  │                       │
-  │                       └─────► Computer I
-  │                              IP: 192.168.1.9
-  │                              MAC: I
-  │
-  └──────────────────► Single Computer J
-                       IP: 192.168.1.10
-                       MAC: J
-
-Switch 2 (from Switch 1 Port 3):
-┌────────────────────────────┐
-│        Switch 2            │
-└─┬────┬────┘
-  │    │
-Port 1 2
-  │    │
-  │    └───────────► Computer E (DESTINATION - Server)
-  │                 IP: 192.168.1.5
-  │                 MAC: E
-  │                 Running: HTTP server on port 3000
-  │                 Route: /hello → "Hello World"
-  │
-  └────────────────► Computer D
-                     IP: 192.168.1.11
-                     MAC: D
-```
-
-**Network summary:**
-- **Subnet:** 192.168.1.0/24 (255.255.255.0)
-- **Gateway:** 192.168.1.1 (Router's LAN interface)
-- **Total devices:** 12 computers + 1 router + multiple switches + multiple hubs
-- **This is a massive, complex network!**
+- **Why ARP must exist:** IP addresses are useless to an Ethernet NIC, which only understands MACs
+- The **ARP packet** format, byte by byte, for **request** and **reply**
+- How a request and reply **travel through hubs, switches and a router** (who floods, who learns, who ignores)
+- The **ARP cache** (neighbor table): states, timeouts, and the commands to inspect it
+- ARP when the destination is **remote**: you ARP for the **gateway**, not the server
+- **Gratuitous ARP**, **ARP probe/announcement**, **proxy ARP**
+- **ARP spoofing/poisoning** and how to defend against it
+- **IPv6** replaces ARP with **NDP**; **Docker/VM** angles; a hands-on lab with real packets
 
 ---
 
-## The Scenario: Real-World Use Case
+## 1. The problem: two kinds of addresses
 
-### You've Built Your First HTTP Server
+Every packet you send on a LAN has **two** destination addresses:
 
-```go
-// Your Go HTTP server (simplified example)
-package main
+| Layer | Address | Example | Used by |
+|---|---|---|---|
+| 3 (network) | **IP** | `192.168.1.20` | Applications, routing decisions |
+| 2 (data link) | **MAC** | `bb:bb:bb:bb:bb:bb` | The NIC, switches |
 
-import (
-    "net/http"
-    "fmt"
-)
+Applications only know an IP (or a name that DNS resolves to an IP). But the NIC builds an Ethernet frame and must put a **destination MAC** in it. The switch also forwards **by MAC**. The kernel is stuck between them: it has the IP, but needs the MAC.
 
-func helloHandler(w http.ResponseWriter, r *http.Request) {
-    fmt.Fprintf(w, "Hello World")
-}
-
-func main() {
-    http.HandleFunc("/hello", helloHandler)
-    http.ListenAndServe(":3000", nil)
-}
+```
+HTTP request for 192.168.1.20:80 ready to send
+Ethernet frame:  dst MAC = ???     src MAC = aa:bb:cc:11:22:33
+                       ▲
+                       └─ ARP fills this in
 ```
 
-**You're running this on Computer E:**
-- IP: `192.168.1.5`
-- Port: `3000`
-- Route: `/hello` returns `"Hello World"`
+Why not just embed the MAC in the IP address, or have DHCP tell you all MACs? Because the two are **independent by design** (IPs are assigned/logical, MACs are hardware/local), which lets layers be swapped without changing others. ARP is the glue that connects them **on one link**.
 
-**From your computer (Computer E), you can access it:**
-```
-http://localhost:3000/hello
-→ "Hello World" ✓
-```
-
-### Sharing With Your Friend
-
-**You tell your friend (sitting next to you):**
-
-> "Hey! I just built my first server! It's running on my computer. Here's the IP and port. Try accessing it from your browser!"
-
-**You give them:**
-- IP: `192.168.1.5`
-- Port: `3000`
-- Path: `/hello`
-- Full URL: `http://192.168.1.5:3000/hello`
-
-**Your friend (Computer A, IP: 192.168.1.2) opens their browser and types that URL.**
-
-**What happens?**
-
-This is what we're about to explore—the complete journey from Computer A to Computer E through this complex network.
+Analogy: you know a colleague's name (IP), but to hand them a letter in a big open-plan office you need to know which desk (MAC) they sit at. You shout "Who is Priya?" and Priya waves.
 
 ---
 
-## The Journey Begins: Computer A Sends HTTP Request
+## 2. Terminology
 
-### Source and Destination
+| Term | Meaning |
+|---|---|
+| **ARP request** | "Who has IP X? Tell IP Y (with MAC M)" |
+| **ARP reply** | "IP X is at MAC N" |
+| **Sender** | The one asking (source IP/MAC in the packet) |
+| **Target** | The IP being resolved |
+| **ARP cache / ARP table / neighbor table** | Local memory of recent IP→MAC answers |
+| **Resolution** | Turning IP into MAC |
 
-```
-Source: Computer A
-- IP: 192.168.1.2
-- MAC: A
-- Browser initiated HTTP GET request
-
-Destination: Computer E
-- IP: 192.168.1.5
-- MAC: ??? (Computer A doesn't know this yet!)
-- HTTP server listening on port 3000
-```
-
-**The problem:** Computer A knows the destination IP (`192.168.1.5`) but **doesn't know the destination MAC address**.
+ARP (RFC 826, 1982) works only on the **local link**. It is never routed.
 
 ---
 
-### Layer 7 (Application Layer): HTTP Request Created
+## 3. The ARP packet (28 bytes for IPv4 over Ethernet)
 
-**Computer A's browser creates an HTTP GET request:**
-
-```http
-GET /hello HTTP/1.1
-Host: 192.168.1.5:3000
-User-Agent: Mozilla/5.0...
-Accept: text/html...
-```
-
-**Browser passes this to the Operating System:** "Hey OS, I need to send this HTTP request to `192.168.1.5:3000`."
-
----
-
-### Layer 4 (Transport Layer): Ports Assigned
-
-**Operating System handles this:**
+Carried directly in an Ethernet frame with **EtherType `0x0806`** (not inside IP).
 
 ```
-Transport Layer (TCP):
-┌─────────────────────────────────────┐
-│ Source Port: 51720                  │  ← Ephemeral port assigned
-│ Destination Port: 3000              │  ← Server's listening port
-│ Flags: SYN                          │  ← TCP handshake begins
-│ Payload: [HTTP request data]        │
-└─────────────────────────────────────┘
+ 0        8        16       24       32
++---------------------+---------------------+
+| Hardware type (2)   | Protocol type (2)   |   0x0001 = Ethernet | 0x0800 = IPv4
++----------+----------+---------------------+
+| HLEN (1) | PLEN (1) | Operation (2)       |   6 | 4 | 1 = request, 2 = reply
++----------+----------+---------------------+
+| Sender hardware address (6)               |   SHA: MAC of the sender
+| Sender protocol address (4)               |   SPA: IP  of the sender
+| Target hardware address (6)               |   THA: MAC being asked for (00:00:.. in a request)
+| Target protocol address (4)               |   TPA: IP being asked about
++-------------------------------------------+
 ```
 
-**TCP segment ready to pass to Network Layer.**
+### Example: A (192.168.1.10, `aa:bb:cc:11:22:33`) asks for 192.168.1.20
 
----
-
-### Layer 3 (Network Layer): IP Addresses Assigned
+**Request frame (42 bytes; the NIC pads to the 60-byte minimum before the FCS):**
 
 ```
-Network Layer (IP):
-┌─────────────────────────────────────┐
-│ Source IP: 192.168.1.2              │  ← Computer A's IP
-│ Destination IP: 192.168.1.5         │  ← Computer E's IP
-│ Protocol: TCP (6)                   │
-│ Payload: [TCP segment]              │
-└─────────────────────────────────────┘
+Ethernet:  ff ff ff ff ff ff   aa bb cc 11 22 33   08 06
+           └ dst: broadcast ┘  └ src: A's MAC ────┘  └ ARP
+ARP:       00 01   08 00   06   04   00 01
+           hw=Eth  proto=IPv4 hlen plen op=1 (request)
+           aa bb cc 11 22 33  c0 a8 01 0a          ← sender MAC, sender IP 192.168.1.10
+           00 00 00 00 00 00  c0 a8 01 14          ← target MAC unknown (zeros), target IP 192.168.1.20
 ```
+**Reply (unicast to A, sent by B = 192.168.1.20 with MAC `bb:bb:bb:bb:bb:bb`):**
 
-**IP packet ready to pass to Data Link Layer.**
+```
+Ethernet:  aa bb cc 11 22 33   bb bb bb bb bb bb   08 06
+ARP:       00 01 08 00 06 04 00 02                        ← op=2 (reply)
+           bb bb bb bb bb bb  c0 a8 01 14                 ← sender = B: MAC, IP 192.168.1.20
+           aa bb cc 11 22 33  c0 a8 01 0a                 ← target = A
+```
+The request is a **broadcast** (everyone must hear it because A doesn't know who owns the IP); the reply is **unicast** (B already learned A's MAC from the request).
 
 ---
 
-### Layer 2 (Data Link Layer): The MAC Address Problem
+## 4. A step-by-step journey: two hosts, one switch
 
-**OS attempts to create Ethernet frame:**
-
-```
-Data Link Layer:
-┌─────────────────────────────────────┐
-│ Source MAC: A                       │  ← Computer A's MAC (known)
-│ Destination MAC: ???                │  ← Computer E's MAC (UNKNOWN!)
-│ EtherType: 0x0800 (IPv4)            │
-│ Payload: [IP packet]                │
-└─────────────────────────────────────┘
-
-Problem: We don't have Computer E's MAC address!
-```
-
-**Operating System realizes:** "I have the IP (`192.168.1.5`) but not the MAC address. I cannot create the frame!"
-
-**Operating System's solution:** "I need to use ARP (Address Resolution Protocol) to resolve the MAC address."
-
----
-
-## ARP: Address Resolution Protocol
-
-### What is ARP?
-
-**ARP (Address Resolution Protocol)** resolves IP addresses to MAC addresses.
+Scenario: A (`192.168.1.10`) browses to B (`192.168.1.20`) on the same LAN, through a switch. ARP caches and the switch table are empty.
 
 ```
-ARP's job:
-Input:  IP address (e.g., 192.168.1.5)
-Output: MAC address (e.g., MAC E)
-
-ARP = IP → MAC resolver
+A ──┐
+B ──┼── switch ── router ── (Internet)
+C ──┘
 ```
 
-**Why ARP is necessary:**
+1. **A's application** opens `http://192.168.1.20`. TCP wants to send a SYN. IP layer decides: `192.168.1.20 AND /24` = my network → **deliver directly**.
+2. **A checks its ARP cache.** No entry for `.20` → the packet is **queued**, and A sends an **ARP request** (broadcast).
+3. **The switch** learns `A → port 1` from the source MAC and **floods** the broadcast out ports 2, 3, 4 (B, C, router).
+4. **Every host processes it**:
+   - **C** (`192.168.1.30`) checks the target IP: not me → **ignores** (but many OSes still **update** an existing cache entry for the *sender* if they already had one).
+   - **The router** (`192.168.1.1`): not me → ignores.
+   - **B**: target IP is me → **learns A** (`192.168.1.10 → aa:bb:cc:11:22:33`) *because it will need to reply and probably talk to A*, then builds the reply.
+5. **B sends the ARP reply, unicast** to A's MAC. The switch learns `B → port 2` (from the reply's source MAC) and forwards **only** to port 1.
+6. **A** stores `192.168.1.20 → bb:bb:bb:bb:bb:bb` in its cache, **dequeues the SYN**, and sends the TCP frame with the right destination MAC. The switch now knows both ports, and the frame goes A→B directly.
+7. Subsequent packets use the **cached** entry: **no more ARP** until it ages out.
 
-- **Layer 3 (Network Layer)** uses IP addresses for routing across networks
-- **Layer 2 (Data Link Layer)** uses MAC addresses for local delivery between devices
-- **The gap:** You need both, but you might only know the IP address
+Summary of what each device learned:
 
-**ARP fills this gap.**
+| Device | Learned |
+|---|---|
+| A | `192.168.1.20 → bb:bb:…` (ARP cache) |
+| B | `192.168.1.10 → aa:bb:…` (from the request) |
+| Switch | `aa:bb:… → port 1`, `bb:bb:… → port 2` (MAC table, from source addresses) |
+| C, router | Nothing new (usually) |
+
+### What if there's a hub instead of a switch? 
+Every device (also C, and any eavesdropper) hears **all** frames, including the unicast reply. Communication works the same; there's just no privacy or efficiency (Chapter 38).
+
+### What if the LAN has several switches/hubs joined together?
+The ARP broadcast is **flooded through every switch and hub in the same broadcast domain**; the reply travels back along the learned path (each switch having learned the requester's MAC on the way). **A router in the middle is a boundary**: it does **not** forward the broadcast, so ARP only works between devices **on the same network**, never across a router.
 
 ---
 
-### ARP Terminology
+## 5. Remote destinations: ARP for the gateway
 
-```
-ARP Request:  Broadcast message asking "Who has IP X.X.X.X?"
-ARP Reply:    Unicast response saying "I have IP X.X.X.X, my MAC is YY:YY:YY"
-
-ARP Table:    Local cache storing IP ↔ MAC mappings
-ARP Cache:    Same as ARP table (cached learned MACs)
-```
-
-**Key insight:** ARP requests are **broadcast** (everyone sees them), but ARP replies are **unicast** (only the requester sees them).
-
----
-
-### ARP Process Overview
-
-```
-Step 1: Computer A needs MAC for 192.168.1.5
-Step 2: Computer A broadcasts ARP Request: "Who has 192.168.1.5?"
-Step 3: All devices on network receive ARP Request
-Step 4: Computer E recognizes its IP, replies: "I'm 192.168.1.5, my MAC is E"
-Step 5:Computer E's ARP Reply arrives at Computer A
-Step 6: Computer A saves "192.168.1.5 → MAC E" in its ARP table
-Step 7: Computer A can now create the Ethernet frame with destination MAC E
-```
-
-**Let's see this in detail.**
-
----
-
-## The ARP Request Journey
-
-### Step 1: Computer A Creates ARP Request
-
-**Original TCP/HTTP process is PAUSED. Operating System starts a new process: ARP resolution.**
-
-**Computer A creates a new packet specifically for ARP:**
-
-```
-Network Layer (ARP packet):
-┌─────────────────────────────────────┐
-│ Source IP: 192.168.1.2              │  ← Computer A's IP
-│ Destination IP: 192.168.1.5         │  ← Computer E's IP (target)
-│ Data: (can be empty)                │  ← No TCP/HTTP data here
-└─────────────────────────────────────┘
-
-Data Link Layer (ARP request frame):
-┌─────────────────────────────────────┐
-│ Source MAC: A                       │  ← Computer A's MAC
-│ Destination MAC: FF:FF:FF:FF:FF:FF  │  ← BROADCAST!
-│ EtherType: 0x0806 (ARP)             │  ← ARP protocol identifier
-│ Payload: [ARP packet]               │
-└─────────────────────────────────────┘
-
-Key: Destination MAC = FF:FF:FF:FF:FF:FF means BROADCAST
-Everyone on the local network will receive this!
-```
-
-**Physical Layer: NIC converts to binary signals and sends to Hub 1.**
-
----
-
-### Step 2: Hub 1 Receives and Floods
-
-**Hub 1 receives the binary signals on Port 1 (from Computer A).**
-
-**Hub 1's behavior:**
-```
-Hub 1 processing:
-- Received on Port 1
-- Hub only understands Physical Layer (binary signals)
-- Hub cannot read MAC addresses or anything else
-- Hub floods to all other ports: 2, 3, 4
-
-Sends to:
-- Port 2: Computer B
-- Port 3: Computer C
-- Port 4: Hub 2
-```
-
-Hub 1 blindly forwards everywhere except the source port.
-
----
-
-### Step 3: Recipients Process ARP Request (Part 1)
-
-#### Computer B Receives ARP Request
-
-```
-Computer B:
-1. NIC receives binary signals
-2. Physical → Data Link Layer
-3. Frame decoded:
-   Source MAC: A
-   Dest MAC: FF:FF:FF:FF:FF:FF (broadcast - I should check this)
-   EtherType: 0x0806 (ARP!)
-   
-4. Move to Network Layer (process ARP packet)
-   Source IP: 192.168.1.2
-   Dest IP: 192.168.1.5
-   
-5. Check: Is 192.168.1.5 my IP?
-   My IP: 192.168.1.4
-   No match! This ARP request is not for me.
-   
-6. Decision: REJECT (ignore and discard)
-```
-
-**Computer B rejects the ARP request because the target IP doesn't match.**
-
-#### Computer C Receives ARP Request
-
-**Same process as Computer B:**
-```
-Computer C:
-- Dest IP in ARP: 192.168.1.5
-- My IP: 192.168.1.3
-- No match → REJECT
-```
-
----
-
-### Step 4: Hub 2 Receives and Forwards
-
-**Hub 1 sent to Port 4, which connects to Hub 2.**
-
-**Hub 2 behavior:**
-```
-Hub 2:
-- Receives on one port
-- Floods to all other ports
-- Sends to Computer G
-- Sens back to Hub 1 (creating potential loop, but Hub 1 ignores since it came from there originally)
-```
-
-**Computer G processes ARP request:**
-```
-Computer G:
-- Dest IP: 192.168.1.5
-- My IP: 192.168.1.7
-- No match → REJECT
-```
-
----
-
-### Step 5: Router's Internal Switch Receives ARP Request
-
-**Hub 1's Port 4 also connects upward to the Router's internal switch (Switch Zero).**
-
-**Switch Zero (Router's built-in switch) processes:**
-
-```
-Switch Zero (Router's Switch):
-1. Receives binary on Port 1
-2. Converts to Data Link Layer frame
-3. Reads frame:
-   Source MAC: A
-   Dest MAC: FF:FF:FF:FF:FF:FF (broadcast)
-   
-4. CAM Table check (Source):
-   MAC A not in table → Learn: A ↔ Port 1
-   
-   CAM Table now:
-   ┌─────────┬────────┐
-   │ MAC     │ Port   │
-   ├─────────┼────────┤
-   │ A       │ 1      │
-   └─────────┴────────┘
-   
-5. CAM Table check (Destination):
-   FF:FF:FF:FF:FF:FF = Broadcast
-   → FLOOD to all ports except Port 1
-   
-6. Send to:
-   - Port 2: Hub 2 (again - creates redundancy)
-   - Port 3: Computer F
-   - Port 4: Switch 1
-   - Router's actual interface (LAN interface)
-```
-
-**Switch Zero floods because destination is broadcast.**
-
----
-
-#### Computer F Receives ARP Request
-
-```
-Computer F:
-- Dest IP: 192.168.1.5
-- My IP: 192.168.1.6
-- No match → REJECT
-```
-
-#### Router's LAN Interface Receives ARP Request
-
-```
-Router (actual router component, not switch):
-1. Receives frame on LAN interface
-2. Data Link Layer: Dest MAC = FF:FF:FF:FF:FF:FF (broadcast - check)
-3. Network Layer: Checks ARP packet
-   Dest IP: 192.168.1.5
-   My IP: 192.168.1.1 (LAN interface)
-   No match → REJECT
-   
-Router component doesn't participate - not for it!
-```
-
----
-
-### Step 6: Switch 1 Receives and Processes
-
-**Switch Zero's Port 4 sends to Switch 1's Port 1.**
-
-```
-Switch 1:
-1. Receives on Port 1
-2. Converts to frame
-3. Reads:
-   Source MAC: A
-   Dest MAC: FF:FF:FF:FF:FF:FF
-   
-4. CAM Table (Source):
-   MAC A not in table → Learn: A ↔ Port 1
-   
-   Switch 1 CAM Table:
-   ┌─────────┬────────┐
-   │ MAC     │ Port   │
-   ├─────────┼────────┤
-   │ A       │ 1      │
-   └─────────┴────────┘
-   
-5. CAM Table (Destination):
-   Broadcast → FLOOD to all ports except Port 1
-   
-6. Send to:
-   - Port 2: Hub connected to Computers H and I
-   - Port 3: Switch 2
-   - Port (if more): Single Computer J
-```
-
-**Switch 1 floods because it's a broadcast.**
-
----
-
-### Step 7: Hub and Computers H, I, J Process
-
-**Computers H, I, J all receive ARP request via the hub connected to Switch 1 Port 2:**
-
-```
-Computer H: Dest IP 192.168.1.5 vs My IP 192.168.1.8 → REJECT
-Computer I: Dest IP 192.168.1.5 vs My IP 192.168.1.9 → REJECT
-Computer J: Dest IP 192.168.1.5 vs My IP 192.168.1.10 → REJECT
-```
-
----
-
-### Step 8: Switch 2 Receives and Processes
-
-**Switch 1's Port 3 sends to Switch 2's Port 1.**
-
-```
-Switch 2:
-1. Receives on Port 1
-2. Converts to frame
-3. Reads:
-   Source MAC: A
-   Dest MAC: FF:FF:FF:FF:FF:FF
-   
-4. CAM Table (Source):
-   MAC A not in table → Learn: A ↔ Port 1
-   
-   Switch 2 CAM Table:
-   ┌─────────┬────────┐
-   │ MAC     │ Port   │
-   ├─────────┼────────┤
-   │ A       │ 1      │
-   └─────────┴────────┘
-   
-5. CAM Table (Destination):
-   Broadcast → FLOOD to all ports except Port 1
-   
-6. Send to:
-   - Port 2: Computer E ← THE DESTINATION!
-   - Port 3: Computer D (if exists)
-```
-
-**Switch 2 floods to all ports, including Computer E!**
-
----
-
-### Step 9: Computer E (DESTINATION) Receives ARP Request
-
-**Finally! The ARP request reaches the intended target!**
-
-```
-Computer E (192.168.1.5, MAC E):
-1. NIC receives binary signals
-2. Physical → Data Link Layer
-3. Frame decoded:
-   Source MAC: A
-   Dest MAC: FF:FF:FF:FF:FF:FF (broadcast - check it)
-   EtherType: 0x0806 (ARP request!)
-   
-4. Move to Network Layer (ARP packet)
-   Source IP: 192.168.1.2 (Computer A is asking)
-   Dest IP: 192.168.1.5 (target IP)
-   
-5. Check: Is 192.168.1.5 my IP?
-   My IP: 192.168.1.5
-   ✓✓✓ MATCH! This ARP request is FOR ME!
-   
-6. Decision: I must reply with my MAC address!
-```
-
-**Computer E recognizes:** "Someone is looking for the MAC address of `192.168.1.5`. That's me! I need to respond!"
-
----
-
-### Step 10: Computer E Saves Source Information
-
-**Before replying, Computer E saves Computer A's information:**
-
-```
-Computer E's ARP Table (before):
-┌──────────────────┬──────────┐
-│ IP Address       │ MAC      │
-├──────────────────┼──────────┤
-│ (empty)          │ (empty)  │
-└──────────────────┴──────────┘
-
-Computer E learns from ARP Request:
-- Source IP: 192.168.1.2
-- Source MAC: A
-
-Computer E's ARP Table (after):
-┌──────────────────┬──────────┐
-│ IP Address       │ MAC      │
-├──────────────────┼──────────┤
-│ 192.168.1.2      │ A        │  ← Saved!
-└──────────────────┴──────────┘
-
-Why save? Computer E knows it will need to respond to Computer A,
-so it pre-caches Computer A's MAC address to avoid sending its own ARP request.
-
-Optimization: Both sides learn from each other's ARP messages!
-```
-
----
-
-## The ARP Reply Journey
-
-### Step 1: Computer E Creates ARP Reply
-
-**Computer E constructs an ARP Reply packet:**
-
-```
-Network Layer (ARP Reply packet):
-┌─────────────────────────────────────┐
-│ Source IP: 192.168.1.5              │  ← Computer E's IP
-│ Destination IP: 192.168.1.2         │  ← Computer A's IP
-│ Data: (optional)                    │
-└─────────────────────────────────────┘
-
-Data Link Layer (ARP Reply frame):
-┌─────────────────────────────────────┐
-│ Source MAC: E                       │  ← Computer E's MAC
-│ Destination MAC: A                  │  ← Computer A's MAC (UNICAST!)
-│ EtherType: 0x0806 (ARP)             │
-│ Payload: [ARP Reply packet]         │
-└─────────────────────────────────────┘
-
-Key difference: Destination MAC = A (unicast, not broadcast!)
-Computer E knows Computer A's MAC from the ARP Request!
-```
-
-**Physical Layer: NIC converts to binary and sends to Switch 2 Port 2.**
-
----
-
-### Step 2: Switch 2 Receives ARP Reply
-
-```
-Switch 2:
-1. Receives on Port 2 (from Computer E)
-2. Converts to frame
-3. Reads:
-   Source MAC: E
-   Dest MAC: A
-   
-4. CAM Table (Source):
-   MAC E not in table → Learn: E ↔ Port 2
-   
-   Switch 2 CAM Table (after):
-   ┌─────────┬────────┐
-   │ MAC     │ Port   │
-   ├─────────┼────────┤
-   │ A       │ 1      │
-   │ E       │ 2      │  ← NEW!
-   └─────────┴────────┘
-   
-5. CAM Table (Destination):
-   MAC A in table! Port 1!
-   → Forward ONLY to Port 1 (efficient unicast!)
-   
-6. Send to Port 1 ONLY (to Switch 1)
-```
-
-**Switch 2 is smart! It learned MAC A earlier, so it forwards directly to Port 1!**
-
-**No flooding this time!**
-
----
-
-### Step 3: Switch 1 Receives ARP Reply
-
-```
-Switch 1:
-1. Receives on Port 3 (from Switch 2)
-2. Reads frame:
-   Source MAC: E
-   Dest MAC: A
-   
-3. CAM Table (Source):
-   MAC E not in table → Learn: E ↔ Port 3
-   
-   Switch 1 CAM Table (after):
-   ┌─────────┬────────┐
-   │ MAC     │ Port   │
-   ├─────────┼────────┤
-   │ A       │ 1      │
-   │ E       │ 3      │  ← NEW!
-   └─────────┴────────┘
-   
-4. CAM Table (Destination):
-   MAC A in table! Port 1!
-   → Forward ONLY to Port 1
-   
-5. Send to Port 1 (to Router's Switch)
-```
-
-**Switch 1 also forwards intelligently! No flooding!**
-
----
-
-### Step 4: Router's Switch Receives ARP Reply
-
-```
-Switch Zero (Router's Switch):
-1. Receives on Port 4 (from Switch 1)
-2. Reads frame:
-   Source MAC: E
-   Dest MAC: A
-   
-3. CAM Table (Source):
-   MAC E not in table → Learn: E ↔ Port 4
-   
-   Switch Zero CAM Table (after):
-   ┌─────────┬────────┐
-   │ MAC     │ Port   │
-   ├─────────┼────────┤
-   │ A       │ 1      │
-   │ E       │ 4      │  ← NEW! (actually Port 4 leads to Switch 1 → Switch 2 → E)
-   └─────────┴────────┘
-   
-4. CAM Table (Destination):
-   MAC A in table! Port 1!
-   → Forward ONLY to Port 1
-   
-5. Send to Port 1 (to Hub 1)
-
-Note: Router's actual routing component never participates!
-This is local network traffic - switch handles everything!
-```
-
----
-
-### Step 5: Hub 1 Receives and Floods
-
-**Switch Zero sends to Port 1, which connects to Hub 1.**
-
-```
-Hub 1:
-- Receives ARP Reply on one port (from router's switch)
-- Hub is dumb (Layer 1 only)
-- Floods to all ports:
-  - Port 1: Computer A ← THE DESTINATION!
-  - Port 2: Computer B
-  - Port 3: Computer C
-  - Port 4: Hub 2 (and back to router, creating loop)
-```
-
-**Hub floods blindly, but only Computer A will accept the frame.**
-
----
-
-### Step 6: Computer A Receives ARP Reply
-
-**Finally! The ARP reply reaches Computer A!**
-
-```
-Computer A (192.168.1.2, MAC A):
-1. NIC receives binary signals
-2. Physical → Data Link Layer
-3. Frame decoded:
-   Source MAC: E
-   Dest MAC: A ← MY MAC! For me!
-   EtherType: 0x0806 (ARP!)
-   
-4. Move to Network Layer (ARP Reply packet)
-   Source IP: 192.168.1.5 (Computer E responding!)
-   Dest IP: 192.168.1.2 (me!)
-   
-5. Check: Is 192.168.1.2 my IP?
-   My IP: 192.168.1.2
-   ✓ MATCH! This ARP reply is FOR ME!
-   
-6. Extract information:
-   Computer E (192.168.1.5) has MAC address: E
-   
-7. Save to ARP Table:
-   Computer A's ARP Table (after):
-   ┌──────────────────┬──────────┐
-   │ IP Address       │ MAC      │
-   ├──────────────────┼──────────┤
-   │ 192.168.1.5      │ E        │  ← SAVED!
-   └──────────────────┴──────────┘
-   
-8. Decision: I now have the MAC address I needed!
-```
-
-**Computer A successfully learned Computer E's MAC address through ARP!**
+A (`192.168.1.10/24`, gateway `192.168.1.1`) wants `8.8.8.8`:
 
----
-
-#### Other Recipients Reject ARP Reply
-
-```
-Computer B:
-- Dest MAC: A
-- My MAC: B
-- No match → Reject
-
-Computer C:
-- Dest MAC: A
-- My MAC: C
-- No match → Reject
-
-(All other devices similarly reject)
-```
-
-**Only Computer A accepts the ARP Reply because only its MAC matches the destination.**
-
----
-
-## Resuming the Original HTTP Request
-
-### Computer A Can Now Send the HTTP Request
-
-**Original process was paused waiting for ARP resolution. Now it can continue!**
-
-**Computer A resumes creating the Data Link Layer frame:**
-
-```
-Data Link Layer (finally complete):
-┌─────────────────────────────────────┐
-│ Source MAC: A                       │  ← Computer A's MAC
-│ Destination MAC: E                  │  ← Computer E's MAC (NOW KNOWN!)
-│ EtherType: 0x0800 (IPv4)            │
-│ Payload: [IP packet with TCP/HTTP]  │
-└─────────────────────────────────────┘
-
-Physical Layer: NIC converts to binary and sends to Hub 1.
-```
-
-**The complete packet structure:**
-
-```
-┌─────────────────────────────────────────────────────┐
-│ Ethernet Frame (Layer 2)                            │
-├─────────────────────────────────────────────────────┤
-│ Source MAC: A                                       │
-│ Dest MAC: E                                         │
-│ ┌─────────────────────────────────────────────────┐ │
-│ │ IP Packet (Layer 3)                             │ │
-│ ├─────────────────────────────────────────────────┤ │
-│ │ Source IP: 192.168.1.2                          │ │
-│ │ Dest IP: 192.168.1.5                            │ │
-│ │ ┌─────────────────────────────────────────────┐ │ │
-│ │ │ TCP Segment (Layer 4)                       │ │ │
-│ │ ├─────────────────────────────────────────────┤ │ │
-│ │ │ Source Port: 51720                          │ │ │
-│ │ │ Dest Port: 3000                             │ │ │
-│ │ │ ┌─────────────────────────────────────────┐ │ │ │
-│ │ │ │ HTTP Request (Layer 7)                  │ │ │ │
-│ │ │ ├─────────────────────────────────────────┤ │ │ │
-│ │ │ │ GET /hello HTTP/1.1                     │ │ │ │
-│ │ │ │ Host: 192.168.1.5:3000                  │ │ │ │
-│ │ │ └─────────────────────────────────────────┘ │ │ │
-│ │ └─────────────────────────────────────────────┘ │ │
-│ └─────────────────────────────────────────────────┘ │
-└─────────────────────────────────────────────────────┘
-```
-
----
-
-### The HTTP Request Journey (Using Learned MACs)
-
-**Computer A → Hub 1 → Router's Switch → Switch 1 → Switch 2 → Computer E**
-
-**Key difference from ARP journey:**
-- **ARP Request:** Dest MAC was broadcast (`FF:FF:FF:FF:FF:FF`), so switches flooded everywhere
-- **HTTP Request:** Dest MAC is unicast (`E`), so switches forward efficiently
-
-**Step-by-step:**
-
-```
-Computer A sends:
-↓
-Hub 1 (floods to all ports - dumb device)
-↓
-Router's Switch Zero (Port 1)
-- Reads: Src MAC A, Dest MAC E
-- CAM table: A → Port 1 (already known, no update needed)
-- CAM table: E → Port 4 (already known from ARP reply!)
-- Forward ONLY to Port 4 ← EFFICIENT!
-↓
-Switch 1 (Port 1)
-- Reads: Src MAC A, Dest MAC E
-- CAM table: A → Port 1 (already known)
-- CAM table: E → Port 3 (learned from ARP reply!)
-- Forward ONLY to Port 3 ← EFFICIENT!
-↓
-Switch 2 (Port 1)
-- Reads: Src MAC A, Dest MAC E
-- CAM table: A → Port 1 (already known)
-- CAM table: E → Port 2 (learned from ARP reply!)
-- Forward ONLY to Port 2 ← EFFICIENT!
-↓
-Computer E receives!
-```
-
-**Notice:** No flooding! All switches learned the MAC addresses during the ARP exchange, so they forward directly!
-
----
-
-### Computer E Processes HTTP Request
-
-```
-Computer E:
-1. Physical → Data Link Layer
-   - Dest MAC: E → My MAC! Accept!
-   
-2. Data Link → Network Layer
-   - Dest IP: 192.168.1.5 → My IP! Accept!
-   
-3. Network → Transport Layer
-   - Dest Port: 3000 → My server listening! Accept!
-   - Connection established (TCP handshake happens similarly)
-   
-4. Transport → Application Layer
-   - HTTP request: GET /hello
-   - Server processes request
-   - Server generates response: "Hello World"
-```
-
----
-
-### Computer E Sends HTTP Response
-
-**Computer E's HTTP server creates response:**
-
-```
-Application Layer: "Hello World"
-Transport Layer: Port 3000 → Port 51720 (reversed)
-Network Layer: 192.168.1.5 → 192.168.1.2 (reversed)
-Data Link Layer: MAC E → MAC A (reversed)
-
-Computer E knows Computer A's MAC from ARP table!
-No ARP needed - already cached!
-```
-
-**Response travels back:**
-```
-Computer E → Switch 2 → Switch 1 → Router's Switch → Hub 1 → Computer A
-
-All switches forward efficiently using CAM tables!
-Router component never participates (local network traffic)!
-```
-
-**Computer A's browser receives:** `"Hello World"` ✓
-
----
-
-## Summary of Complete Communication
-
-### Initial State (Before Communication)
-
-```
-Computer A ARP Table: Empty
-Computer E ARP Table: Empty
-
-Router's Switch CAM Table: Empty
-Switch 1 CAM Table: Empty
-Switch 2 CAM Table: Empty
-```
-
----
-
-### After ARP Exchange
-
-```
-Computer A ARP Table:
-┌──────────────────┬──────────┐
-│ 192.168.1.5      │ E        │
-└──────────────────┴──────────┘
-
-Computer E ARP Table:
-┌──────────────────┬──────────┐
-│ 192.168.1.2      │ A        │
-└──────────────────┴──────────┘
-
-Router's Switch CAM Table:
-┌─────────┬────────┐
-│ A       │ 1      │
-│ E       │ 4      │
-└─────────┴────────┘
-
-Switch 1 CAM Table:
-┌─────────┬────────┐
-│ A       │ 1      │
-│ E       │ 3      │
-└─────────┴────────┘
-
-Switch 2 CAM Table:
-┌─────────┬────────┐
-│ A       │ 1      │
-│ E       │ 2      │
-└─────────┴────────┘
-```
-
-**Everything learned! Future communication will be efficient!**
-
----
-
-### Message Flow Summary
-
-```
-Message 1: ARP Request (Computer A → Broadcast)
-- Path: A → Hub1 → Router's Switch → Switch1 → Switch2 → E (and many others)
-- Dest MAC: FF:FF:FF:FF:FF:FF (broadcast)
-- All switches flood, all devices receive
-- Only Computer E responds
-
-Message 2: ARP Reply (Computer E → Computer A)
-- Path: E → Switch2 → Switch1 → Router's Switch → Hub1 → A
-- Dest MAC: A (unicast)
-- Switches forward efficiently (no flooding)
-- Only Computer A accepts
-
-Message 3: HTTP Request (Computer A → Computer E)
-- Path: A → Hub1 → Router's Switch → Switch1 → Switch2 → E
-- Dest MAC: E (unicast)
-- Switches forward efficiently using learned CAM tables
-- No flooding, direct delivery
-
-Message 4: HTTP Response (Computer E → Computer A)
-- Path: E → Switch2 → Switch1 → Router's Switch → Hub1 → A
-- Dest MAC: A (unicast)
-- Switches forward efficiently
-- Direct delivery
-
-Total messages: 4 (2 ARP + 2 HTTP)
-All future communication: No ARP needed (cached)
-```
-
----
-
-## Key Observations and Insights
-
-### 1. ARP is Essential, Not Optional
-
-**Without ARP:**
-```
-Computer A knows: 192.168.1.5
-Computer A doesn't know: MAC E
-Result: CANNOT create Data Link Layer frame
-Communication: IMPOSSIBLE
-```
-
-**With ARP:**
-```
-Computer A broadcasts: "Who has 192.168.1.5?"
-Computer E responds: "I'm 192.168.1.5, my MAC is E"
-Computer A saves: 192.168.1.5 → E in ARP table
-Communication: SUCCESS
-```
-
-**ARP is mandatory for any IP-based network communication.**
-
----
-
-### 2. ARP Caching Prevents Repeated Broadcasts
-
-**First communication:**
-- ARP Request sent (broadcast, all devices see it)
-- ARP Reply received (unicast, only requester sees it)
-- Both MACs cached in ARP tables
-
-**Second communication (same computers):**
-- No ARP needed!
-- Lookup in ARP table: `192.168.1.5` → `E`
-- Direct frame creation
-- Efficient!
-
-**ARP table timeout:**
-```
-Most operating systems keep ARP entries for:
-- Windows: 2 minutes (dynamic)
-- Linux: 60-120 seconds
-- macOS: 20 minutes
-
-After timeout: Entry deleted, next request triggers new ARP
-```
-
-**Why timeout?** MAC addresses can change (device replaced, IP re-assigned). Table must eventually refresh.
-
----
-
-### 3. Switches Learn From All Traffic
-
-**Switches learn passively from:**
-- ARP Requests (broadcast) - learn source MAC
-- ARP Replies (unicast) - learn source MAC
-- HTTP Requests - learn source MAC
-- HTTP Responses - learn source MAC
-- **Any Ethernet frame passing through**
-
-**Switch learning is automatic, continuous, and passive.**
-
-**Switch 2 learned:**
-```
-From ARP Request (Source MAC A):
-  A ↔ Port 1
-
-From ARP Reply (Source MAC E):
-  E ↔ Port 2
-
-From HTTP Request (Source MAC A):
-  (Already known, timestamp updated)
-
-From HTTP Response (Source MAC E):
-  (Already known, timestamp updated)
-```
-
-**Result:** Switch 2 knows both MACs after ARP exchange, making all future communication efficient.
-
----
-
-### 4. Broadcast vs Unicast Creates Different Traffic Patterns
-
-**ARP Request (Broadcast):**
-```
-Dest MAC: FF:FF:FF:FF:FF:FF
-
-Hub behavior: Floods (normal hub behavior)
-Switch behavior: Floods (broadcast forces flooding)
-
-Result: Everyone receives ARP Request
-Impact: Network-wide traffic spike for each ARP
-```
-
-**HTTP Request (Unicast):**
 ```
-Dest MAC: E (specific MAC address)
-
-Hub behavior: Floods (hub always floods)
-Switch behavior: Direct forwarding to learned port
-
-Result: Only hub-connected devices see unnecessary traffic
-Impact: Efficient, minimal network impact
-```
-
-**This is why switches are superior to hubs even for unicast traffic, and why broadcast traffic is minimized in protocol design.**
-
----
-
-### 5. Router Component Never Participates in Local Traffic
-
-**Router's dual personality:**
-```
-Component 1: Internal Switch (Layer 2)
-- Handles local network traffic
-- Uses CAM table
-- Forwards frames efficiently
-- ACTIVE for Computer A ↔ Computer E
-
-Component 2: Actual Router (Layer 3)
-- Routes between different networks
-- Uses routing table
-- Not involved in same-network traffic
-- IDLE for Computer A ↔ Computer E
-```
-
-**Computer A (192.168.1.2) to Computer E (192.168.1.5):**
-- Both on 192.168.1.0/24 network
-- Subnet mask calculation: Same network
-- Frame destination MAC: Computer E's MAC (not router's MAC)
-- Router's switch component forwards the frame
-- Router's routing component never sees it
-
-**Router only participates when destination is on a different network (covered in next chapters).**
-
----
-
-### 6. Hubs Are Inefficient But Don't Break Communication
-
-**Hub 1 behavior:**
-```
-Receives: ARP Request from Computer A
-Floods: To Computer B, Computer C, Hub 2, Router's switch
-
-Result: Everyone receives unnecessary traffic
-- Computer B: Processes frame, checks MAC, rejects
-- Computer C: Processes frame, checks MAC, rejects
-- Hub 2: Floods further (Computer G processes and rejects)
-```
-
-**Impact:**
-- Wastes bandwidth (all ports get all traffic)
-- Wastes CPU (all computers process frames unnecessarily)
-- Creates collision domains (all ports share bandwidth)
-- **But doesn't prevent communication! Just inefficient.**
-
-**Switches fix this:**
-- Learn MAC addresses
-- Forward only to specific ports for unicast
-- Only flood when necessary (broadcast, unknown MACs)
-
----
-
-### 7. Same-Network Communication Uses Direct MAC Addressing
-
-**The myth (commonly stated incorrectly):**
-> "When two computers are on the same network, the source computer directly sends data to the destination."
-
-**The reality:**
-```
-"Directly" doesn't mean magically!
-
-Actual process:
-1. Source checks: Same network? (subnet mask AND operation)
-2. Yes → Use destination's MAC address in frame
-3. Frame travels through physical devices (hubs, switches)
-4. Switches forward based on CAM table
-5. Hubs blindly forward to all ports
-6. Destination receives frame
-
-"Direct" = Layer 2 direct addressing (MAC-to-MAC)
-NOT = "Bypasses all network devices"
+8.8.8.8 is NOT in 192.168.1.0/24  →  next hop = default gateway 192.168.1.1
+ARP request: "Who has 192.168.1.1?"     (NOT 8.8.8.8: no one on the LAN owns it)
+ARP reply:   "192.168.1.1 is at 11:22:33:44:55:66"   (the router's LAN interface)
+Frame:       dst MAC = 11:22:33:44:55:66   ←  IP dst stays 8.8.8.8 !
 ```
-
-**Physical devices (hubs, switches) are ALWAYS involved. "Direct" refers to addressing strategy, not physical path.**
-
----
-
-### 8. ARP Table Structure
-
-**Typical ARP table entry:**
-
-```
-┌──────────────────┬─────────────────────┬──────────┬─────────┐
-│ IP Address       │ MAC Address         │ Type     │ Age     │
-├──────────────────┼─────────────────────┼──────────┼─────────┤
-│ 192.168.1.5      │ E (simplified)      │ Dynamic  │ 45s     │
-│ 192.168.1.1      │ R (router's MAC)    │ Static   │ -       │
-└──────────────────┴─────────────────────┴──────────┴─────────┘
-
-Type:
-- Dynamic: Learned via ARP, will timeout
-- Static: Manually configured, permanent
-
-Age: Time since last refresh
-```
-
-**Viewing ARP table:**
+The **router** then needs the MAC of *its* next hop on the other side (ARP on the WAN side or a point-to-point link), and so on. At each hop: **IP dst constant; MAC dst = the next router.**
 
 ```bash
-# Linux
-arp -a
-ip neigh show
-
-# Windows
-arp -a
-
-# macOS
-arp -a
-
-Example output:
-192.168.1.5   ether   aa:bb:cc:dd:ee:ff   C   eth0
-             │        │                   │   │
-             │        │                   │   └─ Interface
-             │        │                   └───── Status (C = Complete)
-             │        └───────────────────────── MAC address
-             └────────────────────────────────── IP address
+ip route get 8.8.8.8            # "8.8.8.8 via 192.168.1.1 dev eth0 src 192.168.1.10"  → ARP will be for 192.168.1.1
+ip neigh show 192.168.1.1       # 192.168.1.1 dev eth0 lladdr 11:22:33:44:55:66 REACHABLE
 ```
 
 ---
 
-## What Happens if Destination is on Different Network?
+## 6. The ARP cache
 
-### Scenario: Computer A Tries to Access Internet (8.8.8.8)
-
-**If Computer A wanted to access `8.8.8.8` instead of `192.168.1.5`:**
-
-```
-Step 1: Subnet mask calculation
-  Computer A: 192.168.1.2 & 255.255.255.0 = 192.168.1.0
-  Destination: 8.8.8.8 & 255.255.255.0 = 8.8.8.0
-  
-  Result: 192.168.1.0 ≠ 8.8.8.0 → DIFFERENT NETWORK!
-
-Step 2: Data Link Layer frame construction
-  Source MAC: A
-  Destination MAC: ??? (Not Computer E!)
-  
-  Decision: Different network → Use DEFAULT GATEWAY's MAC!
-  Destination MAC: R (router's MAC)
-
-Step 3: ARP for router (if not cached)
-  ARP Request: "Who has 192.168.1.1?" (router's IP)
-  Router replies: "I'm 192.168.1.1, my MAC is R"
-
-Step 4: Frame sent to router
-  Dest MAC: R
-  Dest IP: 8.8.8.8 (still the original destination IP!)
-
-Step 5: Router receives frame
-  - Dest MAC: R → My MAC! Accept!
-  - Dest IP: 8.8.8.8 → Not my IP! Must route!
-  - Router component activates (finally!)
-  - Looks up 8.8.8.8 in routing table
-  - Forwards to ISP via WAN interface
-```
-
-**Key differences:**
-- **Same network:** Dest MAC = Destination computer's MAC, router idle
-- **Different network:** Dest MAC = Router's MAC, router actively routes
-
-**This is covered in detail in future chapters (routing between networks).**
-
----
-
-## Packet Capture Example
-
-**If you ran `tcpdump` on Computer A during this communication:**
+Since ARP costs a broadcast and a delay, results are cached **for a limited time** (so that moved/changed devices are eventually re-discovered).
 
 ```bash
-# Computer A runs:
-sudo tcpdump -i eth0 -n -e
+ip neigh                         # Linux (modern);   ip -s neigh for statistics
+arp -a                           # Windows, macOS, and Linux with net-tools (`arp -n`)
+Get-NetNeighbor                  # Windows PowerShell
+```
+Typical output:
 
-# Output:
-12:34:56.123456 MAC A > ff:ff:ff:ff:ff:ff, ARP, Request who-has 192.168.1.5 tell 192.168.1.2
-12:34:56.234567 MAC E > MAC A, ARP, Reply 192.168.1.5 is-at MAC E
-12:34:56.345678 MAC A > MAC E, IP 192.168.1.2.51720 > 192.168.1.5.3000: Flags [S], seq 100, ...
-12:34:56.456789 MAC E > MAC A, IP 192.168.1.5.3000 > 192.168.1.2.51720: Flags [S.], seq 200, ack 101, ...
-12:34:56.567890 MAC A > MAC E, IP 192.168.1.2.51720 > 192.168.1.5.3000: Flags [.], ack 1, ...
-12:34:56.678901 MAC A > MAC E, IP 192.168.1.2.51720 > 192.168.1.5.3000: Flags [P.], HTTP GET /hello
-12:34:56.789012 MAC E > MAC A, IP 192.168.1.5.3000 > 192.168.1.2.51720: Flags [.], HTTP 200 OK, "Hello World"
+```
+192.168.1.1  dev eth0 lladdr 11:22:33:44:55:66 REACHABLE
+192.168.1.20 dev eth0 lladdr bb:bb:bb:bb:bb:bb STALE
+192.168.1.99 dev eth0  FAILED
 ```
 
-**Breakdown:**
-1. **ARP Request:** Computer A broadcasts asking for Computer E's MAC
-2. **ARP Reply:** Computer E responds with its MAC
-3. **TCP SYN:** Computer A initiates TCP handshake
-4. **TCP SYN-ACK:** Computer E responds
-5. **TCP ACK:** Computer A acknowledges (3-way handshake complete)
-6. **HTTP GET:** Computer A sends HTTP request
-7. **HTTP 200:** Computer E sends HTTP response with "Hello World"
+### Linux neighbor states (NUD: Neighbor Unreachability Detection)
 
----
+| State | Meaning |
+|---|---|
+| **INCOMPLETE** | Request sent, waiting for a reply |
+| **REACHABLE** | Recently confirmed working (for `base_reachable_time`, ~30 s, randomized 0.5–1.5×) |
+| **STALE** | Timer expired; the entry is still used, but will be **re-verified** when traffic is sent |
+| **DELAY** | Traffic sent on a stale entry; waiting 5 s for upper-layer confirmation (e.g. TCP ACK) before probing |
+| **PROBE** | Sending unicast ARP probes to re-check |
+| **FAILED** | No answer after retries (host down / wrong network) |
+| **PERMANENT / NOARP** | Static entries |
 
-## Troubleshooting Network Communication
+Windows caches dynamic entries for ~15–45 s (randomized, reset on use); macOS ~20 minutes; Cisco routers 4 hours. The exact numbers vary by OS and can be tuned.
 
-### Problem 1: ARP Request Sent But No Reply
-
-**Symptoms:**
-- `ping 192.168.1.5` fails
-- ARP table shows incomplete entry
-- Packet capture shows ARP requests but no replies
-
-**Diagnosis:**
+### Managing it
 
 ```bash
-# Computer A:
-arp -a
-# Shows:
-# 192.168.1.5  <incomplete>  eth0
-
-# Packet capture:
-tcpdump -i eth0 arp
-# Shows repeated ARP requests, no replies
+sudo ip neigh add 192.168.1.50 lladdr 00:11:22:33:44:55 dev eth0 nud permanent   # static entry
+sudo ip neigh del 192.168.1.50 dev eth0
+sudo ip neigh flush all                                                            # forget everything → next packets trigger ARP
+cat /proc/sys/net/ipv4/neigh/eth0/base_reachable_time_ms                           # timing knobs
 ```
-
-**Possible causes:**
-
-1. **Destination computer is offline**
-   - Solution: Verify Computer E is powered on and connected
-
-2. **Destination computer's firewall blocks ARP**
-   - Very rare (ARP operates below firewall layer)
-   - Solution: Check host-based firewall rules
-
-3. **Network device (switch/hub) failing**
-   - Switch port down
-   - Cable unplugged
-   - Solution: Check physical connections
-
-4. **Wrong subnet/VLAN**
-   - Computer E on different VLAN
-   - Broadcast domain separated
-   - Solution: Verify VLAN configuration
-
-5. **Destination IP doesn't exist**
-   - No device has 192.168.1.5
-   - Solution: Verify IP address is correct
 
 ---
 
-### Problem 2: ARP Works But HTTP Request Fails
+## 7. Lab: watch ARP live
 
-**Symptoms:**
-- ARP table shows Computer E's MAC
-- `ping 192.168.1.5` succeeds
-- `curl http://192.168.1.5:3000/hello` fails
-
-**Diagnosis:**
+Uses namespaces (nothing touches your real network). Needs `sudo`, `iproute2`, `tcpdump`, `iputils-arping`.
 
 ```bash
-# ARP table:
-arp -a | grep 192.168.1.5
-# 192.168.1.5  ether  E:E:E:E:E:E  eth0  ← ARP successful
+sudo ip link add br0 type bridge; sudo ip link set br0 up
+for i in 1 2 3; do
+  sudo ip netns add h$i; sudo ip link add v$i type veth peer name w$i
+  sudo ip link set w$i netns h$i; sudo ip link set v$i master br0; sudo ip link set v$i up
+  sudo ip netns exec h$i ip addr add 192.168.1.$((i*10))/24 dev w$i; sudo ip netns exec h$i ip link set w$i up
+done
+# h1 = .10, h2 = .20, h3 = .30 (the bystander)
 
-# Ping works:
-ping 192.168.1.5
-# 64 bytes from 192.168.1.5: icmp_seq=1 ttl=64 time=2.3 ms ← ICMP works
-
-# HTTP fails:
-curl http://192.168.1.5:3000/hello
-# Connection refused ← TCP connection fails
+sudo ip netns exec h3 tcpdump -nn -e -i w3 arp &          # bystander watches ARP
+sleep 1
+sudo ip netns exec h1 ip neigh                             # empty
+sudo ip netns exec h1 ping -c 1 192.168.1.20               # triggers ARP
+sudo ip netns exec h1 ip neigh                             # 192.168.1.20 lladdr <h2 MAC> REACHABLE
+sudo ip netns exec h2 ip neigh                             # h2 learned h1 from the REQUEST
+sudo ip netns exec h3 ip neigh                             # h3 learned nothing (it ignored the request)
+sleep 1; sudo pkill tcpdump
 ```
+In the capture you should see: `Request who-has 192.168.1.20 tell 192.168.1.10` (dst `ff:ff:ff:ff:ff:ff`) — **h3 sees it** — and the `Reply 192.168.1.20 is-at bb:...` (unicast) **which h3 does not see** (the switch sent it to h1 only).
 
-**Possible causes:**
-
-1. **Server not running on port 3000**
-   ```bash
-   # On Computer E:
-   netstat -tuln | grep 3000
-   # (no output) ← Server not listening!
-   ```
-   - Solution: Start the HTTP server
-
-2. **Firewall blocking port 3000**
-   ```bash
-   # On Computer E:
-   sudo iptables -L -n | grep 3000
-   # DROP tcp -- 0.0.0.0/0 0.0.0.0/0 tcp dpt:3000
-   ```
-   - Solution: Allow port 3000 in firewall
-
-3. **Server listening on localhost only**
-   ```go
-   // Wrong:
-   http.ListenAndServe("localhost:3000", nil)  // Only 127.0.0.1
-
-   // Correct:
-   http.ListenAndServe(":3000", nil)  // All interfaces (0.0.0.0)
-   ```
-   - Solution: Bind to `0.0.0.0` (all interfaces)
-
-4. **Application-layer issue**
-   - Server crashed
-   - Server responded with error
-   - Solution: Check server logs
-
----
-
-### Problem 3: Communication Works First Time, Then Fails
-
-**Symptoms:**
-- Initial request succeeds: `"Hello World"` received
-- Subsequent requests fail
-- Wait a few minutes, works again briefly
-
-**Diagnosis:**
+More experiments:
 
 ```bash
-# Watch ARP table:
-watch -n 1 'arp -a'
-
-# Observe:
-# Time 0s:    192.168.1.5  ether  E:E:E:E:E:E  ← Present
-# Time 60s:   192.168.1.5  ether  E:E:E:E:E:E  ← Still present
-# Time 120s:  192.168.1.5  (incomplete)        ← DISAPPEARED!
+# watch the states change over time
+sudo ip netns exec h1 bash -c 'for i in 1 2 3 4 5 6 7; do ip neigh show 192.168.1.20; sleep 10; done'
+# force re-resolution
+sudo ip netns exec h1 ip neigh flush all; sudo ip netns exec h1 ping -c 1 192.168.1.20
+# ask about a non-existent host → INCOMPLETE then FAILED
+sudo ip netns exec h1 ping -c 1 -W 1 192.168.1.99; sudo ip netns exec h1 ip neigh show 192.168.1.99
+# arping = ARP-level ping (works even if ICMP is blocked)
+sudo ip netns exec h1 arping -c 2 -I w1 192.168.1.20
+# detect duplicate address: -D (DAD mode); exit code shows if someone else owns it
+sudo ip netns exec h1 arping -D -c 2 -I w1 192.168.1.20 ; echo "exit=$?"
 ```
+Cleanup: `for i in 1 2 3; do sudo ip netns del h$i; done; sudo ip link del br0`.
 
-**Cause:** ARP entry expired, Computer E not responding to refreshes
-
-**Possible reasons:**
-
-1. **Computer E goes to sleep**
-   - NIC sleeps, doesn't respond to ARP
-   - Solution: Disable NIC power saving
-
-2. **Network congestion**
-   - ARP replies dropped due to packet loss
-   - Solution: Investigate network performance
-
-3. **MAC address conflict**
-   - Two devices claim same IP (rare but catastrophic)
-   - Solution: Use static IPs or better DHCP management
+On your real machine: `sudo tcpdump -nn -e -i <iface> arp` while you `ip neigh flush all` and browse something: you'll see your host resolve the gateway.
 
 ---
 
-### Problem 4: Slow First Connection, Fast Subsequent Connections
+## 8. Special forms of ARP
 
-**Symptoms:**
-- First HTTP request takes 2-3 seconds
-- Subsequent requests instant (<10ms)
+### Gratuitous ARP (GARP)
+A host announces **its own** mapping without being asked: sender IP = target IP = its own IP (request or reply form). Uses:
+- **Announce a new/changed address** so caches update (after DHCP, an interface change).
+- **Failover:** when a virtual IP (VRRP/HSRP/keepalived) moves to a backup machine, the new owner sends a gratuitous ARP so neighbors and switches update immediately.
+- **VM/container live migration:** tells the network "this MAC is now behind a new port".
+- Duplicate address detection (old style).
 
-**Diagnosis:**
+### ARP probe and announcement (RFC 5227)
+Before using a new address, a host sends **probes** with sender IP `0.0.0.0` asking "who has X?"; no reply means the address is free (a later **announcement** follows). Using `0.0.0.0` avoids polluting others' caches with an address that may be a duplicate. This is the mechanism behind DHCP conflict checking (Chapter 37) and link-local address selection (Chapter 32).
+
+### Proxy ARP
+A router answers ARP requests **on behalf of** hosts behind it, so hosts with a wrong (too wide) mask can still reach them:
+
+```
+A (mask /16 by mistake, thinks 192.168.2.5 is local) → ARP "who has 192.168.2.5"
+Router (proxy ARP enabled) → "192.168.2.5 is at <my MAC>"   → A sends to the router → router forwards
+```
+Handy in odd setups (old subnets, some VPNs, some Docker/cloud tricks) but it hides addressing mistakes and can grow ARP caches large; usually disabled: `sysctl net.ipv4.conf.<if>.proxy_arp`.
+
+### Reverse ARP / InARP
+RARP (MAC→IP) is obsolete (replaced by BOOTP/DHCP). Inverse ARP appears in Frame Relay/ATM.
+
+---
+
+## 9. Security: ARP spoofing (poisoning)
+
+ARP has **no authentication**: any host can send a reply claiming any IP, and most hosts accept unsolicited replies for IPs they've already cached (or in some OSes even new ones).
+
+```
+Attacker M (mm:mm:..) tells A: "192.168.1.1 (the gateway) is at mm:mm:.."
+Attacker tells the gateway: "192.168.1.10 (A) is at mm:mm:.."
+→ A and the router now send their traffic to M, who forwards it on → man-in-the-middle
+```
+Impact: eavesdropping, tampering, session hijack of unencrypted traffic, denial of service. (Encrypted protocols such as HTTPS/SSH limit the damage, but metadata and DNS may still leak.)
+
+**Signs:** the gateway's MAC in your ARP cache suddenly changes; two IPs share one MAC (`ip neigh | sort -k5`); Wireshark's "duplicate IP address configured" warnings; `arpwatch` alerts.
+
+**Defenses:**
+- **Dynamic ARP Inspection (DAI)** on managed switches, validating ARP packets against the **DHCP snooping** binding table (IP↔MAC↔port).
+- **Port security** and 802.1X; **static ARP entries** for critical hosts (e.g. gateway) on servers.
+- **Encrypted protocols end to end** (TLS, SSH, VPN); DNSSEC/DoH.
+- **Segmentation (VLANs)** and small broadcast domains; monitoring with `arpwatch`, IDS.
+- Wi-Fi client isolation.
+
+Only test spoofing tools on **networks and machines you own or are explicitly authorized to test**.
+
+---
+
+## 10. IPv6 does this differently: NDP
+
+IPv6 has **no ARP**. **Neighbor Discovery Protocol (NDP, ICMPv6)** does the same job with **Neighbor Solicitation/Advertisement** messages sent to a **solicited-node multicast** address (`ff02::1:ffXX:XXXX`, last 24 bits of the target address) instead of a broadcast, so only the few hosts that might own the address are bothered (and other nodes' CPUs aren't interrupted). NDP also does router discovery, duplicate address detection and redirects.
 
 ```bash
-# Time the requests:
-time curl http://192.168.1.5:3000/hello
-# real    0m2.345s  ← First request (ARP + TCP + HTTP)
-# user    0m0.001s
-# sys     0m0.003s
-
-time curl http://192.168.1.5:3000/hello
-# real    0m0.008s  ← Second request (only TCP + HTTP, ARP cached)
-# user    0m0.001s
-# sys     0m0.002s
-```
-
-**Explanation:** First request includes ARP overhead
-
-```
-First request:
-1. ARP Request broadcast (10ms network propagation)
-2. ARP Reply unicast (10ms network propagation)
-3. TCP handshake (3 round-trips, 30ms)
-4. HTTP request/response (2 round-trips, 20ms)
-Total: ~70ms base + 2000ms+ for large complex network
-
-Second request:
-1. ARP cached (0ms)
-2. TCP handshake (30ms)
-3. HTTP request/response (20ms)
-Total: ~50ms
-```
-
-**This is normal behavior!** ARP caching prevents this overhead on subsequent requests.
-
----
-
-## Advanced Topics
-
-### ARP Spoofing / ARP Poisoning Attack
-
-**Attack scenario:**
-
-```
-Normal ARP:
-Computer A: "Who has 192.168.1.5?"
-Computer E: "I'm 192.168.1.5, my MAC is E"
-
-Malicious ARP (from Attacker):
-Attacker: "I'm 192.168.1.5, my MAC is ATTACKER_MAC"
-
-Computer A's ARP table (poisoned):
-┌──────────────────┬────────────────┐
-│ 192.168.1.5      │ ATTACKER_MAC   │  ← WRONG!
-└──────────────────┴────────────────┘
-
-Result: Computer A sends all traffic to attacker!
-Attacker intercepts, reads, modifies, then forwards to real Computer E.
-Man-in-the-Middle attack complete!
-```
-
-**Defense:**
-- Static ARP entries (manual, not scalable)
-- ARP inspection on switches (enterprise feature)
-- Network monitoring for ARP anomalies
-- Encrypted protocols (HTTPS, SSH prevent content reading even if intercepted)
-
----
-
-### Gratuitous ARP
-
-**Gratuitous ARP:** A device sends an ARP request for its **own** IP address.
-
-```
-Computer E boots up or changes IP:
-Sends ARP Request:
-  Source IP: 192.168.1.5 (its own IP)
-  Dest IP: 192.168.1.5 (its own IP again!)
-  Dest MAC: FF:FF:FF:FF:FF:FF (broadcast)
-
-Purpose:
-1. Detect IP conflicts (if another device responds, duplicate IP!)
-2. Update other devices' ARP tables (announce new MAC for this IP)
-3. Update switch CAM tables (in case MAC changed)
-```
-
-**Use cases:**
-- DHCP IP assignment (verify IP not already in use)
-- Virtual IP failover (HA cluster taking over an IP)
-- Network interface restarted/replaced
-
----
-
-### Reverse ARP (RARP) - Obsolete
-
-**RARP:** Opposite of ARP—resolve MAC address to IP address.
-
-```
-RARP (obsolete):
-Input: MAC address
-Output: IP address
-
-Used by: Diskless workstations that know NIC MAC but not their IP
-Replaced by: BOOTP, then DHCP
-```
-
-**Why obsolete:** DHCP provides much more than just IP (also subnet mask, gateway, DNS). RARP only provided IP address.
-
----
-
-### ARP Packet Structure (Detailed)
-
-```
-ARP Packet (28 bytes):
-┌──────────────────────────────────────────┐
-│ Hardware Type: 1 (Ethernet)              │  2 bytes
-├──────────────────────────────────────────┤
-│ Protocol Type: 0x0800 (IPv4)             │  2 bytes
-├──────────────────────────────────────────┤
-│ Hardware Address Length: 6 (MAC is 6B)   │  1 byte
-├──────────────────────────────────────────┤
-│ Protocol Address Length: 4 (IPv4 is 4B)  │  1 byte
-├──────────────────────────────────────────┤
-│ Operation: 1 (Request) or 2 (Reply)      │  2 bytes
-├──────────────────────────────────────────┤
-│ Sender Hardware Address (Sender MAC)     │  6 bytes
-├──────────────────────────────────────────┤
-│ Sender Protocol Address (Sender IP)      │  4 bytes
-├──────────────────────────────────────────┤
-│ Target Hardware Address (Target MAC)     │  6 bytes
-│   (All zeros in request, filled in reply)│
-├──────────────────────────────────────────┤
-│ Target Protocol Address (Target IP)      │  4 bytes
-└──────────────────────────────────────────┘
-
-Total: 28 bytes
+ip -6 neigh          # IPv6 neighbor table (same states as IPv4)
 ```
 
 ---
 
-## Key Takeaways
+## 11. Docker, VMs and cloud
 
-### 1. No Magic - Only Devices and Protocols
-
-**The instructor's frustration with common explanations:**
-
-> "Blogs and tutorials say: 'When two computers are on the same network, the source directly sends to the destination.' No router needed. MAC addresses automatically resolved.'"
-
-**The reality:**
-```
-"Directly" requires:
-- ARP protocol to resolve MAC addresses
-- Hubs flooding to all ports
-- Switches learning and forwarding via CAM tables
-- Every single network device participating
-
-Nothing is automatic. Nothing is magic.
-Devices follow protocols. Protocols have logic.
-Understanding the logic = Understanding networking.
-```
+- **Docker bridge:** containers ARP each other across `docker0`; the bridge's MAC table (`bridge fdb`) and `ip neigh` inside a container (`docker exec c ip neigh`) show it. Docker gives each container a MAC derived from its IP (`02:42:ac:11:00:02` for `172.17.0.2`).
+- **Traffic leaving the host** reaches the bridge IP (the gateway `172.17.0.1`): a container ARPs for the gateway, not the Internet host.
+- **macvlan** networks: each container has its own MAC on your **physical** LAN, so your real switch and router ARP for them directly; the host itself often can't reach them without an extra macvlan interface.
+- **VMs and live migration** use gratuitous ARP/RARP to update switches.
+- **Cloud (AWS/GCP/Azure VPC):** the virtual network handles ARP itself (it's not a real Layer-2 broadcast domain); you can't ARP-spoof or sniff other tenants, and gratuitous ARP for a floating IP is often ignored: you re-assign the IP with an API call.
+- **Kubernetes:** CNI plugins and kube-proxy rely on ARP/NDP inside nodes; large clusters sometimes tune ARP cache size (`gc_thresh1/2/3`) because a full neighbor table drops entries and breaks connectivity ("neighbour table overflow" in `dmesg`).
 
 ---
 
-### 2. ARP is Mandatory for Local Communication
+## 12. Troubleshooting
 
-```
-Without ARP:
-- You know destination IP
-- You don't know destination MAC
-- Cannot create Data Link Layer frame
-- Communication impossible
+| Symptom | Diagnosis |
+|---|---|
+| `ip neigh` shows **INCOMPLETE/FAILED** for a local host | Host down, different VLAN/subnet, firewall on the host **doesn't** block ARP (it's L2), so the host is probably off/unplugged/isolated; check switch port, VLAN, wrong mask |
+| Can ping by IP but MAC of gateway keeps changing | ARP spoofing, or two devices with the same IP (DHCP/static conflict) |
+| Intermittent connectivity; "duplicate IP" popup | IP conflict: `arping -D -I eth0 <ip>`; find the MAC; fix static/DHCP overlap |
+| First packet slow, later fast | Normal: ARP resolution delay on the first packet |
+| Host reachable only after the other side pings first | Asymmetric caches, wrong mask on one side (Chapter 33), or ARP filtering (`arp_ignore`/`arp_filter`) on multi-homed hosts |
+| `neighbour table overflow` in logs | Too many neighbors (big L2 networks, Kubernetes nodes); raise `net.ipv4.neigh.default.gc_thresh*` or shrink the L2 domain |
+| VIP failover takes long | No/ignored gratuitous ARP; switch MAC-table aging; enable GARP on failover |
+| Switch flooding traffic | MAC table entry aged out or overflow (Chapter 38) |
 
-With ARP:
-- Broadcast "Who has this IP?"
-- Destination replies with its MAC
-- Save to ARP table
-- Communication succeeds
-```
-
-**ARP is the glue between Layer 3 (IP) and Layer 2 (MAC addresses).**
+Tools: `ip neigh`, `arp -an`, `arping`, `tcpdump -nn -e arp`, Wireshark (`arp`, `arp.duplicate-address-detected`), `arpwatch`, switch `show mac address-table`, `show ip arp`.
 
 ---
 
-### 3. Switches Make Networks Efficient, Hubs Do Not
+## 13. Common misconceptions
 
-```
-Hub behavior:
-- Flood everything to all ports
-- Every device processes every frame
-- Wastes bandwidth and CPU
-
-Switch behavior:
-- Learn MAC addresses
-- Forward only to specific ports for unicast
-- Flood only when necessary (broadcast, unknown MACs)
-- Efficient bandwidth utilization
-```
-
-**Switches are essential for modern networks. Hubs are obsolete.**
+| Misconception | Reality |
+|---|---|
+| "ARP finds the MAC of any IP on the Internet" | Only on the **local link**; for remote hosts you ARP for the **gateway** |
+| "ARP runs over IP" | It's a separate Layer-2 protocol (EtherType `0x0806`) |
+| "Every ARP packet is a broadcast" | Requests are; replies are unicast |
+| "Routers forward ARP broadcasts" | No: an ARP request never leaves its broadcast domain |
+| "Once resolved, always resolved" | Entries expire and are re-verified |
+| "ARP is only for Ethernet" | The format supports other hardware types, but Ethernet/Wi-Fi are the common cases |
+| "IPv6 uses ARP" | NDP (ICMPv6) does it, using multicast |
+| "ARP is secure" | No authentication: spoofing is trivial without switch defenses |
+| "Switches use ARP to build their MAC tables" | They learn from source MACs of *any* frame; they don't speak ARP (except for management) |
+| "A firewall on the host blocks ARP like ping" | Ordinary host firewalls don't filter ARP; use `arptables`/`nft` bridge/ARP families |
 
 ---
 
-### 4. Local Traffic Never Reaches Router Component
+## 14. Summary
 
-```
-Computer A (192.168.1.2) ↔ Computer E (192.168.1.5):
-- Both on 192.168.1.0/24
-- Subnet mask check: Same network
-- Dest MAC: Computer E's MAC (not router's MAC!)
-- Router's switch handles forwarding
-- Router's routing component stays idle
-
-Computer A (192.168.1.2) → Internet (8.8.8.8):
-- Different networks (192.168.1.0/24 vs 8.8.8.0/24)
-- Subnet mask check: Different network
-- Dest MAC: Router's MAC (default gateway)
-- Router's routing component activates
-- Routes packet to internet via WAN interface
-```
-
-**Same network = Switch handles. Different network = Router handles.**
+- **ARP** maps a **local IP → MAC**: a **broadcast request** ("who has X?") and a **unicast reply** ("X is at MAC"), 28-byte packets carried in Ethernet type **0x0806**.
+- The requester **queues** its packet, asks, **caches** the answer; the responder **learns** the requester; switches **learn** source MACs; bystanders ignore.
+- For destinations **outside the subnet**, the host ARPs for the **default gateway**; IP destination stays, MAC destination becomes the next hop.
+- Caches have **states and timeouts** (`ip neigh`); special forms: **gratuitous ARP**, **probes**, **proxy ARP**.
+- No authentication → **ARP spoofing**; defend with **DAI + DHCP snooping**, port security, encryption.
+- IPv6 uses **NDP** with multicast. Docker bridges, macvlan, VMs and Kubernetes all rely on ARP/NDP inside their L2 domains.
 
 ---
 
-### 5. CAM Tables and ARP Tables Work Together
+## 15. Check your understanding
 
-```
-CAM Table (Switch):
-- Maps: MAC address → Port number
-- Purpose: Efficient frame forwarding
-- Learned from: All Ethernet frames
-- Lives on: Switches
+1. Why does a host need ARP if it already has the destination IP?
+2. Why is a request broadcast, but a reply unicast?
+3. What does host A ARP for when talking to `8.8.8.8`?
+4. Does the router forward A's ARP request to other networks? Why not?
+5. What does the target learn from the request? What does each switch learn?
+6. Describe INCOMPLETE, REACHABLE, STALE and FAILED.
+7. What is a gratuitous ARP and when is it useful?
+8. How does ARP spoofing work, and which two switch features defend against it?
+9. What replaces ARP in IPv6?
 
-ARP Table (Computer):
-- Maps: IP address → MAC address
-- Purpose: Resolve IPs to MACs for frame creation
-- Learned from: ARP Requests and Replies
-- Lives on: End devices (computers)
+<details>
+<summary>Answers</summary>
 
-Together:
-- Computer looks up IP → MAC in ARP table
-- Creates frame with destination MAC
-- Switch looks up MAC → Port in CAM table
-- Forwards frame to correct port
+1. The Ethernet frame needs a destination **MAC**; the switch and NIC only understand MACs.
+2. The requester doesn't know who owns the IP, so everyone must hear it; the owner already learned the requester's MAC from the request and can answer directly.
+3. The **default gateway** (`192.168.1.1`), because `8.8.8.8` is not on the local network.
+4. No. Routers don't forward broadcasts: each interface is its own broadcast domain. That is why ARP is local only.
+5. The target learns the sender's IP→MAC (from the request). Each switch learns the sender's MAC→port (source address) and floods the broadcast.
+6. INCOMPLETE: request sent, awaiting reply. REACHABLE: recently confirmed. STALE: timer expired, still used but re-verified on next use. FAILED: no answer after retries.
+7. A host announces its own IP↔MAC without being asked; useful after address changes, VIP failover (VRRP/keepalived) and VM migration.
+8. The attacker sends forged replies mapping the gateway's IP to its own MAC (and vice versa), becoming a man-in-the-middle. Dynamic ARP Inspection (with DHCP snooping) and port security defend.
+9. NDP (Neighbor Solicitation/Advertisement in ICMPv6 using solicited-node multicast).
+</details>
 
-Result: Efficient end-to-end delivery!
-```
+**Practice**
 
----
-
-### 6. Understanding This Chapter = Understanding Networking
-
-**If you understand:**
-- Why ARP is needed
-- How ARP requests broadcast
-- How ARP replies are unicast
-- How switches learn from ARP traffic
-- How CAM tables enable efficient forwarding
-- How computers cache learned MACs
-- Why routers don't participate locally
-
-**Then you understand networking fundamentals!**
+1. Run the lab and produce a table of all ARP packets (src/dst MAC, op, sender/target IP) plus each host's cache afterwards.
+2. Capture ARP on your real interface while flushing the neighbor table; identify your gateway's MAC and confirm it equals the router's label MAC.
+3. Give two hosts the same IP in namespaces and use `arping -D` and `ip neigh` to see the conflict.
+4. Set a wrong `/16` mask on one namespace and enable `proxy_arp` on the router namespace to see proxy ARP work (Chapter 33 lab).
+5. On a Docker host, run two containers, show each one's `ip neigh`, and confirm the MACs against `docker inspect`.
 
 ---
 
-## Exercises
-
-### Exercise 1: Trace Another Path
-
-**Scenario:** Computer B (192.168.1.4) wants to access the server on Computer E (192.168.1.5).
-
-**Challenge:** Trace the complete path including:
-- ARP Request from B
-- ARP Reply from E
-- HTTP Request from B
-- HTTP Response from E
-
-**Which devices participate? Which CAM tables update? Which devices reject frames?**
-
----
-
-### Exercise 2: ARP Table Prediction
-
-**Given:** Computer A has communicated with Computer E.
-
-**Question:** What's in Computer A's ARP table? What's in Computer E's ARP table? What about Router's ARP table?
-
-```
-Computer A ARP Table:
-┌──────────────────┬──────────┐
-│ IP               │ MAC      │
-├──────────────────┼──────────┤
-│ ?                │ ?        │
-└──────────────────┴──────────┘
-
-Computer E ARP Table:
-┌──────────────────┬──────────┐
-│ IP               │ MAC      │
-├──────────────────┼──────────┤
-│ ?                │ ?        │
-└──────────────────┴──────────┘
-```
-
----
-
-### Exercise 3: CAM Table States
-
-**After the complete communication (ARP + HTTP), what's in each switch's CAM table?**
-
-```
-Router's Switch CAM Table:
-┌─────────┬────────┐
-│ MAC     │ Port   │
-├─────────┼────────┤
-│ ?       │ ?      │
-└─────────┴────────┘
-
-Switch 1 CAM Table:
-┌─────────┬────────┐
-│ MAC     │ Port   │
-├─────────┼────────┤
-│ ?       │ ?      │
-└─────────┴────────┘
-
-Switch 2 CAM Table:
-┌─────────┬────────┐
-│ MAC     │ Port   │
-├─────────┼────────┤
-│ ?       │ ?      │
-└─────────┴────────┘
-```
-
----
-
-### Exercise 4: Different Network Behavior
-
-**Scenario:** Computer A tries to access `8.8.8.8` (Google DNS) instead of Computer E.
-
-**Questions:**
-1. What's the result of the subnet mask calculation?
-2. What MAC address goes in the destination field?
-3. Does ARP still occur? For which IP?
-4. Which component of the router participates?
-5. How does the router know how to reach `8.8.8.8`?
-
----
-
-## Conclusion
-
-You've traced a complete communication path through a complex network. You've seen how:
-
-- **ARP resolves IP addresses to MAC addresses** when creating Ethernet frames
-- **Broadcast ARP requests** flood through hubs and switches to find the target device
-- **Unicast ARP replies** travel efficiently back to the requester using learned CAM tables
-- **Switches learn MAC addresses** from all traffic (ARP, HTTP, everything)
-- **CAM tables enable efficient forwarding** once MAC addresses are learned
-- **ARP tables cache learned mappings** to prevent repeated ARP broadcasts
-- **Hubs flood blindly** but switches forward intelligently
-- **Routers stay idle** for local network traffic
-- **Multiple device types cooperate** to deliver packets through complex topologies
-
-**There's no magic.** Every step follows protocol rules. Every device has a specific role. Every MAC address is learned through observation. Every forwarding decision uses a table lookup.
-
-**Understanding this is understanding networking.**
-
-Next chapter: What happens when the destination is on a **different** network? How does the router participate? How does NAT work? How does data reach the internet?
-
-**The networking journey continues.**
-
----
-
-## Further Reading
-
-- **RFC 826:** ARP Protocol Specification (1982, still relevant!)
-- **Wireshark ARP Filter:** `arp` - Capture and analyze ARP traffic
-- **Linux ARP Tools:** `arp`, `ip neigh`, `arping`
-- **"Computer Networks" by Tanenbaum:** ARP chapter with detailed explanations
-- **"TCP/IP Illustrated, Volume 1":** ARP section (Chapter 4)
-- **Packet Tracer / GNS3:** Simulate complex networks and watch ARP in action
-- **`tcpdump` ARP examples:** `tcpdump -i eth0 -e -n arp`
-- **ARP Security:** Understanding ARP spoofing and defenses
-- **Switch CAM table commands:** `show mac address-table` (Cisco), `show fdb` (Linux bridge)
+**Next:** [Chapter 40 – Multiple NICs in a Single Computer](40_multiple_nics_in_single_computer_in_details.md)
