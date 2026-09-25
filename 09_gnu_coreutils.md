@@ -1,1291 +1,383 @@
-# Chapter 9: GNU Coreutils - The Essential Command-Line Tools
+# Chapter 9: GNU Coreutils, Shells and Terminals
 
-## Overview
+> **In one sentence:** When you type `ls` in a terminal, a **terminal** shows your keystrokes, a **shell** interprets them and starts a **program** from **coreutils**, and that program asks the **kernel** to do the work.
 
-You've learned that Linux is just a kernel. You've learned that a distribution adds utilities, package managers, and desktop environments. But what exactly are these **utilities** everyone keeps mentioning?
+**Level:** 🟢 Beginner → 🟡 Intermediate · **Reading time:** ~35 minutes
 
-Enter **GNU Coreutils**—the collection of fundamental command-line tools that make a Linux system usable. These are the commands you type every day: `ls`, `cd`, `cat`, `grep`, `cp`, `rm`, `mv`, and hundreds more.
-
-In this chapter, we'll explore the GNU Project's contribution to the Linux ecosystem, understand what coreutils are, learn how shells interpret commands, distinguish terminals from shells, and see how desktop environments tie it all together.
-
-## Prerequisites
-
-Before diving into this chapter, you should understand:
-- **Linux basics** (Chapter 15): What Linux is and what makes a distribution
-- **Operating system concepts**: User space vs kernel space
-- **Basic command-line experience**: Familiarity with typing commands
-
-## What You'll Learn
-
-By the end of this chapter, you will:
-
-1. Understand the GNU Project and Richard Stallman's vision
-2. Learn what GNU Coreutils are and why they matter
-3. Discover the difference between terminal, shell, and command
-4. Explore different shell types (sh, bash, zsh)
-5. Understand desktop environments (GNOME, KDE, Aqua)
-6. Learn the command execution flow: Terminal → Shell → Coreutils → Kernel
-7. Understand user space vs kernel space
-8. See how all these components work together
+**Prerequisites:** [Chapter 2 – Kernel](02_kernel.md), [Chapter 8 – Linux](08_linux.md).
 
 ---
 
-## The GNU Project: A Brief History
+## What you will learn
 
-### The Problem in the 1980s
-
-**Early 1980s**: Unix was powerful but **proprietary and expensive**
-
-**Unix characteristics**:
-- Developed at AT&T Bell Labs (1969)
-- Powerful multi-user, multitasking OS
-- Used in universities and corporations
-- **Problem**: Required expensive licenses
-- **Problem**: Source code was closed (proprietary)
-
-**Impact**: Most people couldn't afford or access Unix systems.
-
-### Richard Stallman's Vision
-
-**1983**: Richard Stallman announces the **GNU Project**
-
-**GNU** = "GNU's Not Unix" (recursive acronym)
-
-**Mission**: Create a **free**, **open-source**, Unix-like operating system
-
-**Key principles**:
-1. **Free software** (freedom, not just price)
-2. **Open source** (anyone can view and modify code)
-3. **Community-driven** development
-4. **Compatible with Unix** (same commands and interfaces)
-
-### The GNU Manifesto
-
-Richard Stallman wrote the GNU Manifesto explaining:
-
-> "I consider that the Golden Rule requires that if I like a program I must share it with other people who like it. Software sellers want to divide the users and conquer them, making each user agree not to share with others. I refuse to break solidarity with other users in this way."
-
-**Four Essential Freedoms**:
-0. Freedom to **run** the program
-1. Freedom to **study** how it works (access to source code)
-2. Freedom to **redistribute** copies
-3. Freedom to **distribute modified** versions
-
-### The Free Software Foundation
-
-**1985**: Stallman founded the **Free Software Foundation (FSF)**
-
-**Goals**:
-- Promote free software development
-- Maintain GNU Project
-- Defend software freedom legally
-- Educate about free software principles
+- Where the GNU project and the classic Unix tools come from
+- What **coreutils** are (and which everyday tools are *not* part of them)
+- The difference between a **terminal**, a **shell**, and a **command**
+- Shell types: `sh`, `bash`, `zsh`, `dash`, BusyBox `ash`, and why it matters in Docker
+- How a shell finds and runs a command (`PATH`, builtins, aliases)
+- The three building blocks of the command line: **pipes**, **redirection** and **exit codes**
+- Desktop environments (briefly) and how they relate
+- How all this appears inside containers (`docker exec`, `RUN`, `CMD`)
 
 ---
 
-## GNU Components: Building a Free Unix
+## 1. A little history
 
-The GNU Project created free replacements for all Unix components:
+In the early 1980s, Unix was powerful but proprietary. In 1983 **Richard Stallman** launched the **GNU Project** ("GNU's Not Unix", a recursive acronym) to build a completely *free* Unix-like system: free meaning users may run, study, share and modify the software. The GNU project produced many core pieces:
 
-### 1. GNU Compiler Collection (GCC)
+| GNU component | Job |
+|---|---|
+| **GCC** | Compiler collection (C, C++, ...) |
+| **glibc** | The standard C library |
+| **Bash** | The most common shell (first released 1989) |
+| **Coreutils** | The basic file, text and shell utilities |
+| **GNU Make, GDB, grep, sed, tar ...** | Build tool, debugger, text search, stream editor, archiver |
 
-**What it is**: Compilers for C, C++, and other languages
+GNU was missing one big piece: a working kernel. In 1991 Linus Torvalds' **Linux** kernel filled that gap. Together they made a full free operating system, which is why the tools on a typical Linux system come from GNU.
 
-**Why important**: Compiles source code into executable programs
+---
 
-**Example**:
-```c
-// hello.c
-#include <stdio.h>
-int main() {
-    printf("Hello, GNU!\n");
-    return 0;
-}
-```
+## 2. What are coreutils?
+
+**GNU Coreutils** is a single package of about a hundred small programs for the most basic tasks: working with files, text and the system. Each one does one job, and you combine them.
+
+| Category | Commands (all in coreutils) |
+|---|---|
+| **Files and directories** | `ls`, `cp`, `mv`, `rm`, `mkdir`, `rmdir`, `touch`, `ln`, `cat`, `head`, `tail`, `stat`, `du`, `df`, `chmod`, `chown`, `chgrp`, `pwd` |
+| **Text** | `sort`, `uniq`, `wc`, `cut`, `tr`, `tac`, `paste`, `fold`, `nl` |
+| **Output & scripting** | `echo`, `printf`, `yes`, `true`, `false`, `sleep`, `test`, `env`, `expr` |
+| **System info** | `uname`, `hostname` (in some versions), `whoami`, `id`, `date`, `nproc`, `uptime` (from procps on many systems) |
+
+### Common tools that are *not* coreutils
+People often assume these are, but they come from other packages:
+
+| Tool | Actual package |
+|---|---|
+| `grep`, `sed`, `awk`, `find`, `tar`, `less` | Their own GNU (or similar) packages |
+| `ps`, `top`, `kill` (the program), `free`, `uptime` | **procps** |
+| `bash`, `zsh` | The shells themselves |
+| `apt`, `dnf`, `apk` | Package managers |
+| `cd`, `export`, `alias` | **Shell builtins** (see section 4) |
+
+**Where are they?** Normally `/usr/bin` (and `/bin`, which on modern systems is a link to `/usr/bin`):
 
 ```bash
-# Compile with GCC:
-$ gcc hello.c -o hello
-
-# Run:
-$ ./hello
-Hello, GNU!
+which ls          # /usr/bin/ls
+file /usr/bin/ls  # ELF 64-bit executable
+ls --version      # first line says "ls (GNU coreutils) 9.x"
 ```
 
-**Impact**: Free alternative to expensive proprietary compilers
+The commands are ordinary compiled programs, not magic.
 
-### 2. GNU C Library (glibc)
+---
 
-**What it is**: Standard C library providing essential functions
+## 3. Terminal vs shell vs command
 
-**Functions provided**:
-```c
-// Input/Output:
-printf()   // Print to screen
-scanf()    // Read from keyboard
-fopen()    // Open file
-fclose()   // Close file
-fread()    // Read from file
-fwrite()   // Write to file
+People use "terminal", "console", "shell" and "command line" as if they were the same. They are three separate things:
 
-// Memory Management:
-malloc()   // Allocate memory
-free()     // Free memory
-calloc()   // Allocate and zero memory
-realloc()  // Resize memory
+| Layer | What it is | Examples |
+|---|---|---|
+| **Terminal (emulator)** | A window application that shows text and sends your keystrokes. It does **not** understand commands | GNOME Terminal, Konsole, Windows Terminal, iTerm2, macOS Terminal, VS Code's terminal |
+| **Shell** | A program that reads what you type, interprets it, and starts other programs | `bash`, `zsh`, `sh`, `fish`, `ash` |
+| **Command / program** | The thing the shell runs | `ls`, `cat`, `docker`, `python` |
 
-// String Operations:
-strlen()   // String length
-strcmp()   // String comparison
-strcpy()   // String copy
-strcat()   // String concatenation
+Analogy: the terminal is the picture frame, the shell is the assistant who understands your requests, and the commands are the workers who do the jobs.
 
-// And hundreds more...
+```
+Terminal window  ← draws the text, captures keys
+   └── Shell (bash)  ← interprets the line, starts programs
+          └── Program (ls)  ← does the work through system calls
+                 └── Kernel
 ```
 
-**Why important**: Almost every C program uses these functions
+When you open a terminal, it starts a shell for you. You can start a different shell inside it and leave again:
 
-**Size**: ~30 MB of essential code
-
-### 3. GNU Bash (Bourne Again Shell)
-
-**What it is**: Command-line interpreter (shell)
-
-**Purpose**: Interprets commands you type and communicates with kernel
-
-**Features**:
-- Command history
-- Tab completion
-- Job control (background/foreground processes)
-- Scripting capabilities
-- Variables and functions
-
-We'll explore shells in detail shortly.
-
-### 4. GNU Coreutils
-
-**What it is**: Essential command-line utilities
-
-**Examples**:
 ```bash
-ls      # List files
-cd      # Change directory
-cat     # Display file contents
-grep    # Search text
-cp      # Copy files
-rm      # Remove files
-mv      # Move/rename files
-mkdir   # Create directories
-pwd     # Print working directory
-touch   # Create empty file
-echo    # Print text
+echo $0       # bash
+zsh           # start zsh (if installed)
+echo $0       # zsh
+exit          # back to bash; the terminal window never changed
 ```
 
-**Count**: ~100 essential commands
+(Historically, terminals were physical screen-and-keyboard devices connected to a big computer. The modern "terminal emulator" imitates them, using a kernel feature called a **pseudo-terminal (pty)**.)
 
-This chapter focuses primarily on this component.
+---
 
-### 5. GNU Debugger (gdb)
+## 4. How a shell runs a command
 
-**What it is**: Debugger for finding bugs in programs
+Type `ls -l /etc` and press Enter. The shell:
 
-**Usage**:
+1. **Splits** the line into words: the command `ls` and arguments `-l`, `/etc`.
+2. **Expands** things like `~`, `$VARIABLES` and wildcards (`*.txt`).
+3. **Decides what `ls` is**, in this order:
+   1. an **alias** (a nickname you defined),
+   2. a **function**,
+   3. a **shell builtin** (a command built into the shell itself, like `cd`, `export`, `echo`),
+   4. an **executable file** found by searching the folders listed in **`PATH`**.
+4. **Starts a new process** for the program (the `fork` + `execve` system calls; Chapter 2), waits for it to end, and stores its **exit code**.
+
 ```bash
-# Compile with debugging symbols:
-$ gcc -g program.c -o program
+type cd        # cd is a shell builtin
+type ls        # ls is /usr/bin/ls   (or "aliased to ls --color=auto")
+type -a echo   # shows all: a builtin AND /usr/bin/echo
+echo $PATH     # /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+```
 
-# Debug:
-$ gdb program
-(gdb) break main
-(gdb) run
-(gdb) step
-(gdb) print variable
+**Why `cd` must be a builtin:** each program runs in its own process, and a child process cannot change its parent's current directory. Only the shell itself can.
+
+> **Docker hint:** in a Dockerfile, `RUN cd /app` changes directory only for that one `RUN` line's shell. The next `RUN` starts fresh. Use `WORKDIR` instead (Chapter 17).
+
+### Shells you will meet
+
+| Shell | Notes |
+|---|---|
+| **sh** | The POSIX standard shell: minimal, portable. On Debian/Ubuntu `/bin/sh` is actually **dash** (very fast, minimal); on Alpine it is BusyBox **ash** |
+| **bash** | "Bourne Again SHell". Default on most Linux distros; has history, tab completion, arrays, and more |
+| **zsh** | Powerful and customizable; default on macOS since Catalina |
+| **fish** | Friendly, with helpful defaults; not POSIX compatible |
+| **ksh, tcsh** | Older alternatives |
+
+Scripts should start with a *shebang* line naming their interpreter, e.g. `#!/bin/sh` or `#!/usr/bin/env bash`. If you write `bash`-only features (like `[[ ... ]]`) but run under `sh`/`ash`, you get errors. This is a very common Docker surprise on Alpine.
+
+```bash
+echo $SHELL                 # your login shell
+cat /etc/shells             # shells installed on the system
 ```
 
 ---
 
-## What are GNU Coreutils?
+## 5. Essential commands with examples
 
-**GNU Coreutils** (GNU Core Utilities) is a package of essential command-line tools that provide basic file, shell, and text manipulation functionality.
-
-### The Complete List (Partial)
-
-```
-File Operations:
-  ls      - List directory contents
-  cp      - Copy files/directories
-  mv      - Move/rename files/directories
-  rm      - Remove files/directories
-  mkdir   - Create directories
-  rmdir   - Remove empty directories
-  touch   - Create empty files/update timestamps
-  ln      - Create links between files
-
-File Viewing:
-  cat     - Concatenate and display files
-  more    - Display file contents page by page
-  less    - Improved 'more' (scrollable)
-  head    - Display first lines of file
-  tail    - Display last lines of file
-  tac     - Display file in reverse (cat backwards)
-
-Text Processing:
-  grep    - Search text patterns
-  sed     - Stream editor (find/replace)
-  awk     - Text processing language
-  cut     - Remove sections from lines
-  sort    - Sort lines of text
-  uniq    - Remove duplicate lines
-  wc      - Word/line/character count
-  tr      - Translate characters
-
-Directory Navigation:
-  cd      - Change directory
-  pwd     - Print working directory
-  dirs    - Display directory stack
-  pushd   - Push directory onto stack
-  popd    - Pop directory from stack
-
-File Information:
-  stat    - Display file statistics
-  file    - Determine file type
-  du      - Disk usage
-  df      - Disk free space
-  ls -l   - Long listing with details
-
-Permissions:
-  chmod   - Change file permissions
-  chown   - Change file owner
-  chgrp   - Change file group
-  umask   - Set default permissions
-
-Process Management:
-  ps      - List processes
-  kill    - Terminate processes
-  killall - Kill processes by name
-  top     - Display processes dynamically
-  htop    - Improved top (if installed)
-
-Text Output:
-  echo    - Display text
-  printf  - Formatted output
-  yes     - Output a string repeatedly
-
-System Information:
-  uname   - System information
-  hostname - Display/set hostname
-  whoami  - Current user
-  date    - Display/set date and time
-  uptime  - System uptime
-
-And many more...
-```
-
-### Where Coreutils Are Stored
+Try these in a scratch folder: `mkdir -p ~/playground && cd ~/playground`.
 
 ```bash
-# Most common locations:
-/bin/          # Essential user binaries
-/usr/bin/      # User programs
-/usr/local/bin/ # Locally installed programs
+pwd                        # where am I?
+mkdir -p project/src       # create nested directories
+cd project                 # go in
+touch a.txt b.txt          # create empty files
+echo "hello" > a.txt       # write text into a file (overwrites)
+echo "world" >> a.txt      # append
+cat a.txt                  # show file
+ls -l                      # long listing: permissions, owner, size, date
+ls -la                     # include hidden files (names starting with .)
+cp a.txt c.txt             # copy
+mv c.txt src/              # move (or rename: mv old new)
+rm b.txt                   # delete a file (no recycle bin!)
+rm -r src                  # delete a directory and contents
+head -n 3 file             # first 3 lines
+tail -f /var/log/syslog    # follow a file as it grows (Ctrl+C to stop)
+wc -l a.txt                # count lines
+sort names.txt | uniq -c   # count duplicates
+du -sh .                   # size of the current folder
+df -h                      # free disk space
+```
 
-# Check location of specific command:
-$ which ls
-/usr/bin/ls
+> ⚠️ **Be careful with `rm -rf`**. It deletes without asking. Never run it with a path you have not double-checked, especially with `sudo` or variables that may be empty (`rm -rf "$DIR/"` with `$DIR` empty means `/`).
 
-$ which cat
-/usr/bin/cat
+`ls -l` output explained:
 
-$ which grep
-/usr/bin/grep
+```
+-rw-r--r-- 1 alice staff 6 Jan 10 12:00 a.txt
+│└┬┘└┬┘└┬┘   │    │      │
+│ │  │  │    │    │      └ size in bytes
+│ │  │  │    │    └ group
+│ │  │  │    └ owner
+│ │  │  └ permissions for others (r--)
+│ │  └ permissions for group (r--)
+│ └ permissions for owner (rw-)
+└ file type: - file, d directory, l symlink
+```
 
-# View details:
-$ ls -lh /usr/bin/ls
--rwxr-xr-x 1 root root 138K Jan 15 2023 /usr/bin/ls
+(Permissions are the subject of [Chapter 13](13_managing_user_group_and_permission.md).)
+
+---
+
+## 6. Pipes, redirection and exit codes
+
+These three ideas turn small tools into powerful ones.
+
+### Standard streams
+Every program starts with three open "files":
+
+| Name | Number | Default |
+|---|---|---|
+| **stdin** | 0 | keyboard |
+| **stdout** | 1 | the terminal screen |
+| **stderr** | 2 | the terminal screen (for error messages) |
+
+### Redirection
+
+```bash
+ls > files.txt            # stdout → file (overwrite)
+ls >> files.txt           # append
+sort < files.txt          # file → stdin
+ls /nonexistent 2> err.txt   # stderr → file
+cmd > out.txt 2>&1        # both stdout and stderr → file
+cmd > /dev/null 2>&1      # throw away all output
+```
+
+### Pipes
+`|` connects one program's **stdout** to the next program's **stdin**:
+
+```bash
+ls /usr/bin | wc -l               # how many programs?
+cat access.log | grep 404 | sort | uniq -c | sort -nr | head
+```
+
+Each stage does one small job. This is the "Unix philosophy": small tools that do one thing well, combined with pipes.
+
+### Exit codes
+Every program returns a number when it ends: **0 means success, anything else means failure**.
+
+```bash
+ls /etc; echo $?             # 0
+ls /nonexistent; echo $?     # 2 (error)
+cmd1 && cmd2                 # run cmd2 only if cmd1 succeeded
+cmd1 || cmd2                 # run cmd2 only if cmd1 failed
+cmd1 ; cmd2                  # run both regardless
+```
+
+Docker uses exit codes heavily: `docker run` returns the container's exit code; `docker ps -a` shows `Exited (0)` or `Exited (1)`. **137** typically means the process was killed (128 + signal 9), for example by the out-of-memory killer.
+
+### Quoting and variables
+
+```bash
+NAME="Ada Lovelace"
+echo "Hello, $NAME"     # double quotes: variables are expanded
+echo 'Hello, $NAME'     # single quotes: literal text
+export APP_ENV=prod     # visible to child processes (like the programs you start)
+env | grep APP_ENV
+```
+
+Always quote variables that may contain spaces: `rm "$file"`, not `rm $file`.
+
+---
+
+## 7. Desktop environments (very briefly)
+
+A **desktop environment** provides the graphical interface: windows, panels, file manager, settings, and a bundled terminal. Servers and containers usually don't have one.
+
+| Desktop | Found on | Feel |
+|---|---|---|
+| **GNOME** | Ubuntu, Fedora, Debian (default) | Modern, minimal |
+| **KDE Plasma** | Kubuntu, openSUSE, many others | Highly customizable |
+| **Xfce / LXQt** | Xubuntu, Mint Xfce | Lightweight |
+| **Aqua (macOS)** / **Windows shell** | macOS / Windows | Proprietary equivalents |
+
+They matter for Docker only in the sense that the *terminal* you use lives in one. Everything in this chapter works over SSH on a server with no desktop at all.
+
+---
+
+## 8. Coreutils and shells inside containers
+
+An image includes the user-space tools of its base distribution (Chapter 8):
+
+| Base image | Core tools | Default shell |
+|---|---|---|
+| `ubuntu`, `debian` | GNU coreutils | `bash` (interactive), `dash` as `/bin/sh` |
+| `alpine` | **BusyBox** (one binary, many commands) | `ash` via `/bin/sh`; **no bash** unless installed |
+| distroless, `scratch` | Almost nothing, no shell | none |
+
+```bash
+docker run --rm ubuntu:24.04 ls --version | head -1     # GNU coreutils
+docker run --rm alpine:3.20 ls --version 2>&1 | head -1 # BusyBox ... (error text mentions BusyBox)
+docker run --rm alpine:3.20 sh -c 'readlink -f /bin/ls' # /bin/busybox
+```
+
+Practical consequences:
+
+- **`docker exec -it <container> bash`** works only if `bash` exists. On Alpine use `sh`.
+- **Options differ.** Some GNU-only flags (for example `ls --time-style`, `sed -i` behaviors, `grep -P`, `date -d`) may not work in BusyBox.
+- **Scripts:** if a script uses `bash` features, either install bash (`apk add bash`) or write POSIX `sh`.
+- **`RUN`, `CMD` and `ENTRYPOINT` forms** (Chapters 15–16): *shell form* (`CMD echo hi`) runs through `/bin/sh -c`, so it needs a shell and does variable expansion; *exec form* (`CMD ["echo","hi"]`) runs the program directly with no shell, so `$VAR` and pipes don't work unless you call a shell explicitly.
+- **Minimal images have no tools.** In a distroless container, `docker exec ... sh` fails. Use `docker debug`, an ephemeral debug container, or `docker cp` instead.
+
+---
+
+## 9. Hands-on lab
+
+**Lab 1 – What am I running?**
+```bash
+echo $SHELL; echo $0; ps -p $$ -o comm=
+ps -o comm= -p $PPID          # the parent (your terminal, or sshd over SSH)
+type cd ls echo
+```
+
+**Lab 2 – Watch a command run**
+```bash
+strace -f -e trace=execve,openat,getdents64,write ls 2>&1 | tail -15
+```
+You will see the shell-launched `ls` open the current directory, read entries (`getdents64`), and `write` the names to file descriptor 1 (stdout).
+
+**Lab 3 – Build a pipeline**
+```bash
+printf 'b\na\nb\nc\nb\na\n' | sort | uniq -c | sort -nr
+```
+Expected: `3 b`, `2 a`, `1 c` (counts descending).
+
+**Lab 4 – Exit codes**
+```bash
+true;  echo $?     # 0
+false; echo $?     # 1
+grep -q root /etc/passwd && echo found || echo missing
+```
+
+**Lab 5 – Same tool, two distributions**
+```bash
+docker run --rm ubuntu:24.04 sh -c 'echo "shell: $(readlink -f /bin/sh)"'   # /usr/bin/dash
+docker run --rm alpine:3.20  sh -c 'echo "shell: $(readlink -f /bin/sh)"'   # /bin/busybox
+docker run --rm alpine:3.20 bash -c 'echo hi'                                # fails: bash not found
 ```
 
 ---
 
-## The Shell: Command Interpreter
+## 10. Common mistakes and myths
 
-A **shell** is a command-line interpreter that:
-- Accepts commands from users
-- Interprets those commands
-- Communicates with the kernel
-- Returns results to users
-
-**Analogy**: The shell is like a **translator** between you and the kernel.
-
-### Shell Types and History
-
-#### 1. sh (Bourne Shell)
-
-**Created**: 1977 by Stephen Bourne at Bell Labs
-
-**Characteristics**:
-- Original Unix shell
-- Simple and minimal
-- Standard for scripting
-- Available on all Unix/Linux systems
-
-**Path**: `/bin/sh`
-
-**Example**:
-```sh
-#!/bin/sh
-echo "Hello from Bourne Shell"
-```
-
-#### 2. ksh (Korn Shell)
-
-**Created**: 1983 by David Korn at Bell Labs
-
-**Characteristics**:
-- Improved upon Bourne Shell
-- Added command-line editing
-- Better scripting features
-- Popular in enterprise environments
-
-**Path**: `/bin/ksh`
-
-#### 3. bash (Bourne Again Shell)
-
-**Created**: 1989 by Brian Fox for GNU Project
-
-**Characteristics**:
-- GNU's free replacement for sh
-- Combined features from sh and ksh
-- Added command history
-- Tab completion
-- Job control
-- Most popular shell today
-
-**Path**: `/bin/bash`
-
-**Default on**: Most Linux distributions, older macOS versions
-
-**Features**:
-```bash
-# Command history (up/down arrows)
-$ history
-  1  ls
-  2  cd Documents
-  3  cat file.txt
-
-# Tab completion:
-$ cat Do<TAB>
-$ cat Documents/
-
-# Variables:
-$ MY_VAR="Hello"
-$ echo $MY_VAR
-Hello
-
-# Functions:
-$ greet() { echo "Hello, $1!"; }
-$ greet World
-Hello, World!
-
-# Conditionals:
-$ if [ -f file.txt ]; then
-    echo "File exists"
-  fi
-
-# Loops:
-$ for i in 1 2 3; do
-    echo "Number $i"
-  done
-```
-
-#### 4. zsh (Z Shell)
-
-**Created**: 1990 by Paul Falstad
-
-**Characteristics**:
-- Most advanced shell
-- Extensive customization (Oh My Zsh framework)
-- Better tab completion
-- Plugin ecosystem
-- Themes and prompts
-
-**Path**: `/bin/zsh`
-
-**Default on**: macOS Catalina+ (since 2019)
-
-**Features over bash**:
-```zsh
-# Better tab completion:
-$ kill <TAB>
-# Shows list of running processes with PIDs
-
-# Spelling correction:
-$ cd Donwloads
-zsh: correct 'Donwloads' to 'Downloads' [nyae]?
-
-# Glob extensions:
-$ ls **/*.txt
-# Recursively finds all .txt files
-
-# Plugin support:
-# Oh My Zsh plugins: git, docker, kubectl, etc.
-```
-
-**Comparison Table**:
-
-| Shell | Year | Creator | Features | Use Case |
-|-------|------|---------|----------|----------|
-| **sh** | 1977 | Stephen Bourne | Minimal, standard | Scripting, compatibility |
-| **ksh** | 1983 | David Korn | Enhanced sh | Enterprise, scripting |
-| **bash** | 1989 | GNU Project | sh + ksh features | General purpose, Linux default |
-| **zsh** | 1990 | Paul Falstad | Most feature-rich | Power users, macOS default |
-
-### Checking and Switching Shells
-
-**Check current shell**:
-```bash
-$ echo $SHELL
-/bin/bash
-
-# Or:
-$ ps -p $$
-  PID TTY          TIME CMD
- 1234 pts/0    00:00:00 bash
-```
-
-**List available shells**:
-```bash
-$ cat /etc/shells
-/bin/sh
-/bin/bash
-/bin/zsh
-/bin/dash
-```
-
-**Temporarily switch shell**:
-```bash
-# Start zsh:
-$ zsh
-% echo $SHELL
-/bin/zsh
-
-# Exit back to bash:
-% exit
-```
-
-**Permanently switch shell**:
-```bash
-# Change to zsh:
-$ chsh -s /bin/zsh
-
-# Log out and log back in for change to take effect
-```
+| Mistake or myth | Correction |
+|---|---|
+| "Terminal and shell are the same" | Terminal displays; shell interprets |
+| "`grep`, `ps`, `cd` are coreutils" | Mostly not. They belong to other packages, or the shell |
+| "Every Linux has bash" | Alpine and minimal images don't |
+| "`sh` is bash" | On many systems `sh` is dash or BusyBox ash, with fewer features |
+| "`rm` moves files to trash" | It deletes permanently |
+| "Spaces don't matter in filenames" | They do; always quote |
+| "Output from `ls` goes through the shell" | The program writes to the terminal (stdout) directly; the shell just started it |
+| "Exit code 0 means output was correct" | It only means the program said it succeeded |
 
 ---
 
-## Terminal vs Shell: The Critical Distinction
+## 11. Summary
 
-This is one of the most commonly confused concepts. Let's clarify:
-
-### Terminal (Terminal Emulator)
-
-**What it is**: A **graphical application** that provides a window for text input/output
-
-**Provided by**: Desktop environment
-
-**Examples**:
-- **GNOME Terminal** (GNOME desktop)
-- **Konsole** (KDE desktop)
-- **Terminal.app** (macOS)
-- **Windows Terminal** (Windows)
-- **iTerm2** (macOS, third-party)
-- **Alacritty**, **Kitty** (cross-platform, GPU-accelerated)
-
-**What it does**:
-- Displays text
-- Accepts keyboard input
-- Renders colors and fonts
-- Manages windows and tabs
-- **Does NOT interpret commands**
-
-**Historical context**: Modern terminal emulators simulate physical terminals (hardware) from the 1970s-1980s.
-
-### Shell
-
-**What it is**: A **program that interprets commands**
-
-**Runs inside**: Terminal
-
-**Examples**: bash, zsh, sh, ksh
-
-**What it does**:
-- Interprets commands
-- Communicates with kernel
-- Manages environment variables
-- Executes scripts
-- **Does NOT display graphics**
-
-### The Relationship
-
-```
-┌─────────────────────────────────────────────────────────┐
-│                Desktop Environment                      │
-│                    (GNOME, KDE, etc.)                   │
-│                                                         │
-│  ┌───────────────────────────────────────────────────┐ │
-│  │            Terminal (GNOME Terminal)              │ │
-│  │         (Graphical window application)            │ │
-│  │                                                   │ │
-│  │  ┌─────────────────────────────────────────────┐ │ │
-│  │  │          Shell (bash/zsh)                   │ │ │
-│  │  │      (Command interpreter program)          │ │ │
-│  │  │                                             │ │ │
-│  │  │  $ ls                                       │ │ │
-│  │  │  Documents  Downloads  Pictures            │ │ │
-│  │  │  $ cd Documents                             │ │ │
-│  │  │  $ pwd                                      │ │ │
-│  │  │  /home/user/Documents                       │ │ │
-│  │  │  $▊                                         │ │ │
-│  │  └─────────────────────────────────────────────┘ │ │
-│  └───────────────────────────────────────────────────┘ │
-└─────────────────────────────────────────────────────────┘
-```
-
-**Analogy**: 
-- **Terminal** = Picture frame (the physical boundary)
-- **Shell** = The painting inside the frame (the actual content)
-
-### Example: Opening Terminal
-
-**What happens when you open "Terminal"**:
-
-1. Desktop environment launches terminal application (e.g., GNOME Terminal)
-2. Terminal application starts
-3. Terminal automatically spawns a shell process (bash/zsh)
-4. Shell displays prompt: `$`
-5. You type commands
-6. Shell interprets commands
-7. Terminal displays output
-
-**You can switch shells WITHIN the same terminal**:
-```bash
-$ echo $0
-bash
-
-$ zsh  # Start zsh
-% echo $0
-zsh
-
-% exit  # Exit zsh, back to bash
-$ echo $0
-bash
-```
-
-**The terminal window never changed—only the shell inside it!**
+- GNU supplied most of the classic user-space tools; **coreutils** is the set of ~100 basic ones (`ls`, `cp`, `cat`, `sort`, ...).
+- **Terminal** (window) → **shell** (interpreter) → **program** → **kernel**.
+- The shell resolves a command as alias → function → builtin → executable on `PATH`.
+- **Pipes**, **redirection** and **exit codes** combine small tools into powerful workflows.
+- Containers carry their base image's tools: GNU on Debian/Ubuntu, BusyBox on Alpine, often nothing on distroless.
 
 ---
 
-## Desktop Environments
+## 12. Check your understanding
 
-A **desktop environment** (DE) provides the graphical user interface for an operating system.
+1. What is the difference between a terminal and a shell?
+2. Why is `cd` a shell builtin and not a separate program?
+3. What does `cmd1 | cmd2` do? And `cmd > file 2>&1`?
+4. `docker exec -it web bash` says `executable file not found`. What is the likely cause and fix?
+5. What does exit code `137` usually indicate?
+6. Which of these are not part of GNU coreutils: `ls`, `grep`, `sort`, `ps`, `cp`?
 
-### Components of a Desktop Environment
+<details>
+<summary>Answers</summary>
 
-```
-┌─────────────────────────────────────────────────────────┐
-│              Desktop Environment                        │
-│                                                         │
-│  • Window Manager  (arranges windows)                   │
-│  • Desktop Widgets (wallpaper, icons, clock)            │
-│  • File Manager   (browse files graphically)            │
-│  • Terminal       (command-line interface)              │
-│  • Settings App   (system preferences)                  │
-│  • Default Apps   (text editor, calculator, etc.)       │
-│  • Themes         (look and feel)                       │
-└─────────────────────────────────────────────────────────┘
-```
+1. The terminal is a window that displays text and captures keys. The shell is a program that interprets your commands and starts other programs.
+2. A child process cannot change its parent's working directory; only the shell itself can.
+3. The first sends cmd1's stdout into cmd2's stdin. The second writes both stdout and stderr of `cmd` into `file`.
+4. The image (probably Alpine or minimal) has no `bash`. Use `sh` instead, or install bash.
+5. The process was killed with SIGKILL (128 + 9), often by the out-of-memory killer or `docker kill`.
+6. `grep` and `ps` (`grep` has its own package; `ps` is from procps).
+</details>
 
-### Major Desktop Environments
-
-#### 1. GNOME
-
-**Full name**: GNU Network Object Model Environment
-
-**Used by**:
-- Ubuntu (since 17.10)
-- Fedora
-- Debian
-- Red Hat Enterprise Linux
-
-**Characteristics**:
-- Modern, minimalist design
-- Activities-based workflow
-- Extensions for customization
-- Touch-friendly
-- Resource-intensive
-
-**Terminal**: GNOME Terminal
-
-**File Manager**: Files (Nautilus)
-
-**Default on**: Ubuntu Desktop
-
-#### 2. KDE Plasma
-
-**Full name**: K Desktop Environment
-
-**Used by**:
-- Kubuntu (Ubuntu with KDE)
-- openSUSE
-- Manjaro KDE
-- Fedora KDE Spin
-
-**Characteristics**:
-- Highly customizable
-- Windows-like workflow
-- Feature-rich
-- Desktop widgets
-- Moderate resource usage
-
-**Terminal**: Konsole
-
-**File Manager**: Dolphin
-
-**Popular for**: Users who want customization
-
-#### 3. Xfce
-
-**Used by**:
-- Xubuntu
-- Linux Mint Xfce
-- Manjaro Xfce
-
-**Characteristics**:
-- Lightweight
-- Traditional desktop layout
-- Fast on older hardware
-- Less eye candy
-- Stable
-
-**Terminal**: Xfce Terminal
-
-**File Manager**: Thunar
-
-**Popular for**: Older computers, servers with GUI
-
-#### 4. Aqua (macOS)
-
-**Platform**: macOS only (proprietary)
-
-**Developed by**: Apple
-
-**Characteristics**:
-- Integrated with macOS
-- Dock-based interface
-- Mission Control (window management)
-- Spotlight search
-- Touchpad gestures
-
-**Terminal**: Terminal.app (built-in)
-
-**File Manager**: Finder
-
-**Shell (default)**:
-- macOS Catalina+: zsh
-- Older macOS: bash
-
-### Desktop Environment Comparison
-
-| Desktop | Resource Usage | Customization | Learning Curve | Terminal |
-|---------|----------------|---------------|----------------|----------|
-| **GNOME** | High | Moderate | Easy | GNOME Terminal |
-| **KDE Plasma** | Moderate | Very High | Moderate | Konsole |
-| **Xfce** | Low | Moderate | Easy | Xfce Terminal |
-| **LXQt/LXDE** | Very Low | Low | Easy | QTerminal |
-| **Aqua (macOS)** | Moderate | Low | Easy | Terminal.app |
-
-### No Desktop Environment (Server)
-
-**Many Linux servers have NO desktop environment**:
-- Cloud servers (AWS EC2, Digital Ocean, etc.)
-- Docker hosts
-- Web servers
-- Database servers
-
-**Why?**:
-- Desktop environment uses resources (RAM, CPU)
-- Server workloads don't need GUI
-- More secure (fewer attack surfaces)
-- Remote access via SSH (command-line only)
-
-**Access**:
-```bash
-# SSH into server:
-$ ssh user@server.example.com
-
-# Now you're in a shell (bash/zsh) without GUI
-user@server:~$ ls
-user@server:~$ docker ps
-user@server:~$ systemctl status nginx
-```
+**Practice:** write a one-line pipeline that lists the five largest files in `/usr/bin` (hint: `ls -S`, `head`, or `du -a | sort -nr | head`).
 
 ---
 
-## Command Execution Flow: The Complete Picture
-
-Let's trace what happens when you type a command:
-
-### Example: `ls` Command
-
-```
-┌─────────────────────────────────────────────────────────┐
-│   USER                                                  │
-│   Types: ls                                            │
-└─────────────────────────────────────────────────────────┘
-                     │
-                     ↓
-┌─────────────────────────────────────────────────────────┐
-│   TERMINAL (GNOME Terminal)                             │
-│   • Captures keystrokes                                 │
-│   • Displays characters on screen                       │
-│   • Sends "ls\n" to shell when Enter pressed            │
-└─────────────────────────────────────────────────────────┘
-                     │
-                     ↓
-┌─────────────────────────────────────────────────────────┐
-│   SHELL (bash/zsh)                                      │
-│   • Receives "ls" command                               │
-│   • Interprets command                                  │
-│   • Searches for 'ls' executable:                       │
-│     1. Built-in command? No                             │
-│     2. Alias? No                                        │
-│     3. Function? No                                     │
-│     4. Executable in PATH? Yes → /usr/bin/ls            │
-│   • Executes /usr/bin/ls                                │
-└─────────────────────────────────────────────────────────┘
-                     │
-                     ↓
-┌─────────────────────────────────────────────────────────┐
-│   GNU COREUTILS (/usr/bin/ls)                           │
-│   • Program starts                                      │
-│   • Makes system call to kernel: getdents()             │
-│     (get directory entries)                             │
-└─────────────────────────────────────────────────────────┘
-                     │
-                     ↓
-┌─────────────────────────────────────────────────────────┐
-│   LINUX KERNEL                                          │
-│   • Receives getdents() system call                     │
-│   • Reads filesystem data                               │
-│   • Returns list of files                               │
-└─────────────────────────────────────────────────────────┘
-                     │
-                     ↓
-┌─────────────────────────────────────────────────────────┐
-│   GNU COREUTILS (/usr/bin/ls)                           │
-│   • Receives data from kernel                           │
-│   • Formats output (colors, columns, etc.)              │
-│   • Writes to stdout (standard output)                  │
-└─────────────────────────────────────────────────────────┘
-                     │
-                     ↓
-┌─────────────────────────────────────────────────────────┐
-│   SHELL (bash/zsh)                                      │
-│   • Receives output from 'ls'                           │
-│   • Passes output to terminal                           │
-└─────────────────────────────────────────────────────────┘
-                     │
-                     ↓
-┌─────────────────────────────────────────────────────────┐
-│   TERMINAL (GNOME Terminal)                             │
-│   • Receives output text                                │
-│   • Renders text with colors/formatting                 │
-│   • Displays to user:                                   │
-│     Documents  Downloads  Pictures                      │
-└─────────────────────────────────────────────────────────┘
-                     │
-                     ↓
-┌─────────────────────────────────────────────────────────┐
-│   USER                                                  │
-│   Sees: Documents  Downloads  Pictures                  │
-└─────────────────────────────────────────────────────────┘
-```
-
-### High-Level Summary
-
-```
-User → Terminal → Shell → Coreutils → Kernel
-                                         ↓
-User ← Terminal ← Shell ← Coreutils ← Kernel
-```
-
-**Each component's role**:
-1. **Terminal**: Visual interface (input/output)
-2. **Shell**: Command interpreter (bridge between user and kernel)
-3. **Coreutils**: Utility programs (file operations, text processing)
-4. **Kernel**: System calls (hardware access, filesystem)
-
----
-
-## User Space vs Kernel Space
-
-Understanding where each component lives:
-
-```
-┌─────────────────────────────────────────────────────────┐
-│                    USER SPACE                           │
-│          (Unprivileged, safe, isolated)                 │
-│                                                         │
-│  ┌─────────────────┐  ┌─────────────────┐              │
-│  │ Desktop Env     │  │ Applications    │              │
-│  │ (GNOME/KDE)     │  │ (Firefox, etc.) │              │
-│  └─────────────────┘  └─────────────────┘              │
-│                                                         │
-│  ┌─────────────────┐  ┌─────────────────┐              │
-│  │ Terminal        │  │ GNU Coreutils   │              │
-│  │ (GNOME Term)    │  │ (ls, cat, grep) │              │
-│  └─────────────────┘  └─────────────────┘              │
-│                                                         │
-│  ┌─────────────────┐                                    │
-│  │ Shell           │                                    │
-│  │ (bash/zsh)      │                                    │
-│  └─────────────────┘                                    │
-└─────────────────────────────────────────────────────────┘
-                     ↕ System Calls ↕
-┌─────────────────────────────────────────────────────────┐
-│                   KERNEL SPACE                          │
-│         (Privileged, direct hardware access)            │
-│                                                         │
-│  ┌──────────────────────────────────────────────────┐  │
-│  │            Linux Kernel                          │  │
-│  │  • Process Management                            │  │
-│  │  • Memory Management                             │  │
-│  │  • Filesystem (VFS)                              │  │
-│  │  • Device Drivers                                │  │
-│  │  • Network Stack                                 │  │
-│  │  • Namespaces & Cgroups (for containers)        │  │
-│  └──────────────────────────────────────────────────┘  │
-└─────────────────────────────────────────────────────────┘
-                     ↕
-┌─────────────────────────────────────────────────────────┐
-│                    HARDWARE                             │
-│  CPU, RAM, Disk, Network, GPU, etc.                    │
-└─────────────────────────────────────────────────────────┘
-```
-
-**User space**: Where applications run
-- Cannot directly access hardware
-- Use system calls to request kernel services
-- Protected from crashing the system
-- Includes: terminal, shell, coreutils, desktop, applications
-
-**Kernel space**: Where kernel runs
-- Direct hardware access
-- Manages all system resources
-- Crash here = system crash
-- Privileged operations only
-
-**System calls** bridge the two spaces:
-```c
-// User space program:
-#include <stdio.h>
-int main() {
-    FILE *fp = fopen("file.txt", "r");  // System call: open()
-    char buffer[100];
-    fread(buffer, 1, 100, fp);          // System call: read()
-    fclose(fp);                         // System call: close()
-    return 0;
-}
-```
-
----
-
-## Practical Examples
-
-### Example 1: Exploring Coreutils
-
-```bash
-# Find where ls is located:
-$ which ls
-/usr/bin/ls
-
-# Check file details:
-$ file /usr/bin/ls
-/usr/bin/ls: ELF 64-bit LSB executable, x86-64
-
-# View file size:
-$ ls -lh /usr/bin/ls
--rwxr-xr-x 1 root root 138K Jan 15 2023 /usr/bin/ls
-
-# Count all commands in /usr/bin:
-$ ls /usr/bin | wc -l
-2847
-
-# Search for GNU-related commands:
-$ ls /usr/bin | grep gnu
-```
-
-### Example 2: Shell vs Terminal
-
-```bash
-# Check current shell:
-$ echo $SHELL
-/bin/bash
-
-# Check parent process (should be terminal):
-$ ps -o comm= $PPID
-gnome-terminal-
-
-# Start a different shell:
-$ zsh
-% echo $SHELL
-/bin/zsh
-
-# Check shell type from within:
-% echo $0
-zsh
-
-# Exit back to bash:
-% exit
-
-$ echo $SHELL
-/bin/bash
-```
-
-### Example 3: Command Types
-
-```bash
-# Type 1: Built-in shell command
-$ type cd
-cd is a shell builtin
-
-# Type 2: Executable (coreutil)
-$ type ls
-ls is /usr/bin/ls
-
-# Type 3: Alias
-$ alias ll='ls -l'
-$ type ll
-ll is aliased to `ls -l'
-
-# Type 4: Function
-$ greet() { echo "Hello, $1!"; }
-$ type greet
-greet is a function
-```
-
-### Example 4: System Calls in Action
-
-```bash
-# Trace system calls made by 'ls':
-$ strace ls 2>&1 | head -20
-execve("/usr/bin/ls", ["ls"], 0x7fff...) = 0
-brk(NULL)                               = 0x...
-access("/etc/ld.so.preload", R_OK)     = -1 ENOENT
-openat(AT_FDCWD, "/etc/ld.so.cache", ...) = 3
-fstat(3, {...})                        = 0
-mmap(...)                              = 0x...
-close(3)                               = 0
-...
-openat(AT_FDCWD, ".", O_RDONLY|O_NONBLOCK|...) = 3
-getdents64(3, /* 10 entries */, 32768) = 320
-getdents64(3, /* 0 entries */, 32768)  = 0
-close(3)                               = 0
-write(1, "Documents  Downloads  Pictures\n", 31) = 31
-```
-
-**Key system calls**:
-- `openat()`: Open directory
-- `getdents64()`: Get directory entries
-- `write()`: Write to stdout
-- `close()`: Close file descriptor
-
----
-
-## GNU Coreutils in Containers
-
-### Inside Docker Containers
-
-**When you run a container**, it includes coreutils from the base image:
-
-```bash
-# Ubuntu container:
-$ docker run -it ubuntu:22.04 bash
-root@container:/# which ls
-/usr/bin/ls
-root@container:/# which cat
-/usr/bin/cat
-
-# These are GNU Coreutils from Ubuntu
-
-# Alpine container:
-$ docker run -it alpine:3.19 sh
-/ # which ls
-/bin/ls
-/ # ls -l /bin/ls
-lrwxrwxrwx    1 root     root            12 /bin/ls -> /bin/busybox
-
-# Alpine uses BusyBox (lightweight alternative to GNU Coreutils)
-```
-
-**BusyBox**: Single executable containing many utilities (smaller than GNU Coreutils)
-
-**Size comparison**:
-- GNU Coreutils package: ~15 MB
-- BusyBox (all utilities): ~1-2 MB
-- Trade-off: BusyBox has fewer features
-
----
-
-## Key Takeaways
-
-1. **GNU Project** (1983):
-   - Created by Richard Stallman
-   - Goal: Free Unix-like system
-   - Developed essential components (GCC, glibc, bash, coreutils)
-
-2. **GNU Coreutils**:
-   - ~100 essential command-line utilities
-   - Examples: ls, cat, grep, cp, rm, mv
-   - Located in /bin/, /usr/bin/
-   - Make Linux usable
-
-3. **Shells** (Command interpreters):
-   - sh (1977): Original Bourne Shell
-   - ksh (1983): Korn Shell
-   - bash (1989): Bourne Again Shell (GNU)
-   - zsh (1990): Z Shell (most advanced)
-
-4. **Terminal vs Shell**:
-   - **Terminal**: Graphical application (GNOME Terminal, Konsole)
-   - **Shell**: Command interpreter program (bash, zsh)
-   - Terminal displays; shell interprets
-
-5. **Desktop Environments**:
-   - GNOME: Modern, Ubuntu default
-   - KDE Plasma: Highly customizable
-   - Xfce: Lightweight
-   - Aqua: macOS only
-
-6. **Command execution flow**:
-   ```
-   User → Terminal → Shell → Coreutils → Kernel → Hardware
-   ```
-
-7. **User space vs Kernel space**:
-   - User space: Applications, coreutils, shell, terminal
-   - Kernel space: Linux kernel
-   - System calls bridge the gap
-
-8. **Containers include coreutils**:
-   - Ubuntu containers: GNU Coreutils
-   - Alpine containers: BusyBox
-   - All share host kernel
-
----
-
-## Practical Exercises
-
-### Exercise 1: Explore Your System
-
-```bash
-# 1. Check your shell:
-$ echo $SHELL
-
-# 2. Find coreutils:
-$ which ls cat grep cp rm
-
-# 3. Count utilities:
-$ ls /usr/bin | wc -l
-
-# 4. Check GNU version:
-$ ls --version
-$ cat --version
-
-# 5. Find your terminal:
-$ ps -o comm= $PPID
-```
-
-**Questions**:
-1. What shell are you using?
-2. How many commands are in /usr/bin/?
-3. Are your utilities GNU or BusyBox?
-
-### Exercise 2: Shell Comparison
-
-```bash
-# Try bash:
-$ bash
-$ echo $0
-
-# Try zsh (if installed):
-$ zsh
-% echo $0
-
-# Compare tab completion:
-bash$ cd Do<TAB>
-zsh% cd Do<TAB>
-
-# zsh shows more detailed completion menu
-```
-
-**Questions**:
-1. Which shell has better tab completion?
-2. Can you switch shells without closing terminal?
-3. What's the difference in prompts?
-
-### Exercise 3: System Call Tracing
-
-```bash
-# Trace 'ls':
-$ strace -e openat,getdents64,write ls
-
-# Trace 'cat':
-$ strace -e openat,read,write cat /etc/hostname
-
-# Count system calls:
-$ strace ls 2>&1 | grep '^[a-z]' | wc -l
-```
-
-**Questions**:
-1. What system calls does 'ls' make?
-2. How does 'cat' read files?
-3. How many system calls for a simple 'ls'?
-
-### Exercise 4: Containerized Coreutils
-
-```bash
-# Ubuntu container:
-$ docker run -it ubuntu:22.04 bash
-root@ubuntu:/# ls --version
-GNU coreutils 8.32
-
-# Alpine container:
-$ docker run -it alpine:3.19 sh
-/ # ls --version
-BusyBox v1.36.1
-
-# Compare sizes:
-$ docker images
-ubuntu    22.04     77.8MB
-alpine    3.19      7.05MB
-```
-
-**Questions**:
-1. Why is Alpine so much smaller?
-2. Do both have the same commands?
-3. Are there feature differences?
-
----
-
-## Connection to Docker
-
-### Why This Matters for Docker
-
-**1. Understanding container contents**:
-When you build a Docker image, you're including:
-- Base distribution's coreutils (Ubuntu/Alpine/Debian)
-- These utilities let you interact with the container
-- `docker exec -it container bash` gives you a shell with coreutils
-
-**2. Dockerfile commands use coreutils**:
-```dockerfile
-FROM ubuntu:22.04
-RUN ls -la /etc          # Uses ls from Ubuntu
-RUN cat /etc/os-release  # Uses cat from Ubuntu
-RUN mkdir -p /app        # Uses mkdir from Ubuntu
-COPY . /app              # Docker command
-RUN cd /app && pwd       # Uses cd (shell builtin) and pwd (coreutil)
-```
-
-**3. Debugging containers**:
-```bash
-$ docker exec -it myapp bash
-root@container:/# ls     # GNU ls
-root@container:/# ps     # Process list
-root@container:/# cat /var/log/app.log  # View logs
-```
-
-**4. Alpine's BusyBox trade-off**:
-- Smaller images (great for deployment)
-- Fewer features (may lack options you need)
-- Different behavior (scripts may break)
-
-**5. Shell choice matters**:
-```dockerfile
-# bash available:
-FROM ubuntu:22.04
-CMD ["/bin/bash", "-c", "echo 'Hello'"]
-
-# Only sh available:
-FROM alpine:3.19
-CMD ["/bin/sh", "-c", "echo 'Hello'"]
-```
-
-### The Complete Picture
-
-Now you understand what's inside a container:
-
-```
-Docker Container
-  ├─ Linux Kernel (shared from host)
-  │
-  ├─ Userspace from base image:
-  │   ├─ GNU Coreutils (or BusyBox)
-  │   ├─ Shell (bash/sh)
-  │   ├─ Package manager (apt/apk)
-  │   ├─ System libraries (glibc/musl)
-  │   └─ Configuration files
-  │
-  └─ Your application:
-      ├─ Application code
-      ├─ Dependencies
-      └─ Data
-```
-
-**When you `docker exec`**, you're:
-1. Entering the container's namespace
-2. Starting a shell (bash/sh)
-3. Using that shell to run coreutils
-4. Which make system calls to the shared host kernel
-
----
-
-## Final Thoughts
-
-GNU Coreutils are the **invisible infrastructure** of Linux systems. Every time you type a command, you're using tools created by the GNU Project to provide a free, open-source Unix-like environment.
-
-**The complete stack**:
-```
-Hardware
-  ↑
-Linux Kernel (Linus Torvalds, 1991)
-  ↑
-GNU Utilities (Richard Stallman, 1983+)
-  ↑
-Shell (bash/zsh)
-  ↑
-Terminal (GNOME Terminal/Konsole)
-  ↑
-Desktop Environment (GNOME/KDE)
-  ↑
-User
-```
-
-**Each layer serves a purpose**:
-- **Kernel**: Hardware abstraction
-- **GNU Utilities**: Basic operations
-- **Shell**: Command interpretation
-- **Terminal**: Visual interface
-- **Desktop**: Complete graphical environment
-
-**For Docker**:
-- Containers include userspace (GNU/BusyBox)
-- Containers share kernel
-- Shell/coreutils let you interact with containers
-- Understanding these tools makes you a better Docker user
-
-In the next chapters, we'll use this knowledge to explore Docker commands, work with containers, and leverage these utilities to build and debug containerized applications.
-
----
-
-*This completes the foundational knowledge needed to understand Docker's relationship with Linux. Next chapters will dive into practical Docker usage, building on everything you've learned about kernels, distributions, and GNU utilities.*
+**Next:** [Chapter 10 – Running Ubuntu on Docker](10_running_ubuntu_on_docker.md), where we use all of this inside a real container.
