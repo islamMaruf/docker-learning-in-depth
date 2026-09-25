@@ -1,1766 +1,406 @@
-# Chapter 37: DHCP REQUEST and ACKNOWLEDGE - Breaking Into Pieces In Details
+# Chapter 37: DHCP Request and Acknowledge
 
-## Overview
+> **In one sentence:** After picking an Offer, the client **broadcasts a DHCP Request** ("I accept *this* address from *that* server"), and the chosen server answers with a **DHCP ACK** that turns the provisional offer into a **lease** with a timer; the client then **checks the address is really free**, configures its interface, and starts the lease clock that drives **renewal (T1)** and **rebinding (T2)**.
 
-The journey is nearly complete. A computer with no IP address sent a DHCP DISCOVER broadcast (Chapter 042). The router's DHCP server responded with a generous DHCP OFFER containing an IP address, subnet mask, gateway, and DNS servers (Chapter 043). Now comes the final two-step handshake that transforms an offer into a binding commitment.
+**Level:** 🟡 Intermediate · **Reading time:** ~55 minutes
 
-This chapter covers the final two messages of the DORA process:
-
-**REQUEST (R):** The client formally accepts the offered IP address  
-**ACKNOWLEDGE (ACK):** The router confirms and officially assigns the IP address
-
-After these two messages, the client will have a fully configured network identity. The IP address will be bound to the client's MAC address in the router's DHCP lease table. The client can finally communicate on the network. This is the moment when a computer transitions from network outsider to network citizen.
-
-But these final steps contain important nuances:
-- Why does REQUEST still broadcast at Layer 3 even though the client knows the router's IP?
-- How does the client indicate which server's offer it's accepting (important when multiple DHCP servers exist)?
-- When can the router finally stop broadcasting and send unicast to the client?
-- What exactly goes into the DHCP lease table, and how does it enforce IP uniqueness?
-
-By the end of this chapter, you'll understand the complete DORA handshake from first broadcast to final confirmation, byte by byte, layer by layer, decision by decision.
-
-**This is where network chaos gives way to network order.**
+**Prerequisites:** Chapters [35](35_dhcp_discover_deep_dive_in_details.md) and [36](36_dhcp_offer_deep_dive_in_details.md).
 
 ---
 
-## Recap: The Story So Far
+## What you will learn
 
-### DORA Progress
+- **Why a Request is needed** at all after an Offer
+- The exact contents of the **Request** (options 50 and 54) and why it is **broadcast**
+- How the server **commits a lease** and builds the **ACK**, and what a **NAK** is
+- What the client does **after the ACK**: configure the interface, **ARP-probe** for conflicts, announce itself, **Decline** if needed
+- The **DHCP client state machine**: INIT, SELECTING, REQUESTING, BOUND, RENEWING, REBINDING, INIT-REBOOT
+- **Lease renewal** (T1, T2 timings and unicast vs broadcast), **Release**, and **Inform**
+- How the whole thing looks on the wire, with byte-level examples and a hands-on lab
+
+---
+
+## 1. Why a Request after an Offer?
+
+If the Offer already names an address, why not just start using it? Because:
+
+1. **Several servers may have made Offers.** The client must tell everyone which one it took, so the losers can free their reserved addresses.
+2. **The server hasn't committed anything yet.** An Offer is only a temporary hold. The Request asks the server to *bind* the address to this client.
+3. **Time may have passed.** Between Offer and Request another client could have taken the address; the server must be able to say **no** (a NAK).
+4. **A client may remember an old lease.** Rebooting clients skip Discover and ask directly for the address they had before (INIT-REBOOT, §8).
 
 ```
-✓ D - DISCOVER (Chapter 042)
-  Client → Router (broadcast)
-  "I need an IP address"
-  
-  Layer 3: 0.0.0.0 → 255.255.255.255
-  Layer 2: AA:BB:CC:DD:EE:FF → FF:FF:FF:FF:FF:FF
-  Ports: 68 → 67
-  Transaction ID: 0x3903F326
-
-✓ O - OFFER (Chapter 043)
-  Router → Client (broadcast)
-  "I offer you 192.168.1.21"
-  
-  Layer 3: 192.168.1.1 → 255.255.255.255
-  Layer 2: A1:B1:C1:D1:E1:F1 → AA:BB:CC:DD:EE:FF
-  Ports: 67 → 68
-  Transaction ID: 0x3903F326 (matched!)
-  Configuration: IP, mask, gateway, DNS, lease time
-
-⧗ R - REQUEST (This chapter - Part 1)
-  Client → Router
-  "I accept 192.168.1.21"
-
-⧗ A - ACKNOWLEDGE (This chapter - Part 2)
-  Router → Client
-  "Confirmed! 192.168.1.21 is yours"
+Client                                      Server A (192.168.1.1)      Server B (192.168.1.2)
+  │── DISCOVER (broadcast) ───────────────────►│                              │
+  │◄── OFFER  .100 ───────────────────────────│                              │
+  │◄── OFFER  .150 ─────────────────────────────────────────────────────────  │
+  │── REQUEST (broadcast): "I take .100 from server 192.168.1.1" ─────────────►│ (B hears it too: frees .150)
+  │◄── ACK  .100 (lease 24 h) ────────────────│
 ```
 
 ---
 
-### Current Network State
+## 2. Part 1: The DHCP Request
 
-**Client computer:**
+### 2.1 Layer 7: the message
 
-```
-┌─────────────────────────────────┐
-│   Computer (Client)             │
-│   ┌─────────────────────────┐   │
-│   │ MAC: AA:BB:CC:DD:EE:FF  │   │
-│   │ IP: None (not configured)│  │
-│   │ State: OFFER received    │   │
-│   │                          │   │
-│   │ Offered:                 │   │
-│   │   IP: 192.168.1.21       │   │
-│   │   Mask: 255.255.255.0    │   │
-│   │   Gateway: 192.168.1.1   │   │
-│   │   DNS: 8.8.8.8, 8.8.4.4  │   │
-│   │   Lease: 24 hours        │   │
-│   │                          │   │
-│   │ Decision: ACCEPT!        │   │
-│   │ Next: Send REQUEST       │   │
-│   └─────────────────────────┘   │
-└─────────────────────────────────┘
-```
+| Field | Value | Notes |
+|---|---|---|
+| op | `1` | BOOTREQUEST |
+| xid | **same as the Discover** (`0x3903F326`) | Same transaction continues |
+| flags | as before (`0x8000` in our example) | Tells the server how to reply |
+| **ciaddr** | **`0.0.0.0`** | The client does **not** have the address yet, so this stays 0 (only *renewing* clients fill it) |
+| yiaddr / siaddr / giaddr | 0 (giaddr set by a relay) | |
+| chaddr | `aa:bb:cc:11:22:33` | |
 
-**Router:**
+**Options:**
 
-```
-┌─────────────────────────────────┐
-│   Router                        │
-│   ┌─────────────────────────┐   │
-│   │ LAN MAC: A1:B1:C1:D1:E1:F1│
-│   │ LAN IP: 192.168.1.1     │   │
-│   │ DHCP Server: Running    │   │
-│   │                          │   │
-│   │ Lease Table (Pending):   │   │
-│   │ AA:BB:..→192.168.1.21   │   │
-│   │   State: OFFERED         │   │
-│   │   Expires if no REQUEST  │   │
-│   │                          │   │
-│   │ Waiting for REQUEST...   │   │
-│   └─────────────────────────┘   │
-└─────────────────────────────────┘
-```
+| Option | Value | Purpose |
+|---|---|---|
+| **53** | `3` (Request) | Message type |
+| **50** | `192.168.1.100` | **Requested IP address**: "the one from your Offer" |
+| **54** | `192.168.1.1` | **Server Identifier**: "I chose *your* offer" |
+| 61 | `01` + MAC | Client identifier |
+| 12 | `laptop` | Host name |
+| 55 | 1, 3, 6, 15, 28, 51 | Parameters the client wants (repeated) |
+| 255 | end | |
 
----
+**Options 50 + 54 are what make it a *selecting* Request:** the requested address goes in **option 50** (not `ciaddr`) and the chosen server in **option 54**. Any server whose ID does not match understands it lost.
 
-## PART 1: DHCP REQUEST
+### 2.2 Layer 4: UDP
 
-### The Scenario: Client Accepts Offer
+Source port **68** → destination port **67** (same as Discover).
 
-**Client's decision logic:**
+### 2.3 Layer 3: still a broadcast!
+
+| | Value |
+|---|---|
+| Source IP | `0.0.0.0` (the client still doesn't own an address) |
+| Destination IP | **`255.255.255.255`** |
+
+**Why broadcast when the client knows the server's address (from option 54)?**
+1. The client **must not use the offered address** as its source yet, so it has no valid source for a unicast conversation.
+2. **The other servers must hear it** to release their offers.
+3. It keeps things simple: the same rule as Discover.
+
+(When a client **renews** later, it *does* have an address and unicasts. See §7.)
+
+### 2.4 Layer 2: Ethernet
 
 ```
-Received OFFER from 192.168.1.1:
-  Your IP: 192.168.1.21
-  Subnet Mask: 255.255.255.0
-  Gateway: 192.168.1.1
-  DNS: 8.8.8.8, 8.8.4.4
-  Lease: 86400 seconds
-
-Validation:
-✓ Transaction ID matches my DISCOVER
-✓ Client MAC matches mine
-✓ Offered IP is valid (not 0.0.0.0, not broadcast)
-✓ Server ID provided (192.168.1.1)
-✓ Essential options present (mask, gateway)
-
-Decision: ACCEPT THIS OFFER
-
-Create REQUEST message:
-  Request IP: 192.168.1.21
-  From Server: 192.168.1.1
-  Same Transaction ID: 0x3903F326
+dst MAC: ff:ff:ff:ff:ff:ff   src MAC: aa:bb:cc:11:22:33   type 0x0800
 ```
+Flooded by the switch, just like the Discover.
+
+### 2.5 Byte-level view (with real checksums)
+
+```
+IPv4: 45 00 01 48 00 00 00 00 40 11 79 a6 | 00 00 00 00 | ff ff ff ff     (checksum 0x79a6, total len 328)
+UDP : 00 44  00 43  01 34  84 56                                           (68→67, length 308, checksum 0x8456)
+DHCP options:
+   63 82 53 63                          magic cookie
+   35 01 03                             53: Request
+   3d 07 01 aa bb cc 11 22 33           61: client-ID
+   32 04 c0 a8 01 64                    50: requested IP 192.168.1.100
+   36 04 c0 a8 01 01                    54: server ID   192.168.1.1
+   0c 06 6c 61 70 74 6f 70              12: "laptop"
+   37 06 01 03 06 0f 1c 33              55: parameter request list
+   ff                                   end
+```
+Frame size 342 bytes, same as Discover.
 
 ---
 
-### Why REQUEST is Necessary
-
-**Why not just configure the IP immediately after OFFER?**
+## 3. What the server does with the Request
 
 ```
-Problem scenarios:
-
-1. Multiple DHCP servers
-   Router A offers: 192.168.1.21
-   Router B offers: 192.168.1.150
-   Client must explicitly choose one
-   REQUEST message indicates choice
-   Rejected server releases offered IP back to pool
-
-2. Race conditions
-   Two clients discover simultaneously
-   Server might offer same IP to both
-   REQUEST allows server to detect conflict
-   Server can NAK (negative acknowledge) if IP already taken
-
-3. Network reliability
-   OFFER might get lost/corrupted
-   Client might not receive OFFER
-   Without REQUEST, server doesn't know if client accepted
-   REQUEST confirms "yes, I want this IP"
-
-4. Lease management
-   OFFER creates temporary reservation
-   REQUEST converts temporary → permanent lease
-   If no REQUEST received, reservation expires
-   IP returns to available pool
-
-REQUEST transforms "maybe" into "yes, please assign this IP to me"
+Server 192.168.1.1 receives the Request:
+  1. Is option 54 (server ID) == me?     No → I lost: release any address I had offered to this client, ignore.
+                                          Yes → continue
+  2. Is option 50 (requested IP) still available for this client (still reserved to it, valid for this subnet)?
+        Yes → COMMIT: write lease (MAC/ID, IP, start, expiry) to the lease database; send ACK
+        No  → send NAK ("that address isn't available; start over")
 ```
+**Lease record (conceptually):**
+
+```
+IP address       Client ID / MAC       Start           Expiry (start + 24 h)   State
+192.168.1.100    aa:bb:cc:11:22:33     2026-09-26 10:00  2026-09-27 10:00       ACTIVE   hostname=laptop
+```
+ISC dhcpd writes it to `dhcpd.leases`; dnsmasq to `dnsmasq.leases` (expiry-epoch, MAC, IP, hostname, client-ID); Windows Server to its DHCP database; consumer routers to their in-memory tables (the "DHCP client list" in the admin page).
 
 ---
 
-## Layer 7: Application Layer - DHCP REQUEST Message
+## 4. Part 2: The DHCP ACK
 
-### REQUEST Message Structure
+### 4.1 Layer 7
 
-```
-DHCP REQUEST Message:
-┌──────────────────────────────────────────┐
-│ Op: 1 (BOOTREQUEST)                      │  1 byte
-│ (Client → Server, like DISCOVER)         │
-├──────────────────────────────────────────┤
-│ Htype: 1 (Ethernet)                      │  1 byte
-├──────────────────────────────────────────┤
-│ Hlen: 6 (MAC address length)             │  1 byte
-├──────────────────────────────────────────┤
-│ Hops: 0 (no relays)                      │  1 byte
-├──────────────────────────────────────────┤
-│ Transaction ID: 0x3903F326               │  4 bytes
-│ (SAME as DISCOVER and OFFER!)            │
-├──────────────────────────────────────────┤
-│ Seconds: 0                               │  2 bytes
-├──────────────────────────────────────────┤
-│ Flags: 0x8000 (broadcast)                │  2 bytes
-├──────────────────────────────────────────┤
-│ Client IP: 0.0.0.0                       │  4 bytes
-│ (STILL no IP configured yet!)            │
-├──────────────────────────────────────────┤
-│ Your IP: 0.0.0.0                         │  4 bytes
-│ (Empty - requesting assignment)          │
-├──────────────────────────────────────────┤
-│ Server IP: 0.0.0.0                       │  4 bytes
-├──────────────────────────────────────────┤
-│ Gateway IP: 0.0.0.0                      │  4 bytes
-├──────────────────────────────────────────┤
-│ Client MAC: AA:BB:CC:DD:EE:FF            │  16 bytes (6 used)
-├──────────────────────────────────────────┤
-│ Server Name: (empty)                     │  64 bytes
-├──────────────────────────────────────────┤
-│ Boot Filename: (empty)                   │  128 bytes
-├──────────────────────────────────────────┤
-│ Magic Cookie: 0x63825363                 │  4 bytes
-├──────────────────────────────────────────┤
-│ DHCP Options:                            │  Variable
-│   Option 53: DHCP Message Type = 3       │  (3 = REQUEST)
-│   Option 54: Server Identifier           │  (192.168.1.1)
-│   Option 50: Requested IP Address        │  (192.168.1.21)
-│   Option 55: Parameter Request List      │
-│   Option 255: End                        │
-└──────────────────────────────────────────┘
+Nearly identical to the Offer (Chapter 36), with different message type and confirmed contents:
 
-Total: ~300 bytes
-```
+| Field / Option | Offer | **ACK** |
+|---|---|---|
+| op | 2 | 2 |
+| xid | copied | copied |
+| **yiaddr** | offered address | **the address now leased to you** (`192.168.1.100`) |
+| Option 53 | 2 | **5** (ACK) |
+| Options 54, 51, 58, 59, 1, 3, 6, 15, 28 | as configured | as configured, now final (a server may adjust the lease time) |
+
+The ACK is the authoritative configuration: the client should apply *these* values, even if they differ slightly from the Offer (e.g. the lease time).
+
+### 4.2 Layers 4-2
+
+Same choices as the Offer (Chapter 36 §5):
+
+| Case | Frame |
+|---|---|
+| Client flag `0x0000` | Unicast: MAC `aa:bb:cc:11:22:33` ← `11:22:33:44:55:66`, IP `192.168.1.1` → `192.168.1.100`, UDP 67→68 |
+| Client flag `0x8000` | Broadcast: `ff:ff:ff:ff:ff:ff`, IP `192.168.1.1` → `255.255.255.255`, UDP 67→68 |
+
+Example (unicast): IPv4 `45 00 01 4a … 40 11 f5 ed c0 a8 01 01 c0 a8 01 64`, UDP `00 43 00 44 01 36 bf 13`, DHCP payload 302 bytes, frame 344 bytes. Only the message type byte (`35 01 05`) and checksum differ from the Offer.
+
+### 4.3 The NAK
+
+If the server can't honor the Request it sends **DHCPNAK** (type 6), typically **broadcast** (the client's address is not valid on this link) with a message option (56) such as "wrong network". Causes:
+
+- The requested address was given to someone else or is outside the client's subnet (a laptop moved to a different network while trying to reuse its old lease: **INIT-REBOOT**),
+- the offer expired,
+- the server lost its lease database.
+
+The client's reaction: **discard the configuration and restart at Discover.** NAKs are why moving a laptop between offices "just works": the old address is rejected, and a fresh one is negotiated.
 
 ---
 
-### Key Fields Explained
-
-#### Op: 1 (BOOTREQUEST)
+## 5. After the ACK: the client's checklist
 
 ```
-Op: 1
-
-Same as DISCOVER (client → server request)
-
-DISCOVER: Op = 1
-OFFER: Op = 2 (server reply)
-REQUEST: Op = 1 (client request again)
-ACK: Op = 2 (server reply again)
+1. Receive ACK, validate xid / chaddr / options.
+2. Record the lease: address, mask, router, DNS, server ID, T1, T2, expiry.
+3. (Many clients) ARP-PROBE the address:  "Who has 192.168.1.100?"  sent with sender IP 0.0.0.0 (RFC 5227)
+      • If someone answers → conflict → send DHCPDECLINE (type 4), wait ~10 s, restart at Discover.
+      • Silence → the address is free.
+4. Configure the interface:  ip addr add 192.168.1.100/24 dev eth0
+                             ip route add default via 192.168.1.1
+                             write DNS servers (resolv.conf / systemd-resolved / registry)
+5. Send a gratuitous ARP / ARP announcement so neighbors update their caches.
+6. Start the timers T1, T2 and lease expiry. State = BOUND.
 ```
+Then the host can ARP for the router (Chapter 39), resolve names (DNS), and open connections.
 
-#### Client IP: Still 0.0.0.0
-
-**Critical understanding:**
-
-```
-Client IP: 0.0.0.0
-
-Why STILL 0.0.0.0?
-
-Client has received OFFER but hasn't configured IP yet!
-
-DHCP process:
-1. DISCOVER: Client IP = 0.0.0.0 (no IP)
-2. OFFER: Your IP = 192.168.1.21 (offered)
-3. REQUEST: Client IP = 0.0.0.0 (still no IP!) ← We are here
-4. ACK: Your IP = 192.168.1.21 (confirmed)
-5. AFTER ACK: Client configures 192.168.1.21
-
-Client only configures IP AFTER receiving ACK, not after OFFER!
-
-Why wait for ACK?
-- Ensures server commits to assignment
-- Prevents IP conflicts
-- Allows server to NAK if problem occurs
-```
+`DHCPDECLINE` tells the server "this address is in use elsewhere; don't lease it (for now)", so a rogue static host inside the pool doesn't keep causing conflicts.
 
 ---
 
-### Critical Options in REQUEST
+## 6. The lease timeline
 
-#### Option 53: Message Type = REQUEST
-
-```
-Option 53: DHCP Message Type
-Length: 1 byte
-Value: 3 (DHCPREQUEST)
-
-Message types:
-1 = DISCOVER
-2 = OFFER
-3 = REQUEST ← This message
-4 = DECLINE
-5 = ACK
-6 = NAK
-
-Identifies this as REQUEST message
-```
-
-#### Option 54: Server Identifier
+Lease time L = 24 h (86,400 s):
 
 ```
-Option 54: Server Identifier
-Length: 4 bytes
-Value: 192.168.1.1
-
-CRITICAL FIELD!
-
-Purpose: Identifies which server's OFFER client is accepting
-
-Scenario with multiple servers:
-Router A (192.168.1.1) offered 192.168.1.21
-Router B (192.168.2.1) offered 192.168.2.50
-
-Client sends REQUEST with:
-Option 54: 192.168.1.1
-Option 50: 192.168.1.21
-
-Router A sees: "Client chose me! Process REQUEST"
-Router B sees: "Client chose A, not me. Release 192.168.2.50 back to pool"
-
-Without Option 54:
-- Both servers would try to ACK
-- IP chaos!
+0h ─────── T1 = 0.5 L (12 h) ─────── T2 = 0.875 L (21 h) ─────── L (24 h)
+BOUND      RENEWING (unicast)        REBINDING (broadcast)        EXPIRED
 ```
 
-#### Option 50: Requested IP Address
+| Time | Client state | What it sends | Where |
+|---|---|---|---|
+| 0 | **BOUND** | Nothing, uses the address | |
+| **T1** (50%) | **RENEWING** | `DHCPREQUEST` with **ciaddr = its IP**, **unicast** to the server that granted the lease | If ACK arrives → lease timer restarts (a new full lease from now) |
+| **T2** (87.5%) | **REBINDING** | `DHCPREQUEST`, **broadcast** | "Any server: extend my lease" (the original may be dead) |
+| **L** (100%) | Expired | Must **stop using the address**, deconfigure, go back to INIT | Discover from scratch |
 
-```
-Option 50: Requested IP Address
-Length: 4 bytes
-Value: 192.168.1.21
+A **renewal Request** differs from the first:
 
-THE REQUESTED IP!
+| | Initial Request | Renewal (RENEWING) | Rebinding |
+|---|---|---|---|
+| Source IP | 0.0.0.0 | the client's leased IP | leased IP |
+| Destination IP | 255.255.255.255 | **the server's IP (unicast)** | 255.255.255.255 |
+| **ciaddr** | 0 | **its IP** | its IP |
+| Option 50 / 54 | present | **absent** | absent |
+| Frame dst MAC | broadcast | server's MAC (via ARP) | broadcast |
 
-Explicitly states: "I want this specific IP"
+The renewal is a normal unicast conversation, since the client now owns a valid address (byte-level: same layout as the Request, with `ciaddr = c0 a8 01 64`, no options 50/54, IP `192.168.1.100 → 192.168.1.1`, frame still 342 bytes).
 
-Why explicit?
-- "Your IP" field might be 0.0.0.0 in some REQUEST types
-- Option 50 is unambiguous
-- Server checks if IP still available
-- Server can NAK if IP now taken
-
-This is the IP from OFFER's "Your IP" field
-Client says: "I accept the 192.168.1.21 you offered me"
-```
+**Lease length is a policy trade-off:** short leases (minutes, guest Wi-Fi) reclaim addresses quickly but add DHCP traffic; long leases (days) reduce traffic but hold addresses for machines that left. Typical home routers: 12–24 h; corporate 8 h–8 days; hotspots 15 min–2 h.
 
 ---
 
-### REQUEST Message Breakdown
-
-**Human-readable interpretation:**
+## 7. The client state machine (RFC 2131)
 
 ```
-"Hello, DHCP Server at 192.168.1.1,
-
-This is computer with MAC address AA:BB:CC:DD:EE:FF.
-Transaction ID: 0x3903F326 (the same one I used in DISCOVER)
-
-You offered me IP address 192.168.1.21 with:
-- Subnet Mask: 255.255.255.0
-- Gateway: 192.168.1.1
-- DNS: 8.8.8.8, 8.8.4.4
-- Lease: 24 hours
-
-I accept your offer.
-I am formally requesting assignment of IP address 192.168.1.21.
-
-Please confirm this assignment by sending ACK.
-
-Thank you!"
+                      ┌──────────────────────── NAK / lease expired ────────────────────────┐
+                      ▼                                                                     │
+   ┌─────────┐   send DISCOVER   ┌───────────┐  receive OFFER(s)   ┌────────────┐  send REQUEST   │
+   │  INIT   │ ─────────────────►│ SELECTING │ ───────────────────►│ REQUESTING │ ────────────────┘
+   └─────────┘                   └───────────┘   choose one        └────────────┘
+       ▲  ▲                                                             │ receive ACK (address check OK)
+       │  └── DECLINE / conflict ───────────────────────────────────────┤
+       │                                                                 ▼
+   ┌─────────────┐  boot with an old lease    ┌────────┐   T1    ┌──────────┐   T2    ┌───────────┐
+   │ INIT-REBOOT │ ──── REQUEST (broadcast) ─►│ BOUND  │ ───────►│ RENEWING │ ───────►│ REBINDING │
+   └─────────────┘                            └────────┘         └──────────┘         └───────────┘
+                                                  ▲   ACK              │   ACK               │
+                                                  └────────────────────┴────────────────────┘
 ```
+- **INIT-REBOOT:** after a reboot or reconnect, a client with a still-valid remembered lease skips Discover/Offer and **broadcasts a Request** with option **50** (its old address) and *no* option 54 → the server ACKs it (fast, 2 packets) or NAKs it (moved to another network).
+- Other client-initiated messages: **DHCPRELEASE** (type 7: "I'm leaving; free my address", unicast to the server, sent when you disconnect or run `dhclient -r`) and **DHCPINFORM** (type 8: "I already have an address configured statically; just give me the options", the server replies with an ACK containing options only).
 
 ---
 
-### Application Layer Summary (REQUEST)
-
-```
-Application Layer creates DHCP REQUEST:
-
-┌────────────────────────────────────────┐
-│ "I ACCEPT YOUR OFFER"                  │
-│                                        │
-│ Message Type: REQUEST                  │
-│ Transaction ID: 0x3903F326 (consistent)│
-│ Server Chosen: 192.168.1.1             │
-│ Requested IP: 192.168.1.21             │
-│ My MAC: AA:BB:CC:DD:EE:FF              │
-│ My IP: Still 0.0.0.0 (not configured)  │
-│                                        │
-│ Size: ~300 bytes                       │
-└────────────────────────────────────────┘
-
-This REQUEST passes to Transport Layer (L4)
-```
-
----
-
-## Layer 4: Transport Layer - UDP Datagram (REQUEST)
-
-### UDP Structure
-
-```
-UDP Datagram:
-┌──────────────────────────────────────────┐
-│ Source Port: 68                          │  2 bytes
-│ (DHCP Client - same as DISCOVER)        │
-├──────────────────────────────────────────┤
-│ Destination Port: 67                     │  2 bytes
-│ (DHCP Server - same as DISCOVER)        │
-├──────────────────────────────────────────┤
-│ Length: 308 (8 header + 300 data)        │  2 bytes
-├──────────────────────────────────────────┤
-│ Checksum: 0x6C4E (calculated)            │  2 bytes
-├──────────────────────────────────────────┤
-│ Data: [DHCP REQUEST message]             │  300 bytes
-└──────────────────────────────────────────┘
-
-Total: 308 bytes
-
-Ports same as DISCOVER: 68 → 67
-Client initiating, so client port → server port
-```
-
----
-
-### Transport Layer Summary (REQUEST)
-
-```
-Transport Layer wraps REQUEST in UDP:
-
-┌────────────────────────────────────────┐
-│ UDP Header (8 bytes)                   │
-│ ┌────────────────────────────────────┐ │
-│ │ Source: 68 (client)                │ │
-│ │ Dest: 67 (server)                  │ │
-│ │ Length: 308                        │ │
-│ │ Checksum: 0x6C4E                   │ │
-│ └────────────────────────────────────┘ │
-│                                        │
-│ UDP Data (300 bytes)                   │
-│ ┌────────────────────────────────────┐ │
-│ │ [DHCP REQUEST]                     │ │
-│ │ I accept 192.168.1.21              │ │
-│ │ From server 192.168.1.1            │ │
-│ └────────────────────────────────────┘ │
-└────────────────────────────────────────┘
-
-This UDP datagram passes to Network Layer (L3)
-```
-
----
-
-## Layer 3: Network Layer - IP Packet (REQUEST)
-
-### The Addressing Decision
-
-**The critical question: What destination IP should client use?**
-
-```
-Client knows router's IP: 192.168.1.1
-(Learned from OFFER message)
-
-Options:
-A) Unicast to 192.168.1.1
-B) Broadcast to 255.255.255.255
-
-Which to choose?
-```
-
----
-
-### Why REQUEST Still Broadcasts
-
-**Despite knowing router's IP, REQUEST typically broadcasts:**
-
-```
-Reason 1: Client has NO IP configured yet
-- Client IP still 0.0.0.0
-- Cannot reliably send/receive unicast IP packets
-- Some network stacks reject sending from 0.0.0.0 to specific IP
-- Broadcast is safe
-
-Reason 2: Multiple DHCP servers scenario
-- Multiple servers might have sent OFFER
-- Client chose one server (Option 54)
-- Broadcast ensures ALL servers receive REQUEST
-- Chosen server ACKs
-- Rejected servers see REQUEST wasn't for them, release IP
-
-Example:
-Router A: Offered 192.168.1.21, Server ID: 192.168.1.1
-Router B: Offered 192.168.2.50, Server ID: 192.168.2.1
-
-Client REQUESTS with Option 54: 192.168.1.1
-
-Both routers receive broadcast REQUEST:
-Router A: "Option 54 = me! Process REQUEST, send ACK"
-Router B: "Option 54 ≠ me. Client chose A. Release 192.168.2.50 to pool"
-
-Reason 3: Network topology changes
-- Client might have moved to different network segment
-- Original server might be unreachable
-- Broadcast allows any DHCP server to respond
-- Failover scenarios
-
-RFC 2131 recommendation: Broadcast REQUEST in SELECTING state
-```
-
----
-
-### IP Packet Structure (REQUEST)
-
-```
-IPv4 Packet:
-┌──────────────────────────────────────────────┐
-│ Version: 4 (IPv4)           │ IHL: 5         │  1 byte
-├──────────────────────────────────────────────┤
-│ DSCP: 0  │ ECN: 0                            │  1 byte
-├──────────────────────────────────────────────┤
-│ Total Length: 328                            │  2 bytes
-│ (20 IP + 8 UDP + 300 DHCP)                  │
-├──────────────────────────────────────────────┤
-│ Identification: 0x9ABC                       │  2 bytes
-├──────────────────────────────────────────────┤
-│ Flags: 0x4000 (Don't Fragment)               │  2 bytes
-├──────────────────────────────────────────────┤
-│ TTL: 64                                      │  1 byte
-├──────────────────────────────────────────────┤
-│ Protocol: 17 (UDP)                           │  1 byte
-├──────────────────────────────────────────────┤
-│ Header Checksum: 0x9D5E                      │  2 bytes
-├──────────────────────────────────────────────┤
-│ Source IP: 0.0.0.0                           │  4 bytes
-│ (Client STILL has no IP!)                    │
-├──────────────────────────────────────────────┤
-│ Destination IP: 255.255.255.255              │  4 bytes
-│ (Broadcast - even though client knows       │
-│  router IP, still broadcasts for safety)     │
-├──────────────────────────────────────────────┤
-│ Payload: [UDP datagram]                      │  308 bytes
-└──────────────────────────────────────────────┘
-
-Total: 328 bytes
-
-Addressing same as DISCOVER:
-Source: 0.0.0.0 (no IP yet)
-Dest: 255.255.255.255 (broadcast)
-```
-
----
-
-### Alternative: Unicast REQUEST
-
-**Some implementations can unicast:**
-
-```
-Alternative (less common):
-Source IP: 0.0.0.0
-Dest IP: 192.168.1.1 (router's IP from OFFER)
-
-Requirements:
-- Network stack allows sending from 0.0.0.0 to specific IP
-- Single DHCP server environment
-- No server selection conflicts
-
-Trade-offs:
-Unicast advantages:
-- Reduces broadcast traffic
-- More efficient
-- Router easily identifies REQUEST is for it
-
-Broadcast advantages:
-- Universal compatibility
-- Handles multiple DHCP servers correctly
-- RFC 2131 compliant
-- Works in all scenarios
-
-Industry practice: Most implementations broadcast REQUEST
-```
-
----
-
-### Network Layer Summary (REQUEST)
-
-```
-Network Layer wraps UDP in IP packet:
-
-┌──────────────────────────────────────────────┐
-│ IP Header (20 bytes)                         │
-│ ┌──────────────────────────────────────────┐ │
-│ │ Version: 4, IHL: 5                       │ │
-│ │ Total Length: 328                        │ │
-│ │ TTL: 64, Protocol: 17 (UDP)              │ │
-│ │ Source IP: 0.0.0.0        ← Still none! │ │
-│ │ Dest IP: 255.255.255.255  ← Broadcast!  │ │
-│ └──────────────────────────────────────────┘ │
-│                                              │
-│ IP Payload (308 bytes)                       │
-│ ┌──────────────────────────────────────────┐ │
-│ │ [UDP: 68 → 67]                           │ │
-│ │ [DHCP REQUEST]                           │ │
-│ │ Accept 192.168.1.21 from 192.168.1.1    │ │
-│ └──────────────────────────────────────────┘ │
-└──────────────────────────────────────────────┘
-
-This IP packet passes to Data Link Layer (L2)
-```
-
----
-
-## Layer 2: Data Link Layer - Ethernet Frame (REQUEST)
-
-### MAC Addressing Decision
-
-**Client now knows router's MAC address:**
-
-```
-From OFFER frame:
-Source MAC: A1:B1:C1:D1:E1:F1 (router)
-
-Client learned: "Router's MAC is A1:B1:C1:D1:E1:F1"
-
-Question: Unicast or broadcast at Layer 2?
-
-Option A: Unicast to A1:B1:C1:D1:E1:F1
-- Efficient, only router receives frame
-- Works perfectly
-
-Option B: Broadcast to FF:FF:FF:FF:FF:FF
-- All devices receive frame
-- Consistent with broadcast at Layer 3
-- Handles multiple DHCP servers
-
-Most implementations: Unicast at L2, broadcast at L3
-(Best of both worlds)
-```
-
----
-
-### Ethernet Frame Structure (REQUEST)
-
-```
-Ethernet Frame (Typical Implementation):
-┌──────────────────────────────────────────────┐
-│ Preamble: 0xAA-AA-AA-AA-AA-AA-AA            │  7 bytes
-├──────────────────────────────────────────────┤
-│ SFD: 0xAB                                    │  1 byte
-├──────────────────────────────────────────────┤
-│ Destination MAC: A1:B1:C1:D1:E1:F1           │  6 bytes
-│ (Unicast to router - efficient)              │
-├──────────────────────────────────────────────┤
-│ Source MAC: AA:BB:CC:DD:EE:FF                │  6 bytes
-│ (Client NIC MAC)                             │
-├──────────────────────────────────────────────┤
-│ EtherType: 0x0800 (IPv4)                     │  2 bytes
-├──────────────────────────────────────────────┤
-│ Payload: [IP packet]                         │  328 bytes
-│   0.0.0.0 → 255.255.255.255                 │
-│   UDP 68 → 67                                │
-│   DHCP REQUEST                               │
-├──────────────────────────────────────────────┤
-│ FCS: 0xABCD1234                              │  4 bytes
-└──────────────────────────────────────────────┘
-
-Total: 346 bytes
-
-Layer 2: Unicast (A1:B1:C1:D1:E1:F1)
-Layer 3: Broadcast (255.255.255.255)
-
-Hybrid approach: Efficient + Compatible
-```
-
----
-
-### Data Link Layer Summary (REQUEST)
-
-```
-Data Link Layer wraps IP in Ethernet frame:
-
-┌────────────────────────────────────────────────┐
-│ Ethernet Header (14 bytes)                     │
-│ ┌────────────────────────────────────────────┐ │
-│ │ Dest MAC: A1:B1:C1:D1:E1:F1  ← Router MAC │ │
-│ │ Source MAC: AA:BB:CC:DD:EE:FF ← Client   │ │
-│ │ EtherType: 0x0800 (IPv4)                   │ │
-│ └────────────────────────────────────────────┘ │
-│                                                │
-│ Ethernet Payload (328 bytes)                   │
-│ ┌────────────────────────────────────────────┐ │
-│ │ [IP: 0.0.0.0 → 255.255.255.255]           │ │
-│ │ [UDP: 68 → 67]                             │ │
-│ │ [DHCP REQUEST for 192.168.1.21]           │ │
-│ └────────────────────────────────────────────┘ │
-│                                                │
-│ FCS (4 bytes): 0xABCD1234                      │
-└────────────────────────────────────────────────┘
-
-Total: 346 bytes
-Physical transmission to router
-```
-
----
-
-## Layer 1: Physical Layer (REQUEST)
-
-**Same as previous messages:**
-
-```
-346 bytes = 2,768 bits
-Encoding: Manchester/4B5B/8B10B
-Medium: Twisted-pair copper
-Voltage: Differential signaling
-
-Signal travels from client NIC to router NIC
-Decoded by router's physical layer
-Passed up through router's network stack
-```
-
----
-
-## Router Receives REQUEST
-
-### Router Processing
-
-```
-Step 1: Physical Layer
-  Electrical signals → Digital bits
-
-Step 2: Data Link Layer
-  ├─ Dest MAC: A1:B1:C1:D1:E1:F1 (matches my MAC - accept!)
-  ├─ FCS verification: Valid
-  └─ Extract IP packet
-
-Step 3: Network Layer
-  ├─ Dest IP: 255.255.255.255 (broadcast - accept)
-  ├─ Source IP: 0.0.0.0 (client has no IP - expected)
-  ├─ Protocol: 17 (UDP)
-  └─ Extract UDP datagram
-
-Step 4: Transport Layer
-  ├─ Dest Port: 67 (DHCP server - accept!)
-  ├─ Source Port: 68 (DHCP client)
-  └─ Extract DHCP message
-
-Step 5: Application Layer - DHCP Server
-  ├─ Message Type: REQUEST (3)
-  ├─ Transaction ID: 0x3903F326
-  ├─ Option 54 (Server ID): 192.168.1.1 (That's me!)
-  ├─ Option 50 (Requested IP): 192.168.1.21
-  ├─ Client MAC: AA:BB:CC:DD:EE:FF
-  └─ DECISION: Process this REQUEST
-```
-
----
-
-### Router's DHCP Server Logic
-
-```
-DHCP Server receives REQUEST:
-
-┌─────────────────────────────────────────┐
-│ REQUEST Analysis                        │
-│ From MAC: AA:BB:CC:DD:EE:FF             │
-│ Transaction ID: 0x3903F326              │
-│ Server ID (Option 54): 192.168.1.1      │
-│ Requested IP (Option 50): 192.168.1.21  │
-└─────────────────────────────────────────┘
-              ↓
-┌─────────────────────────────────────────┐
-│ Validation Checks                       │
-│ ✓ Server ID matches me (192.168.1.1)   │
-│ ✓ Transaction ID matches OFFER I sent  │
-│ ✓ Requested IP is what I offered       │
-│ ✓ IP still available (not taken)        │
-│ ✓ Client MAC matches original requester│
-└─────────────────────────────────────────┘
-              ↓
-┌─────────────────────────────────────────┐
-│ Update DHCP Lease Table                 │
-│                                         │
-│ MAC: AA:BB:CC:DD:EE:FF                  │
-│ IP: 192.168.1.21                        │
-│ State: OFFERED → BOUND (committed!)     │
-│ Lease Start: 2026-03-12 10:15:30       │
-│ Lease Expires: 2026-03-13 10:15:30     │
-│ Duration: 86400 seconds (24 hours)      │
-│                                         │
-│ This IP is now OFFICIALLY ASSIGNED      │
-│ No other client can receive this IP     │
-└─────────────────────────────────────────┘
-              ↓
-┌─────────────────────────────────────────┐
-│ Prepare DHCP ACKNOWLEDGE                │
-│ Confirm assignment of 192.168.1.21      │
-│ Include all configuration options       │
-│ Send ACK to client                      │
-└─────────────────────────────────────────┘
-```
-
----
-
-### DHCP Lease Table Entry
-
-**What gets stored:**
-
-```
-DHCP Lease Table:
-┌──────────────────────────────────────────────────────┐
-│ Entry 1:                                             │
-│ ├─ MAC Address: AA:BB:CC:DD:EE:FF                    │
-│ ├─ IP Address: 192.168.1.21                          │
-│ ├─ Hostname: (optional, from Option 12)              │
-│ ├─ State: BOUND                                      │
-│ ├─ Lease Start: 2026-03-12 10:15:30 UTC             │
-│ ├─ Lease Duration: 86400 seconds                     │
-│ ├─ Lease Expires: 2026-03-13 10:15:30 UTC           │
-│ ├─ Renewal Time (T1): 2026-03-12 22:15:30 (50%)     │
-│ ├─ Rebinding Time (T2): 2026-03-13 07:15:30 (87.5%) │
-│ └─ Transaction ID: 0x3903F326                        │
-└──────────────────────────────────────────────────────┘
-
-State transitions:
-FREE → OFFERED (after OFFER sent)
-OFFERED → BOUND (after REQUEST received)
-BOUND → EXPIRED (after lease duration)
-EXPIRED → FREE (IP returns to pool)
-```
-
-**Lease management:**
-
-```
-Renewal process (T1 - 50% of lease):
-- At 12 hours (50% of 24h lease)
-- Client sends REQUEST to same server
-- Server responds with ACK, extends lease
-- Lease timer resets
-
-Rebinding process (T2 - 87.5% of lease):
-- At 21 hours (87.5% of 24h lease)
-- If renewal failed, client broadcasts REQUEST
-- Any DHCP server can respond
-- Failover mechanism
-
-Expiration:
-- At 24 hours (100% of lease)
-- If no renewal/rebinding, lease expires
-- Client must release IP and rediscover
-- IP returns to DHCP pool
-```
-
----
-
-## PART 2: DHCP ACKNOWLEDGE (ACK)
-
-### Router Sends Final Confirmation
-
-**Router's ACK decision:**
-
-```
-✓ REQUEST validated
-✓ IP still available
-✓ Lease entry created in BOUND state
-✓ MAC → IP mapping stored
-
-Action: Send ACKNOWLEDGE to client
-Confirm: "192.168.1.21 is officially yours!"
-```
-
----
-
-## Layer 7: Application Layer - DHCP ACK Message
-
-### ACK Message Structure
-
-```
-DHCP ACK Message:
-┌──────────────────────────────────────────┐
-│ Op: 2 (BOOTREPLY)                        │  1 byte
-│ (Server → Client, like OFFER)            │
-├──────────────────────────────────────────┤
-│ Htype: 1 (Ethernet)                      │  1 byte
-├──────────────────────────────────────────┤
-│ Hlen: 6                                  │  1 byte
-├──────────────────────────────────────────┤
-│ Hops: 0                                  │  1 byte
-├──────────────────────────────────────────┤
-│ Transaction ID: 0x3903F326               │  4 bytes
-│ (SAME throughout entire DORA!)           │
-├──────────────────────────────────────────┤
-│ Seconds: 0                               │  2 bytes
-├──────────────────────────────────────────┤
-│ Flags: 0x8000                            │  2 bytes
-├──────────────────────────────────────────┤
-│ Client IP: 0.0.0.0                       │  4 bytes
-│ (Client still hasn't configured IP)      │
-├──────────────────────────────────────────┤
-│ Your IP: 192.168.1.21                    │  4 bytes
-│ (THE CONFIRMED IP - FINAL ASSIGNMENT!)   │
-├──────────────────────────────────────────┤
-│ Server IP: 192.168.1.1                   │  4 bytes
-├──────────────────────────────────────────┤
-│ Gateway IP: 0.0.0.0                      │  4 bytes
-├──────────────────────────────────────────┤
-│ Client MAC: AA:BB:CC:DD:EE:FF            │  16 bytes
-├──────────────────────────────────────────┤
-│ Server Name: (empty)                     │  64 bytes
-├──────────────────────────────────────────┤
-│ Boot Filename: (empty)                   │  128 bytes
-├──────────────────────────────────────────┤
-│ Magic Cookie: 0x63825363                 │  4 bytes
-├──────────────────────────────────────────┤
-│ DHCP Options:                            │
-│   Option 53: DHCP Message Type = 5       │  (5 = ACK)
-│   Option 54: Server Identifier           │  (192.168.1.1)
-│   Option 51: Lease Time                  │  (86400 sec)
-│   Option 58: Renewal Time (T1)           │  (43200 sec)
-│   Option 59: Rebinding Time (T2)         │  (75600 sec)
-│   Option 1: Subnet Mask                  │  (255.255.255.0)
-│   Option 3: Router                       │  (192.168.1.1)
-│   Option 6: DNS                          │  (8.8.8.8, 8.8.4.4)
-│   Option 15: Domain Name                 │  (home.local)
-│   Option 255: End                        │
-└──────────────────────────────────────────┘
-
-Total: ~300 bytes
-```
-
----
-
-### ACK vs OFFER Differences
-
-```
-Field/Option           OFFER                 ACK
-----------------------------------------------------------------
-Op                     2 (REPLY)             2 (REPLY)
-Transaction ID         0x3903F326            0x3903F326
-Your IP                192.168.1.21          192.168.1.21
-Option 53              2 (OFFER)             5 (ACK)
-Lease State (server)   OFFERED               BOUND
-Meaning                "I can offer this"    "This is yours!"
-Client action          Send REQUEST          Configure IP!
-```
-
----
-
-### Critical Options in ACK
-
-#### Option 53: Message Type = ACK
-
-```
-Option 53: DHCP Message Type
-Value: 5 (DHCPACK)
-
-Distinguishes ACK from OFFER (both have Op=2)
-
-Message types:
-1 = DISCOVER
-2 = OFFER
-3 = REQUEST
-4 = DECLINE
-5 = ACK ← Final confirmation!
-6 = NAK (negative acknowledge)
-```
-
-#### Option 58: Renewal Time (T1)
-
-```
-Option 58: Renewal Time Value (T1)
-Length: 4 bytes
-Value: 43200 seconds (12 hours)
-
-When client should attempt renewal
-
-Calculation: 50% of lease time
-Lease: 86400 seconds
-T1: 43200 seconds (50%)
-
-At T1, client sends REQUEST to same server trying to renew
-```
-
-#### Option 59: Rebinding Time (T2)
-
-```
-Option 59: Rebinding Time Value (T2)
-Length: 4 bytes
-Value: 75600 seconds (21 hours)
-
-When client should attempt rebinding
-
-Calculation: 87.5% of lease time
-Lease: 86400 seconds
-T2: 75600 seconds (87.5%)
-
-At T2, if renewal failed, client broadcasts REQUEST to any server
-```
-
----
-
-### Application Layer Summary (ACK)
-
-```
-Application Layer creates DHCP ACK:
-
-┌────────────────────────────────────────┐
-│ "CONFIRMED! IP IS YOURS!"              │
-│                                        │
-│ Message Type: ACK                      │
-│ Transaction ID: 0x3903F326 (final)     │
-│ Your IP: 192.168.1.21 (ASSIGNED!)      │
-│ Lease: 24 hours                        │
-│ Renewal (T1): 12 hours                 │
-│ Rebinding (T2): 21 hours               │
-│ All configuration included             │
-│                                        │
-│ Size: ~300 bytes                       │
-└────────────────────────────────────────┘
-
-ACK passes to Transport Layer (L4)
-```
-
----
-
-## Layer 4: Transport Layer - UDP Datagram (ACK)
-
-```
-UDP Datagram:
-┌──────────────────────────────────────────┐
-│ Source Port: 67 (DHCP Server)            │  2 bytes
-├──────────────────────────────────────────┤
-│ Destination Port: 68 (DHCP Client)       │  2 bytes
-├──────────────────────────────────────────┤
-│ Length: 308                              │  2 bytes
-├──────────────────────────────────────────┤
-│ Checksum: 0x7D5F                         │  2 bytes
-├──────────────────────────────────────────┤
-│ Data: [DHCP ACK message]                 │  300 bytes
-└──────────────────────────────────────────┘
-
-Ports: 67 → 68 (server → client)
-Same as OFFER
-```
-
----
-
-## Layer 3: Network Layer - IP Packet (ACK)
-
-### The Final Addressing Decision
-
-**Can router finally unicast at Layer 3?**
-
-```
-Client requested 192.168.1.21
-Router is ACKing assignment of 192.168.1.21
-
-Question: Can router use 192.168.1.21 as destination?
-
-Answer: Depends!
-
-Option A: Unicast to 192.168.1.21
-- Client hasn't configured IP yet!
-- Client won't accept packet to unconfigured IP
-- FAIL
-
-Option B: Broadcast to 255.255.255.255
-- Client accepts broadcast
-- Safe, guaranteed delivery
-- Most implementations use this
-
-RFC 2131: Router SHOULD broadcast ACK if client's IP was 0.0.0.0
-
-After client configures IP (post-ACK):
-- Future renewals can use unicast
-- Client has functional IP stack
-- Efficient communication
-```
-
----
-
-### IP Packet Structure (ACK)
-
-```
-IPv4 Packet:
-┌──────────────────────────────────────────────┐
-│ Version: 4, IHL: 5                           │  1 byte
-├──────────────────────────────────────────────┤
-│ DSCP: 0, ECN: 0                              │  1 byte
-├──────────────────────────────────────────────┤
-│ Total Length: 328                            │  2 bytes
-├──────────────────────────────────────────────┤
-│ Identification: 0xDEF0                       │  2 bytes
-├──────────────────────────────────────────────┤
-│ Flags: 0x4000, Fragment Offset: 0            │  2 bytes
-├──────────────────────────────────────────────┤
-│ TTL: 64                                      │  1 byte
-├──────────────────────────────────────────────┤
-│ Protocol: 17 (UDP)                           │  1 byte
-├──────────────────────────────────────────────┤
-│ Header Checksum: 0xAE6F                      │  2 bytes
-├──────────────────────────────────────────────┤
-│ Source IP: 192.168.1.1 (Router)              │  4 bytes
-├──────────────────────────────────────────────┤
-│ Destination IP: 255.255.255.255              │  4 bytes
-│ (Broadcast - client hasn't configured yet)   │
-├──────────────────────────────────────────────┤
-│ Payload: [UDP with DHCP ACK]                 │  308 bytes
-└──────────────────────────────────────────────┘
-
-Total: 328 bytes
-
-Still broadcast at Layer 3!
-Client will only configure IP AFTER receiving this ACK
-```
-
----
-
-## Layer 2: Data Link Layer - Ethernet Frame (ACK)
-
-### MAC Addressing
-
-**Router can unicast at Layer 2:**
-
-```
-Router knows client MAC: AA:BB:CC:DD:EE:FF
-(From entire DORA exchange)
-
-Destination MAC: AA:BB:CC:DD:EE:FF (client)
-Source MAC: A1:B1:C1:D1:E1:F1 (router)
-
-Layer 2 unicast is safe and efficient
-Client NIC accepts frames addressed to its MAC
-```
-
----
-
-### Ethernet Frame Structure (ACK)
-
-```
-Ethernet Frame:
-┌──────────────────────────────────────────────┐
-│ Preamble: 0xAA-AA-AA-AA-AA-AA-AA            │  7 bytes
-├──────────────────────────────────────────────┤
-│ SFD: 0xAB                                    │  1 byte
-├──────────────────────────────────────────────┤
-│ Destination MAC: AA:BB:CC:DD:EE:FF           │  6 bytes
-│ (Client - unicast)                           │
-├──────────────────────────────────────────────┤
-│ Source MAC: A1:B1:C1:D1:E1:F1                │  6 bytes
-│ (Router)                                     │
-├──────────────────────────────────────────────┤
-│ EtherType: 0x0800 (IPv4)                     │  2 bytes
-├──────────────────────────────────────────────┤
-│ Payload: [IP packet with ACK]                │  328 bytes
-│   192.168.1.1 → 255.255.255.255             │
-│   UDP 67 → 68                                │
-│   DHCP ACK                                   │
-├──────────────────────────────────────────────┤
-│ FCS: 0x12345678                              │  4 bytes
-└──────────────────────────────────────────────┘
-
-Total: 346 bytes
-
-Layer 2: Unicast to client MAC
-Layer 3: Broadcast IP
-```
-
----
-
-## Layer 1: Physical Layer (ACK)
-
-```
-346 bytes transmitted as electrical signals
-Router NIC → Client NIC
-Decoded by client's physical layer
-Passed up through client's network stack
-```
-
----
-
-## Client Receives ACK - Network Configuration
-
-### Client Processing
-
-```
-Step 1-4: Frame → IP → UDP → DHCP message extraction
-
-Step 5: Application Layer - DHCP Client
-  ├─ Message Type: ACK (5)
-  ├─ Transaction ID: 0x3903F326 (matches!)
-  ├─ Your IP: 192.168.1.21 (ASSIGNED!)
-  ├─ Subnet Mask: 255.255.255.0
-  ├─ Gateway: 192.168.1.1
-  ├─ DNS: 8.8.8.8, 8.8.4.4
-  ├─ Lease: 86400 seconds
-  ├─ T1: 43200 seconds
-  ├─ T2: 75600 seconds
-  └─ DECISION: CONFIGURE NETWORK INTERFACE!
-```
-
----
-
-### Network Interface Configuration
-
-**Client's OS configures network interface:**
-
-```
-Linux Example:
-$ sudo ip addr add 192.168.1.21/24 dev eth0
-$ sudo ip route add default via 192.168.1.1
-$ echo "nameserver 8.8.8.8" | sudo tee /etc/resolv.conf
-$ echo "nameserver 8.8.4.4" | sudo tee -a /etc/resolv.conf
-
-Windows Example:
-netsh interface ip set address "Ethernet" static 192.168.1.21 255.255.255.0 192.168.1.1
-netsh interface ip set dns "Ethernet" static 8.8.8.8
-netsh interface ip add dns "Ethernet" 8.8.4.4 index=2
-
-Result:
-┌────────────────────────────────────────┐
-│ Network Interface: eth0/Ethernet       │
-│ ┌────────────────────────────────────┐ │
-│ │ IP Address: 192.168.1.21           │ │
-│ │ Subnet Mask: 255.255.255.0         │ │
-│ │ Network: 192.168.1.0/24            │ │
-│ │ Broadcast: 192.168.1.255           │ │
-│ │ Gateway: 192.168.1.1               │ │
-│ │ DNS: 8.8.8.8, 8.8.4.4              │ │
-│ │ Lease Expires: 2026-03-13 10:15:30│ │
-│ │ State: BOUND                       │ │
-│ └────────────────────────────────────┘ │
-│ NETWORK INTERFACE IS NOW OPERATIONAL!  │
-└────────────────────────────────────────┘
-```
-
----
-
-### Client State Transition
-
-```
-Before ACK:
-  State: INIT → SELECTING → REQUESTING
-  IP: None
-  Network: Inaccessible
-
-After ACK:
-  State: BOUND
-  IP: 192.168.1.21 (configured)
-  Network: FULLY OPERATIONAL!
-
-Client can now:
-✓ Send/receive IP packets
-✓ Communicate with local network devices
-✓ Route to internet via gateway
-✓ Resolve domain names via DNS
-✓ Participate as full network citizen
-```
-
----
-
-### Renewal Timer Setup
-
-**Client schedules renewal:**
-
-```
-Lease Start: 2026-03-12 10:15:30
-Lease Duration: 86400 seconds (24 hours)
-Lease Expires: 2026-03-13 10:15:30
-
-T1 (Renewal Time): 43200 seconds (50%)
-  Trigger at: 2026-03-12 22:15:30
-  Action: Send REQUEST to 192.168.1.1 (unicast)
-  Goal: Renew lease, extend expiration
-
-T2 (Rebinding Time): 75600 seconds (87.5%)
-  Trigger at: 2026-03-13 07:15:30
-  Action: Broadcast REQUEST to any DHCP server
-  Goal: Rebind if original server unreachable
-
-Expiration: 86400 seconds (100%)
-  Trigger at: 2026-03-13 10:15:30
-  Action: Release IP, return to INIT state
-  Goal: Prevent IP conflict
-
-Client sets timers:
-- Renewal timer (T1): 12 hours from now
-- Rebinding timer (T2): 21 hours from now
-- Expiration timer: 24 hours from now
-```
-
----
-
-## The Complete DORA Flow
-
-### All Four Messages
-
-```
-MESSAGE 1: DISCOVER (Client → Router)
-┌────────────────────────────────────────────────┐
-│ Layer 7: "I need an IP"                        │
-│ Layer 4: 68 → 67                               │
-│ Layer 3: 0.0.0.0 → 255.255.255.255 (broadcast) │
-│ Layer 2: AA:BB:.. → FF:FF:FF:FF:FF:FF          │
-│ Transaction ID: 0x3903F326                     │
-└────────────────────────────────────────────────┘
-                      ↓
-MESSAGE 2: OFFER (Router → Client)
-┌────────────────────────────────────────────────┐
-│ Layer 7: "I offer 192.168.1.21"                │
-│ Layer 4: 67 → 68                               │
-│ Layer 3: 192.168.1.1 → 255.255.255.255         │
-│ Layer 2: A1:B1:.. → AA:BB:.. (unicast typical)│
-│ Transaction ID: 0x3903F326                     │
-│ Configuration: IP, mask, gateway, DNS, lease   │
-└────────────────────────────────────────────────┘
-                      ↓
-MESSAGE 3: REQUEST (Client → Router)
-┌────────────────────────────────────────────────┐
-│ Layer 7: "I accept 192.168.1.21"               │
-│ Layer 4: 68 → 67                               │
-│ Layer 3: 0.0.0.0 → 255.255.255.255 (broadcast) │
-│ Layer 2: AA:BB:.. → A1:B1:.. (unicast typical)│
-│ Transaction ID: 0x3903F326                     │
-│ Option 54: Server 192.168.1.1                  │
-│ Option 50: Requested 192.168.1.21              │
-└────────────────────────────────────────────────┘
-                      ↓
-MESSAGE 4: ACKNOWLEDGE (Router → Client)
-┌────────────────────────────────────────────────┐
-│ Layer 7: "Confirmed! Now yours!"                │
-│ Layer 4: 67 → 68                               │
-│ Layer 3: 192.168.1.1 → 255.255.255.255         │
-│ Layer 2: A1:B1:.. → AA:BB:.. (unicast)        │
-│ Transaction ID: 0x3903F326                     │
-│ Your IP: 192.168.1.21 (FINAL!)                 │
-│ Lease: 24h, T1: 12h, T2: 21h                   │
-└────────────────────────────────────────────────┘
-                      ↓
-          CLIENT CONFIGURES IP!
-      NETWORK COMMUNICATION BEGINS!
-```
-
----
-
-### Transaction ID Consistency
-
-**Critical throughout:**
-
-```
-DISCOVER: Transaction ID = 0x3903F326
-OFFER:    Transaction ID = 0x3903F326 ✓
-REQUEST:  Transaction ID = 0x3903F326 ✓
-ACK:      Transaction ID = 0x3903F326 ✓
-
-All four messages use SAME Transaction ID
-
-Why critical:
-- Links messages in DORA sequence
-- Allows client to match OFFER/ACK to its DISCOVER/REQUEST
-- Handles multiple simultaneous DHCP transactions
-- Prevents message confusion
-
-Without Transaction ID:
-- Client receives ACK meant for different computer
-- IP conflicts
-- Network chaos
-```
-
----
-
-### Addressing Strategy Summary
-
-```
-Layer 3 (IP) Addressing:
-┌──────────┬─────────────┬─────────────────┬─────────────┐
-│ Message  │ Source IP   │ Dest IP         │ Why         │
-├──────────┼─────────────┼─────────────────┼─────────────┤
-│ DISCOVER │ 0.0.0.0     │ 255.255.255.255 │ No IP yet   │
-│ OFFER    │ 192.168.1.1 │ 255.255.255.255 │ Client no IP│
-│ REQUEST  │ 0.0.0.0     │ 255.255.255.255 │ Still no IP │
-│ ACK      │ 192.168.1.1 │ 255.255.255.255 │ Still no IP!│
-└──────────┴─────────────┴─────────────────┴─────────────┘
-
-Layer 2 (MAC) Addressing:
-┌──────────┬─────────────┬─────────────────┬─────────────┐
-│ Message  │ Source MAC  │ Dest MAC        │ Why         │
-├──────────┼─────────────┼─────────────────┼─────────────┤
-│ DISCOVER │ AA:BB:..    │ FF:FF:FF:FF:FF:FF│ Find server│
-│ OFFER    │ A1:B1:..    │ AA:BB:.. *      │ To client   │
-│ REQUEST  │ AA:BB:..    │ A1:B1:.. *      │ To router   │
-│ ACK      │ A1:B1:..    │ AA:BB:..        │ To client   │
-└──────────┴─────────────┴─────────────────┴─────────────┘
-
-* Some implementations use broadcast FF:FF:FF:FF:FF:FF
-
-Pattern: Layer 3 always broadcast during DORA,
-        Layer 2 can unicast (more efficient)
-```
-
----
-
-## Packet Capture: Complete DORA
-
-### tcpdump Captures
+## 8. Renewal for real: what you can see
 
 ```bash
-$ sudo tcpdump -i eth0 -vvv -n port 67 or port 68
+ip -d addr show eth0                     # valid_lft 85231sec preferred_lft 85231sec  ← the remaining lease
+nmcli -f DHCP4 device show eth0          # dhcp_lease_time, expiry, options
+cat /var/lib/dhcp/dhclient*.leases       # (Debian/Ubuntu dhclient) lease {...} with renew/rebind/expire dates
+resolvectl status | head -30             # DNS obtained from the lease
+sudo dhclient -r eth0                    # DHCPRELEASE
+sudo dhclient -v eth0                    # a fresh DORA
+```
+`valid_lft` counts down to 0 at expiry; when it passes T1 you will see a renewal in the logs (`journalctl -u NetworkManager | grep -i dhcp`, or `DHCPREQUEST for … to <server>`).
 
-# DISCOVER
-10:15:20.123 IP 0.0.0.0.68 > 255.255.255.255.67: 
-  BOOTP/DHCP, Request, length 300, xid 0x3903f326
-  Client-Ethernet-Address aa:bb:cc:dd:ee:ff
-  DHCP-Message Option 53: Discover
+Windows: `ipconfig /all` (shows **Lease Obtained** and **Lease Expires**), `ipconfig /release`, `ipconfig /renew`. macOS: `ipconfig getpacket en0`.
 
-# OFFER
-10:15:20.145 IP 192.168.1.1.67 > 255.255.255.255.68:
-  BOOTP/DHCP, Reply, length 300, xid 0x3903f326
-  Your-IP 192.168.1.21
-  Server-IP 192.168.1.1
-  DHCP-Message Option 53: Offer
-  Server-ID Option 54: 192.168.1.1
-  Subnet-Mask Option 1: 255.255.255.0
-  Default-Gateway Option 3: 192.168.1.1
-  DNS Option 6: 8.8.8.8, 8.8.4.4
-  Lease-Time Option 51: 86400
+---
 
-# REQUEST
-10:15:20.167 IP 0.0.0.0.68 > 255.255.255.255.67:
-  BOOTP/DHCP, Request, length 300, xid 0x3903f326
-  Client-Ethernet-Address aa:bb:cc:dd:ee:ff
-  DHCP-Message Option 53: Request
-  Server-ID Option 54: 192.168.1.1
-  Requested-IP Option 50: 192.168.1.21
+## 9. Lab: complete DORA and renewal in namespaces
 
-# ACK
-10:15:20.189 IP 192.168.1.1.67 > 255.255.255.255.68:
-  BOOTP/DHCP, Reply, length 300, xid 0x3903f326
-  Your-IP 192.168.1.21
-  DHCP-Message Option 53: ACK
-  Server-ID Option 54: 192.168.1.1
-  Lease-Time Option 51: 86400
-  Renewal-Time Option 58: 43200
-  Rebinding-Time Option 59: 75600
+Reuse the setup of Chapter 35 §14.2 (namespaces `srv` and `cli`, dnsmasq, tcpdump), but with a **very short lease** so you can watch T1 happen:
 
-Total DORA time: 66 milliseconds
-Client now has IP: 192.168.1.21
+```bash
+sudo ip netns add srv; sudo ip netns add cli
+sudo ip link add s0 type veth peer name c0
+sudo ip link set s0 netns srv; sudo ip link set c0 netns cli
+sudo ip netns exec srv ip addr add 192.168.50.1/24 dev s0; sudo ip netns exec srv ip link set s0 up
+sudo ip netns exec cli ip link set c0 up
+sudo ip netns exec srv tcpdump -nn -vv -e -i s0 -w /tmp/dora.pcap 'udp port 67 or udp port 68' &
+sleep 1
+# lease of 2 minutes → T1 ≈ 60 s. (dnsmasq's minimum lease is 2 minutes.)
+sudo ip netns exec srv dnsmasq --no-daemon --port=0 --interface=s0 --bind-interfaces \
+     --dhcp-range=192.168.50.100,192.168.50.150,2m --dhcp-leasefile=/tmp/dora.leases --log-dhcp &
+sleep 1
+# this time let dhclient CONFIGURE the interface (it only changes the namespace's c0);
+# the -sf script would touch /etc/resolv.conf, so use a tiny script that configures only address+route:
+cat > /tmp/dh-script.sh <<'EOF'
+#!/bin/sh
+case "$reason" in
+  BOUND|RENEW|REBIND|REBOOT) ip addr flush dev "$interface"; ip addr add "$new_ip_address/$new_subnet_mask" dev "$interface" 2>/dev/null || ip addr add "$new_ip_address/24" dev "$interface";;
+esac
+exit 0
+EOF
+chmod +x /tmp/dh-script.sh
+sudo ip netns exec cli dhclient -d -v -sf /tmp/dh-script.sh -lf /tmp/dora.lease -pf /tmp/dora.pid c0 &
+sleep 5
+sudo ip netns exec cli ip -br addr          # 192.168.50.10x/24 configured
+sleep 65                                    # wait past T1 (≈60 s)
+sudo pkill tcpdump
+sudo tcpdump -nn -vv -e -r /tmp/dora.pcap 2>/dev/null | grep -E 'DHCP-Message|Request|Discover|Offer|ACK|length' | head -40
+```
+Look for **six** packets: Discover (broadcast), Offer, Request (broadcast, options 50 & 54, ciaddr 0), ACK, then at ~60 s a **Request unicast** to `192.168.50.1` with `ciaddr` set (renewal) and its ACK. Compare the two Requests' `Client-IP` (`ciaddr`) fields, IP addresses and destination MACs.
+
+Also try:
+
+```bash
+sudo ip netns exec cli dhclient -r -v -sf /tmp/dh-script.sh -lf /tmp/dora.lease -pf /tmp/dora.pid c0   # RELEASE packet (unicast, type 7)
+cat /tmp/dora.leases                                                                            # the server's table: entry gone
+```
+Clean up:
+```bash
+sudo pkill dhclient; sudo pkill dnsmasq; sudo pkill tcpdump
+sudo ip netns del srv; sudo ip netns del cli; rm -f /tmp/dora.* /tmp/dh-script.sh
 ```
 
 ---
 
-### Wireshark Analysis
+## 10. Failure and edge cases
 
-```
-Wireshark Display Filter: bootp
-
-Frame 1: DHCP DISCOVER
-  ├─ Time: 0.000000 (baseline)
-  ├─ Src: 0.0.0.0, Dst: 255.255.255.255
-  ├─ Transaction ID: 0x3903f326
-  └─ Message: Discover
-
-Frame 2: DHCP OFFER  
-  ├─ Time: 0.022000 (22ms after DISCOVER)
-  ├─ Src: 192.168.1.1, Dst: 255.255.255.255
-  ├─ Transaction ID: 0x3903f326
-  ├─ Your IP: 192.168.1.21
-  └─ Message: Offer
-
-Frame 3: DHCP REQUEST
-  ├─ Time: 0.044000 (44ms, 22ms after OFFER)
-  ├─ Src: 0.0.0.0, Dst: 255.255.255.255
-  ├─ Transaction ID: 0x3903f326
-  ├─ Server ID: 192.168.1.1
-  ├─ Requested IP: 192.168.1.21
-  └─ Message: Request
-
-Frame 4: DHCP ACK
-  ├─ Time: 0.066000 (66ms, 22ms after REQUEST)
-  ├─ Src: 192.168.1.1, Dst: 255.255.255.255
-  ├─ Transaction ID: 0x3903f326
-  ├─ Your IP: 192.168.1.21
-  └─ Message: ACK
-
-Follow DHCP stream:
-All four messages share Transaction ID: 0x3903f326
-Complete handshake in 66 milliseconds
-```
+| Situation | What happens |
+|---|---|
+| **Request unanswered** | Client retries with backoff, eventually restarts from Discover |
+| **NAK** | Client drops the config and starts over |
+| **Address conflict** found by ARP probe | DECLINE, wait, restart |
+| **Server dies during the lease** | Client renews at T1 (no answer), then broadcasts at T2 (another server may take over, if it has the lease data: failover pair), else expires at L and re-Discovers |
+| **Laptop changes network** | Link-change triggers INIT-REBOOT → NAK from the new network's server → fresh DORA |
+| **Two servers hand out overlapping pools** | Duplicate-address conflicts; the Decline/ARP check catches some; fix the config |
+| **Clock changes / hibernation** | Leases are relative; clients re-validate after resume |
+| **DHCP failover** | Two servers sharing lease state (ISC/Kea failover, Windows failover, or split-scope 80/20) keep service going |
 
 ---
 
-## Troubleshooting DORA
-
-### Problem 1: No IP Configuration After ACK
-
-```
-Symptoms:
-- ACK received
-- But `ip addr show` shows no IP configured
-
-Possible causes:
-
-1. DHCP client service not running
-   Check (Linux): systemctl status NetworkManager
-   Check (Windows): services.msc → DHCP Client
-   Fix: Start/enable service
-
-2. Network manager conflict
-   dhclient vs systemd-networkd vs NetworkManager
-   Multiple services fighting
-   Fix: Disable conflicting services
-
-3. Manual configuration present
-   Static IP configured manually
-   DHCP client refuses to override
-   Fix: Remove static configuration
-
-4. ACK validation failed
-   Client rejected ACK (bad options, conflicts)
-   Check client logs: journalctl -u NetworkManager
-   Fix: Correct server configuration
-```
+## 11. Security recap
+- Unauthenticated: rogue servers, starvation and spoofed Release/Decline are possible → **DHCP snooping** (also builds the IP-MAC binding table used by Dynamic ARP Inspection and IP Source Guard).
+- **Option 82** (relay agent info) can bind leases to a switch port.
+- **DHCP authentication (RFC 3118)** exists but is essentially unused; in practice you rely on network controls (802.1X, port security).
+- Leases leak host names and MACs to the whole segment; use randomized MACs and privacy options (client-ID choices) on untrusted Wi-Fi.
 
 ---
 
-### Problem 2: IP Conflict Detected
+## 12. Docker and DHCP once more
 
-```
-Symptoms:
-- Client configured IP 192.168.1.21
-- But communication fails
-- ARP shows conflict
-
-Scenario:
-┌──────────────┐     ┌──────────────┐
-│  Computer A  │     │  Computer B  │
-│  192.168.1.21│     │  192.168.1.21│
-│  (DHCP)      │     │  (Static!)   │
-└──────────────┘     └──────────────┘
-        Both have same IP!
-
-Cause:
-- Computer B has static IP 192.168.1.21
-- DHCP server didn't know (no lease entry)
-- DHCP server assigned same IP to Computer A
-- IP conflict!
-
-Detection (client side):
-$ ip addr show eth0
-  inet 192.168.1.21/24 brd 192.168.1.255 scope global eth0
-  duplicate address detection in progress
-
-Solutions:
-1. Remove static IP from Computer B
-2. Exclude 192.168.1.21 from DHCP pool
-3. Use DHCP reservation for Computer B
-4. Expand DHCP pool range
-```
+| Environment | How the container/VM gets its address |
+|---|---|
+| Default `docker0` bridge or user-defined bridge | Docker's internal IPAM assigns from the subnet at container start (no DORA) |
+| `macvlan` network | Static from Docker IPAM, or an external DHCP plugin can lease from your real DHCP server |
+| VirtualBox/VMware NAT, libvirt `virbr0` | Built-in DHCP server (dnsmasq) leases to the VM's virtual NIC |
+| Cloud VM | The provider's DHCP service on boot; lease renewed as in this chapter |
+| Kubernetes pods | CNI plugins assign (host-local IPAM, etc.), not DHCP |
 
 ---
 
-### Problem 3: Lease Not Renewing
+## 13. Common misconceptions
 
-```
-Symptoms:
-- Initial DORA successful
-- IP works for hours
-- At T1 (12h), renewal fails
-- At lease expiration, IP released
-- Client becomes disconnected
-
-Diagnosis:
-
-T1 Renewal (50%):
-$ sudo tcpdump -i eth0 port 67 or port 68
-# At 12 hours, no REQUEST seen
-# Or REQUEST sent but no ACK received
-
-Possible causes:
-1. Router/DHCP server offline
-2. Network connectivity lost
-3. Firewall blocking renewal
-4. DHCP server lease table full
-5. Server crashed, lost lease table
-
-Solutions:
-- Check router uptime
-- Verify network cable connected
-- Check firewall rules
-- Restart DHCP server
-- Increase lease time (longer leases)
-```
+| Misconception | Reality |
+|---|---|
+| "The client uses the address after the Offer" | Only after the **ACK** (and a conflict check) |
+| "Request is unicast to the server" | The initial Request is a **broadcast** (renewals are unicast) |
+| "The requested IP goes in `ciaddr`" | Only in renewal/rebinding; the initial Request uses **option 50** |
+| "ACK and Offer are identical" | Similar structure, but the ACK **commits** the lease and is authoritative |
+| "The lease is renewed when it expires" | Renewal starts at **T1 = 50%**; expiry is the last resort |
+| "A NAK is an error to fix" | It's normal, e.g. after moving between networks |
+| "DHCP finishes after the ACK" | Leases are live agreements: renew, release, expire |
+| "Static IPs conflict only if two people type the same one" | A static address inside a DHCP pool will be handed out too |
 
 ---
 
-### Problem 4: Multiple ACKs (Multiple DHCP Servers)
+## 14. Summary
 
-```
-Scenario:
-- Two routers both running DHCP
-- Both send OFFER
-- Client sends REQUEST (broadcasts)
-- BOTH routers send ACK!
-- Client receives two ACKs with different IPs
-
-Example:
-Router A ACK: Your IP = 192.168.1.21
-Router B ACK: Your IP = 192.168.1.150
-
-Client behavior:
-- Typically accepts first received ACK
-- Configures IP from first ACK
-- Ignores second ACK
-
-Problem:
-- Both routers think client has their offered IP
-- Routing confusion
-- IP appears in two lease tables
-
-Solution:
-- Only one DHCP server per network segment
-- Disable DHCP on one router
-- Or use DHCP relay properly
-```
+- **Request** = "I accept *this* address (option 50) from *that* server (option 54)", **broadcast** so losing servers release their offers; `ciaddr` stays 0.
+- **ACK** = the server **commits the lease** and confirms the final configuration; **NAK** = "no, start over".
+- After ACK the client **probes with ARP**, configures address/route/DNS, announces itself and starts the timers.
+- **T1 (50%)** unicast renewal; **T2 (87.5%)** broadcast rebinding; at **100%** the address must be dropped. **Release** and **Decline** are the client's other tools; **INIT-REBOOT** shortens the process after a reboot.
+- The whole DORA takes four packets and typically well under a second on a healthy network.
 
 ---
 
-## Summary and Key Takeaways
+## 15. Check your understanding
 
-### DORA Complete
+1. Why does the client still broadcast the Request? Give two reasons.
+2. Which options identify the chosen server and the chosen address in the Request?
+3. How does a server decide between ACK and NAK?
+4. What does the client do between receiving the ACK and using the address?
+5. When are renewals sent, and how do they differ from the initial Request?
+6. What is INIT-REBOOT, and what happens if the laptop moved networks?
+7. What is DHCPDECLINE for? DHCPRELEASE? DHCPINFORM?
+8. Lease is 8 hours. When are T1 and T2?
 
-```
-Four-message handshake:
+<details>
+<summary>Answers</summary>
 
-1. DISCOVER: "I need an IP" (broadcast)
-2. OFFER: "Here's 192.168.1.21" (broadcast)
-3. REQUEST: "I accept 192.168.1.21" (broadcast)
-4. ACK: "Confirmed, it's yours" (broadcast)
+1. The client has no valid address to use as a source; and other servers that made Offers must hear it to free their reservations.
+2. Option 54 (server identifier) and option 50 (requested IP address).
+3. If the requested address is still reserved for this client and valid for its subnet it commits a lease and sends ACK; otherwise NAK.
+4. Validates the ACK, usually ARP-probes the address for conflicts (Decline if taken), then configures the interface/route/DNS and announces with gratuitous ARP.
+5. At T1 (50%) unicast to the leasing server with `ciaddr` set and no options 50/54; at T2 (87.5%) broadcast. The initial Request is broadcast with `ciaddr` 0 and options 50/54.
+6. A client with a remembered lease broadcasts a Request for its old address at boot; the server ACKs it or, on another network, NAKs it and the client falls back to Discover.
+7. Decline: "that address is in use, don't lease it". Release: "I'm done, free my lease". Inform: "I have an address; send me only configuration options."
+8. T1 = 4 h, T2 = 7 h.
+</details>
 
-Result:
-- Client: Has IP 192.168.1.21
-- Router: Lease table entry created
-- Network: Operational communication
-```
+**Practice**
 
----
-
-### Why REQUEST Broadcasts
-
-```
-Even though client knows router IP:
-
-Reasons:
-1. Client still has no IP configured (0.0.0.0)
-2. Multiple DHCP servers need to see choice
-3. Maximum compatibility
-4. RFC 2131 compliant
-
-Result:
-- Layer 3: Broadcast (255.255.255.255)
-- Layer 2: Unicast (router MAC) - efficiency
-
-Best of both worlds
-```
+1. Run §9 and produce a timeline table: time, packet type, src/dst IP, src/dst MAC, ciaddr, yiaddr.
+2. Make the client request a specific address (`dhclient` with `request` config or `udhcpc -r`), and see the option 50 in a Discover.
+3. Add a `--dhcp-host` reservation and prove the same address after release/renew.
+4. On your real network, read your current lease (`nmcli`, lease file, `ipconfig /all`) and compute when T1 and T2 fall.
+5. Draw the state machine from memory, and annotate each arrow with the message sent.
 
 ---
 
-### Critical Options
-
-```
-Option 53: Message Type
-- 1=DISCOVER, 2=OFFER, 3=REQUEST, 5=ACK
-
-Option 54: Server Identifier
-- Tells router "I chose you"
-- Critical for multiple server scenarios
-
-Option 50: Requested IP Address
-- Explicit IP request
-- Allows server to validate availability
-
-Option 51: Lease Time
-- How long IP is valid
-- Client must renew before expiration
-
-Options 58/59: T1/T2
-- When to renew (50%, 87.5%)
-- Automatic lease management
-```
-
----
-
-### Transaction ID
-
-```
-0x3903F326 throughout entire DORA
-
-Consistency is CRITICAL:
-- Links all four messages
-- Allows proper matching
-- Prevents confusion
-- Handles simultaneous DORAs
-
-If Transaction ID doesn't match:
-- Client ignores OFFER/ACK
-- DHCP fails
-- Must retry DISCOVER
-```
-
----
-
-### DHCP Lease Table
-
-```
-Router stores:
-MAC: AA:BB:CC:DD:EE:FF
-IP: 192.168.1.21
-State: BOUND
-Expires: 2026-03-13 10:15:30
-
-Purpose:
-- Prevents IP conflicts
-- Enforces uniqueness
-- Tracks usage
-- Manages renewals
-```
-
----
-
-### State Transitions
-
-```
-Client States:
-INIT → SELECTING → REQUESTING → BOUND
-
-INIT: No configuration, send DISCOVER
-SELECTING: Received OFFER(s), choose one
-REQUESTING: Sent REQUEST, waiting ACK
-BOUND: Received ACK, IP configured, operational
-
-Lease Management:
-BOUND → RENEWING (at T1, 50%)
-RENEWING → REBINDING (at T2, 87.5%)
-REBINDING → INIT (at expiration, 100%)
-```
-
----
-
-## Conclusion
-
-DHCP DORA is now complete. What began as a desperate broadcast—a computer with no IP address pleading for network identity—has culminated in a fully configured network interface.
-
-The REQUEST message formalized acceptance: "Yes, I want 192.168.1.21 from server 192.168.1.1." Even though the client knew the router's IP, it broadcast the REQUEST to handle edge cases: multiple DHCP servers, network topology changes, RFC compliance. The Option 54 (Server Identifier) field explicitly indicated which server's offer was accepted, allowing rejected servers to release their offered IPs back to their pools.
-
-The ACKNOWLEDGE message sealed the deal. The router's DHCP server validated the request, created a BOUND lease entry in its lease table, and sent final confirmation. The client received the ACK and, for the first time, configured its network interface with a real IP address.
-
-**From four simple messages—DISCOVER, OFFER, REQUEST, ACKNOWLEDGE—a computer transforms from network outsider to network citizen.**
-
-The next time your laptop connects to WiFi and instantly works, remember: underneath that seamless experience, a precise four-way handshake occurred. Source IPs of 0.0.0.0, destination IPs of 255.255.255.255, Transaction IDs matching across messages, UDP ports 67 and 68, MAC address learning, lease tables updating, renewal timers setting.
-
-**This is DHCP. This is how computers join networks. This is how chaos gives way to order.**
-
----
-
-## Further Reading
-
-- **RFC 2131:** Dynamic Host Configuration Protocol (complete DHCP specification)
-- **RFC 2132:** DHCP Options and BOOTP Vendor Extensions
-- **"TCP/IP Illustrated, Volume 1" by W. Richard Stevens:** DHCP chapter
-- **ISC DHCP Server:** Open-source DHCP server implementation and documentation
-- **Wireshark:** DHCP packet analysis tutorials
-- **RFC 3046:** DHCP Relay Agent Information Option
-- **RFC 4361:** Node-specific Client Identifiers for DHCPv4
-- **RFC 3927:** Dynamic Configuration of IPv4 Link-Local Addresses (APIPA/AutoIP)
-- **"Computer Networks" by Andrew S. Tanenbaum:** Network configuration protocols
+**Next:** [Chapter 38 – Hub, Switch and Router: Network Devices](38_hub_switch_router_network_devices_in_details.md)
