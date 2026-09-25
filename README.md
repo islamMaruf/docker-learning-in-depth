@@ -6,7 +6,9 @@ A comprehensive guide to Docker, Linux, and containerization - transforming vide
 
 This educational series provides an in-depth exploration of Docker, Linux fundamentals, container orchestration, and comprehensive networking from first principles. Each chapter builds upon previous concepts, creating a complete learning path from absolute basics to advanced networking protocols and infrastructure design. The content is designed for developers, DevOps engineers, network engineers, and anyone looking to master containerization technology and modern networking.
 
-**Total Chapters**: 43 | **Word Count**: ~400,000+ words | **Status**: Complete
+**Total Chapters**: 43 | **Word Count**: ~151,000 words | **Status**: Complete
+
+> **Rewritten for beginners:** every chapter opens with a one-sentence summary and learning goals, explains new terms in plain language before using them, and ends with quiz questions, answers and hands-on practice, so it works from first contact to expert depth.
 
 ## 🎯 Who Is This For?
 
@@ -73,7 +75,7 @@ Direct comparison between containers and virtual machines, plus introduction to 
 
 Deep dive into Docker Engine architecture: Docker Daemon, containerd, runc, and the complete request flow.
 
-**Key Concepts**: dockerd, containerd, runc, REST API, component architecture, request flow (~11,500 words)
+**Key Concepts**: dockerd, containerd, runc, REST API, component architecture, request flow
 
 ---
 
@@ -82,7 +84,7 @@ Deep dive into Docker Engine architecture: Docker Daemon, containerd, runc, and 
 
 Understand Docker as a complete ecosystem: CLI, Engine, Hub, Compose, Desktop, and how they work together.
 
-**Key Concepts**: Docker Hub, Docker Compose, multi-container apps, ecosystem chain, platform architecture (~13,400 words)
+**Key Concepts**: Docker Hub, Docker Compose, multi-container apps, ecosystem chain, platform architecture
 
 ---
 
@@ -91,7 +93,7 @@ Understand Docker as a complete ecosystem: CLI, Engine, Hub, Compose, Desktop, a
 
 Learn what Linux actually is (kernel vs distribution), why Docker requires Linux, and how distributions work.
 
-**Key Concepts**: Linux kernel, distributions, Debian/Ubuntu/Alpine families, Docker Desktop, base vs derived systems (~12,400 words)
+**Key Concepts**: Linux kernel, distributions, Debian/Ubuntu/Alpine families, Docker Desktop, base vs derived systems
 
 ---
 
@@ -100,7 +102,7 @@ Learn what Linux actually is (kernel vs distribution), why Docker requires Linux
 
 Explore GNU Project history, coreutils (ls, cat, grep), shells (bash, zsh), and the terminal vs shell distinction.
 
-**Key Concepts**: GNU Project, Richard Stallman, shells, terminals, desktop environments, command execution flow (~11,200 words)
+**Key Concepts**: GNU Project, Richard Stallman, shells, terminals, desktop environments, command execution flow
 
 ---
 
@@ -486,12 +488,12 @@ By completing this series, you will:
 
 | Category | Chapters | Avg. Length | Total Words |
 |----------|----------|-------------|-------------|
-| **Docker Fundamentals** | 9 (Ch 1-9) | ~9,000 words | ~81,000 |
-| **Linux Basics** | 4 (Ch 10-13) | ~7,000 words | ~28,000 |
-| **Docker Practice** | 7 (Ch 14-20) | ~8,000 words | ~56,000 |
-| **Networking Fundamentals** | 3 (Ch 21-23) | ~12,000 words | ~36,000 |
-| **Advanced Networking** | 20 (Ch 24-43) | ~10,000 words | ~200,000 |
-| **Total** | **43 chapters** | ~9,300 words | **~401,000** |
+| **Docker Fundamentals** | 9 (Ch 1-9) | ~2,315 words | ~20,835 |
+| **Linux Basics** | 4 (Ch 10-13) | ~3,164 words | ~12,655 |
+| **Docker Practice** | 7 (Ch 14-20) | ~3,010 words | ~21,070 |
+| **Networking Fundamentals** | 3 (Ch 21-23) | ~4,421 words | ~13,262 |
+| **Advanced Networking** | 20 (Ch 24-43) | ~4,168 words | ~83,351 |
+| **Total** | **43 chapters** | ~3,516 words | **~151,173** |
 
 ## 🎯 Key Features
 
@@ -682,12 +684,12 @@ Ch 1 → 5 → 10 → 14 → 15 → 21 → 22 → 25 → 26 → 27 → 28 → 29
 ## 🌟 Special Chapters
 
 ### Most Comprehensive:
-- **Chapter 7** (13,400 words): Docker Ecosystem deep dive
-- **Chapter 8** (12,400 words): Linux fundamentals
-- **Chapter 6** (11,500 words): Docker Engine internals
-- **Chapter 9** (11,200 words): GNU Coreutils
-- **Chapter 30**: Internet Protocol (IP) comprehensive analysis
-- **Chapter 35-37**: Complete DHCP packet-level analysis
+- **Chapter 30**: Internet Protocol (IP), from header bytes to routing, MTU and NAT
+- **Chapter 29**: TLS, from Diffie-Hellman to certificates and mTLS
+- **Chapter 31**: The data link layer, Ethernet frames, VLANs and Wi-Fi
+- **Chapter 28**: DNS, from resolvers to DNSSEC
+- **Chapter 32**: The first computer and first router, with a namespace lab
+- **Chapters 35-37**: DHCP, packet by packet, with byte-level examples
 
 ### Most Practical:
 - **Chapter 14**: Docker Hands On
