@@ -1,1792 +1,447 @@
-# Chapter 35: DHCP DISCOVER - Breaking Into Pieces In Details
+# Chapter 35: DHCP Discover, Layer by Layer
 
-## Overview
+> **In one sentence:** When a device joins a network with no address, it sends a **DHCP Discover**: a broadcast that walks down the whole stack: a DHCP message (Layer 7) inside a UDP datagram from port 68 to 67 (Layer 4) inside an IP packet from `0.0.0.0` to `255.255.255.255` (Layer 3) inside an Ethernet frame to `ff:ff:ff:ff:ff:ff` (Layer 2) sent as signals (Layer 1), asking "is there a DHCP server out there?".
 
-We've covered DHCP conceptually. We've discussed the DORA process (Discover, Offer, Request, Acknowledge). We understand that a computer requests an IP address from a router's DHCP server. But understanding networking at this surface level is like knowing a car has an engine without understanding how combustion works—you know *what* happens, but not *how* it happens.
+**Level:** 🟡 Intermediate · **Reading time:** ~60 minutes
 
-This chapter exists to bridge that gap. The goal is not memorization—the goal is **feeling** the network. When you truly understand how a DHCP DISCOVER packet is constructed, layer by layer, field by field, you don't need to memorize anything. The knowledge becomes intuitive. You understand why the source IP is `0.0.0.0`, why the destination is `255.255.255.255`, why UDP port 68 talks to port 67, and why the MAC address is broadcast to `FF:FF:FF:FF:FF:FF`.
-
-We will dissect the very first network communication your computer makes: **DHCP DISCOVER**. This is the moment when a brand new computer, with no IP address, no configuration, no knowledge of the network, somehow manages to broadcast a request asking "Is there a DHCP server here? I need an IP address!"
-
-This chapter breaks down that single packet across all seven OSI layers:
-
-1. **Application Layer (L7):** The DHCP message "I want an IP"
-2. **Transport Layer (L4):** UDP datagram wrapping the message
-3. **Network Layer (L3):** IP packet with source `0.0.0.0` and destination `255.255.255.255`
-4. **Data Link Layer (L2):** Ethernet frame with broadcast MAC `FF:FF:FF:FF:FF:FF`
-5. **Physical Layer (L1):** Electrical signals on the wire
-
-By the end of this chapter, you won't just *know* DHCP DISCOVER—you'll *feel* it. You'll visualize the packet construction in your mind. You'll understand networking from the inside out.
-
-**This is where abstract concepts become concrete reality.**
+**Prerequisites:** Chapters [23](23_tcp_in_details.md)–[24](24_udp_in_details.md) (UDP), [30](30_internet_protocol_ip_in_details.md) (IP), [31](31_data_link_layer_frame_in_details.md) (Ethernet), [33](33_subnetting_and_subnet_masks_in_details.md) (masks/broadcast).
 
 ---
 
-## The Scenario: First Computer, First Router
+## What you will learn
 
-### Initial State
-
-**Your first computer:**
-
-```
-┌─────────────────────────────────┐
-│   Computer                      │
-│   ┌─────────────────────────┐   │
-│   │ OS: Windows/Linux       │   │
-│   │ NIC: Installed          │   │
-│   │ Driver: Loaded          │   │
-│   │ MAC: AA:BB:CC:DD:EE:FF  │   │
-│   │ IP: None yet!           │   │
-│   └─────────────────────────┘   │
-└─────────────────────────────────┘
-```
-
-**Your first router:**
-
-```
-┌─────────────────────────────────┐
-│   Router                        │
-│   ┌─────────────────────────┐   │
-│   │ LAN IP: 192.168.1.1     │   │
-│   │ Subnet: 255.255.255.0   │   │
-│   │ DHCP Server: Running    │   │
-│   │ DHCP Pool: .10 - .254   │   │
-│   └─────────────────────────┘   │
-└─────────────────────────────────┘
-```
-
-**Physical connection:**
-
-```
-Computer ═══════════════════════ Router
-  (NIC)      Ethernet Cable      (LAN Port)
-
-Both devices powered on
-Cable connected
-Link lights blinking
-No IP address assigned yet
-```
+- **What DHCP is** and why it exists, and the four-step **DORA** conversation (Discover, Offer, Request, Acknowledge)
+- The **exact structure of a DHCP message** (BOOTP heritage, fixed fields, magic cookie, options)
+- Why DHCP uses **UDP ports 67 and 68**, and why a client with no IP address can still send
+- How **every layer wraps the message** (with a real, checksummed byte-for-byte example)
+- How the **broadcast flag**, **transaction ID (xid)** and **client identifier** work
+- What a **DHCP relay** does when the server is on a different network
+- How to **capture and read a real Discover** with `tcpdump`/Wireshark and to run a **DHCP server + client** in a safe lab
 
 ---
 
-### What Happens Next?
+## 1. The problem DHCP solves
 
-**The computer's OS detects:**
+To use a network, a host needs an **IP address, mask, gateway and DNS** (Chapter 32). Typing them by hand on every phone, laptop and printer is slow and error-prone (duplicate addresses, typos). **DHCP** (*Dynamic Host Configuration Protocol*, RFC 2131 for IPv4, options in RFC 2132) automates it:
 
-1. Network interface is up (link detected)
-2. No IP address configured
-3. DHCP client needs to run
+- The client asks; a **DHCP server** replies with a **lease**: an address plus configuration valid for a limited time.
+- The server keeps a pool and a table of who has what, so addresses are never duplicated.
+- When you leave, the lease expires and the address returns to the pool.
 
-**The OS decides:**
+DHCP grew from **BOOTP** (RFC 951, 1985), which is why the message layout has odd fields like `sname` and `file` (used for network booting) and why the ports are the BOOTP ports.
 
-"I need an IP address. I'll send a DHCP DISCOVER message to find a DHCP server."
+### The full conversation: DORA
 
-**The challenge:**
+```
+ Client                                                    Server
+   │ ── 1. DISCOVER  (broadcast)  "Any DHCP servers?" ───────►│
+   │ ◄─ 2. OFFER     "You could use 192.168.1.100 ..." ────── │
+   │ ── 3. REQUEST   (broadcast)  "I'll take that one." ─────►│
+   │ ◄─ 4. ACK       "Confirmed. Lease 24h. Here's the config"│
+```
+This chapter dissects **step 1**. Chapter 36 covers Offer, and Chapter 37 covers Request and Ack.
 
-- Computer has NO IP address (can't use a source IP)
-- Computer doesn't know router's IP address (can't use a destination IP)
-- Computer doesn't know router's MAC address (can't target it specifically)
-
-**The solution:**
-
-**BROADCAST at every layer.**
+**Why not just one round trip?** Two reasons: (1) there may be **several DHCP servers** on the network (redundancy), so the client collects offers and picks one; (2) the Request is broadcast so that the servers that *lost* learn their offered address can be released.
 
 ---
 
-## The DORA Process Review
+## 2. The situation before Discover
 
-Before diving into the deep dissection, let's quickly review DORA:
+A laptop has just connected (link is up; Wi-Fi associated or cable plugged in). It has:
 
-```
-┌──────────────────────────────────────────────────┐
-│ DORA: DHCP Four-Way Handshake                    │
-├──────────────────────────────────────────────────┤
-│                                                  │
-│ D - DISCOVER                                     │
-│   Computer: "Is there a DHCP server?"            │
-│   Broadcast to all devices                       │
-│                                                  │
-│ O - OFFER                                        │
-│   Router: "Yes! I can give you 192.168.1.20"     │
-│   Unicast back to computer                       │
-│                                                  │
-│ R - REQUEST                                      │
-│   Computer: "I accept 192.168.1.20"              │
-│   Broadcast (other DHCP servers might exist)     │
-│                                                  │
-│ A - ACKNOWLEDGE                                  │
-│   Router: "Confirmed. IP is yours."              │
-│   Unicast to computer                            │
-│                                                  │
-└──────────────────────────────────────────────────┘
-```
+| Has | Doesn't have |
+|---|---|
+| MAC address (e.g. `aa:bb:cc:11:22:33`) | IP address |
+| A working NIC and driver | Subnet mask |
+| A DHCP client program (`dhclient`, `NetworkManager`, `systemd-networkd`, Windows DHCP Client service) | Gateway, DNS |
+| | Any knowledge of the DHCP server's address |
 
-**This chapter focuses exclusively on the DISCOVER step** because it's the most complex—sending a network request when you have no network identity.
+The router (also the DHCP server) at `192.168.1.1` has a pool `192.168.1.100–192.168.1.200`.
+
+So the client's problem: it must talk to **someone it can't name**, from **an address it doesn't have**. The answer: use the special addresses "this host on this network" (`0.0.0.0`) and "everyone on this link" (`255.255.255.255`).
 
 ---
 
-## Layer 7: Application Layer - DHCP Message
+## 3. Layer 7: the DHCP message
 
-### The DHCP Client Application
+The DHCP client builds the message. All multi-byte fields are **big-endian (network order)**.
 
-**Where it lives:**
+```
+ 0                   1                   2                   3
+ 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
++---------------+---------------+---------------+---------------+
+|     op (1)    |  htype (1)    |   hlen (1)    |   hops (1)    |
++---------------+---------------+---------------+---------------+
+|                         xid (4)                               |
++-------------------------------+-------------------------------+
+|           secs (2)            |           flags (2)           |
++-------------------------------+-------------------------------+
+|                        ciaddr (4)                             |
++---------------------------------------------------------------+
+|                        yiaddr (4)                             |
++---------------------------------------------------------------+
+|                        siaddr (4)                             |
++---------------------------------------------------------------+
+|                        giaddr (4)                             |
++---------------------------------------------------------------+
+|                        chaddr (16)                            |
+|                                                               |
++---------------------------------------------------------------+
+|                        sname (64)                             |
++---------------------------------------------------------------+
+|                        file (128)                             |
++---------------------------------------------------------------+
+|                 magic cookie 0x63825363 (4)                   |
++---------------------------------------------------------------+
+|                        options (variable)                     |
++---------------------------------------------------------------+
+```
+Fixed part: 236 bytes + 4-byte cookie = **240 bytes**, then options.
 
-The DHCP client is built into your operating system. It's not a program you run manually—it's a background service:
+| Field | Size | Discover value | Meaning |
+|---|---|---|---|
+| **op** | 1 | `1` (BOOTREQUEST) | `1` client→server, `2` server→client |
+| **htype** | 1 | `1` | Hardware type: Ethernet |
+| **hlen** | 1 | `6` | Hardware address length (MAC = 6 bytes) |
+| **hops** | 1 | `0` | Incremented by **relays**; client sets 0 |
+| **xid** | 4 | random, e.g. `0x3903F326` | **Transaction ID**: matches replies to this request |
+| **secs** | 2 | `0` (grows on retries) | Seconds since the client began acquiring |
+| **flags** | 2 | `0x8000` or `0x0000` | Top bit = **BROADCAST flag** (see §7) |
+| **ciaddr** | 4 | `0.0.0.0` | Client's current IP (only when it already has one, e.g. renewing) |
+| **yiaddr** | 4 | `0.0.0.0` | "Your" IP: filled by the **server** in Offer/Ack |
+| **siaddr** | 4 | `0.0.0.0` | Next server (e.g. TFTP for PXE) |
+| **giaddr** | 4 | `0.0.0.0` | **Relay agent** address (0 when no relay) |
+| **chaddr** | 16 | client MAC + padding | Client hardware address |
+| **sname / file** | 64 / 128 | zeros | Server host name / boot file (PXE) |
+| **magic cookie** | 4 | `63 82 53 63` | Marks the start of DHCP options |
 
-- **Windows:** DHCP Client service
-- **Linux:** `dhclient`, `dhcpcd`, or `systemd-networkd`
-- **macOS:** `configd`
+### Options (TLV: code, length, value)
 
-**What triggers it:**
+Each option: `code (1 byte)`, `length (1 byte)`, `value (length bytes)`. Two are special: `0` = pad, **`255` = end**.
 
-When the OS detects a network interface with no IP address, the DHCP client activates automatically.
+| Code | Name | Typical Discover content |
+|---|---|---|
+| **53** | DHCP Message Type | `1` = Discover (**required**; the *only* thing that says which message this is) |
+| **61** | Client Identifier | `01` + MAC (type 1 = Ethernet); identifies the client for leases |
+| **12** | Host Name | `laptop` |
+| **55** | Parameter Request List | "please tell me: 1 subnet mask, 3 router, 6 DNS, 15 domain name, 28 broadcast address, 51 lease time…" |
+| **50** | Requested IP | Only if the client wants a specific address (e.g. its previous lease) |
+| **60** | Vendor Class ID | e.g. `MSFT 5.0`, `android-dhcp-14`, `PXEClient:…` |
+| **57** | Maximum DHCP message size | Optional |
+| **255** | End | Terminator (then padding to reach 300 bytes) |
+
+Message types (option 53): `1` Discover, `2` Offer, `3` Request, `4` Decline, `5` ACK, `6` NAK, `7` Release, `8` Inform.
+
+### The Discover in words
+> "I am `aa:bb:cc:11:22:33` (host name *laptop*). I have no address. Is there a DHCP server? If you answer, please include: subnet mask, router, DNS servers, domain name, broadcast address and lease time."
+
+Notice what is **absent**: a real source address and any server address. The client can only shout.
 
 ---
 
-### The DHCP Message Structure
-
-**DHCP DISCOVER message fields:**
+## 4. Layer 4: UDP
 
 ```
-DHCP Message:
-┌──────────────────────────────────────────┐
-│ Op: 1 (BOOTREQUEST)                      │  1 byte
-├──────────────────────────────────────────┤
-│ Htype: 1 (Ethernet)                      │  1 byte
-├──────────────────────────────────────────┤
-│ Hlen: 6 (MAC address length)             │  1 byte
-├──────────────────────────────────────────┤
-│ Hops: 0 (no relays)                      │  1 byte
-├──────────────────────────────────────────┤
-│ Transaction ID: Random (e.g., 0x3903F326)│  4 bytes
-├──────────────────────────────────────────┤
-│ Seconds: 0                               │  2 bytes
-├──────────────────────────────────────────┤
-│ Flags: 0x8000 (broadcast)                │  2 bytes
-├──────────────────────────────────────────┤
-│ Client IP: 0.0.0.0                       │  4 bytes
-├──────────────────────────────────────────┤
-│ Your IP: 0.0.0.0                         │  4 bytes
-├──────────────────────────────────────────┤
-│ Server IP: 0.0.0.0                       │  4 bytes
-├──────────────────────────────────────────┤
-│ Gateway IP: 0.0.0.0                      │  4 bytes
-├──────────────────────────────────────────┤
-│ Client MAC: AA:BB:CC:DD:EE:FF            │  16 bytes (6 used)
-├──────────────────────────────────────────┤
-│ Server Name: (empty)                     │  64 bytes
-├──────────────────────────────────────────┤
-│ Boot Filename: (empty)                   │  128 bytes
-├──────────────────────────────────────────┤
-│ Magic Cookie: 0x63825363                 │  4 bytes
-├──────────────────────────────────────────┤
-│ DHCP Options:                            │  Variable
-│   Option 53: DHCP Message Type = 1       │  (1 = DISCOVER)
-│   Option 55: Parameter Request List      │
-│   Option 61: Client Identifier           │
-│   Option 255: End                        │
-└──────────────────────────────────────────┘
-
-Total: Minimum 240 bytes + options
+Source port:       68  (DHCP client)
+Destination port:  67  (DHCP server)
+Length:            8 + DHCP message size
+Checksum:          over pseudo-header + UDP header + data
 ```
+### Why UDP, not TCP?
+- **TCP needs an established connection**, a handshake between two known addresses. The client has neither an address nor a known peer.
+- **TCP can't broadcast.** UDP can.
+- A DHCP exchange is a tiny request/response; the app handles retransmission itself (with random backoff: about 4, 8, 16, 32 seconds, with jitter, per RFC 2131).
+
+### Why the strange fixed ports (67 and 68)?
+Both sides use **well-known ports** (unlike normal client/server where the client picks a random port). This is a BOOTP legacy: a server's reply may be *broadcast* to the whole subnet, and a broadcast reply can only be delivered to the right program if the client's port is predictable. So **client = 68, server = 67**.
 
 ---
 
-### Key Fields Explained
+## 5. Layer 3: IP
 
-#### Op (Operation Code)
+| Field | Value | Why |
+|---|---|---|
+| Version/IHL | `4` / `5` (20-byte header) | |
+| TTL | 64 (Linux default; 128 on Windows) | |
+| Protocol | `17` (UDP) | |
+| **Source IP** | **`0.0.0.0`** | "This host on this network": I have no address yet (RFC 1122 permits this specifically for DHCP) |
+| **Destination IP** | **`255.255.255.255`** | *Limited broadcast*: every host on my local link. Routers **do not forward** it |
 
-```
-Op: 1
+Why not `192.168.1.255` (the subnet broadcast)? The client doesn't know the subnet yet. `255.255.255.255` requires no knowledge at all.
 
-Values:
-1 = BOOTREQUEST (client to server)
-2 = BOOTREPLY (server to client)
+---
 
-For DISCOVER: Always 1 (request)
-```
-
-#### Transaction ID
-
-```
-Transaction ID: 0x3903F326 (random 32-bit value)
-
-Purpose:
-- Client generates random ID
-- All four messages (D/O/R/A) use same ID
-- Allows client to match server replies to its request
-
-Example:
-Computer generates: 0x3903F326
-Server's OFFER must use: 0x3903F326
-Computer's REQUEST uses: 0x3903F326
-Server's ACK uses: 0x3903F326
-
-If another computer sends DISCOVER with ID 0xABCD1234,
-its entire DORA sequence uses 0xABCD1234
-```
-
-#### Flags
+## 6. Layer 2: Ethernet
 
 ```
-Flags: 0x8000 (broadcast bit set)
-
-Binary: 1000 0000 0000 0000
-        └┬┘
-         │
-    Broadcast bit
-
-0x8000: Server must broadcast reply (client can't receive unicast yet)
-0x0000: Server may unicast reply (client has IP, can receive unicast)
-
-For DISCOVER: Usually 0x8000 (request broadcast reply)
+Destination MAC:  ff:ff:ff:ff:ff:ff   (broadcast; the IP broadcast is delivered to this MAC)
+Source MAC:       aa:bb:cc:11:22:33   (the client's real MAC; this one it does have)
+EtherType:        0x0800   (IPv4)
 ```
+- **No ARP needed**: broadcast IP maps to broadcast MAC by rule.
+- A **switch** floods this frame out of every port in the VLAN (unknown/broadcast destination). Every NIC receives it and the OS decides whether a DHCP server process is listening. Most hosts (which aren't DHCP servers) silently drop it, since nothing listens on UDP 67.
+- Length: the DHCP message is padded to **at least 300 bytes** (BOOTP minimum), so no Ethernet padding is needed.
 
-#### Client IP, Your IP, Server IP, Gateway IP
+## 7. The broadcast flag and how the reply comes back
 
+The Offer will be addressed to `yiaddr` (the offered address), which the client doesn't own yet. Two ways to deliver it:
+
+| Client sets flags | Server sends the reply as | Notes |
+|---|---|---|
+| `0x0000` (unicast OK) | **Unicast** frame to the client's **MAC** (`chaddr`), IP dst = `yiaddr`, **without ARP** (the server inserts the pair directly) | Most Linux/Windows clients |
+| `0x8000` (broadcast) | Broadcast `255.255.255.255` / `ff:ff:ff:ff:ff:ff` | For clients whose IP stack **can't accept unicast IP before being configured** (some embedded/old stacks) |
+
+Many servers ignore the flag or default to broadcast; behavior varies (Chapter 36 shows both).
+
+## 8. Layer 1
+
+The frame is serialized to bits and sent out: preamble and start delimiter first (7 + 1 bytes), then the frame, then the FCS, then an inter-frame gap of 12 bytes' time. On Wi-Fi the same frame is wrapped in an 802.11 data frame, sent after a successful association, using CSMA/CA. The line coding depends on the medium (e.g. PAM-5 for 1000BASE-T, MLT-3 with 4B/5B for 100BASE-TX, Manchester for 10BASE-T); you never need to know this to use DHCP, only that Layers 1–2 deliver bits to everyone on the link.
+
+---
+
+## 9. A complete Discover, byte by byte
+
+Built with the fields above and real checksums (you can reproduce it with the script in §14):
+
+**Ethernet header (14 bytes)**
 ```
-All set to 0.0.0.0 for DISCOVER:
-
-Client IP: 0.0.0.0   (I don't have an IP yet)
-Your IP: 0.0.0.0     (Server fills this in OFFER)
-Server IP: 0.0.0.0   (I don't know server's IP)
-Gateway IP: 0.0.0.0  (No gateway known yet)
-
-These fields are used in later messages:
-OFFER: Your IP = 192.168.1.20
-ACK: Your IP = 192.168.1.20
+ff ff ff ff ff ff   aa bb cc 11 22 33   08 00
+└ dst broadcast ┘   └── src MAC ─────┘   └ IPv4
 ```
-
-#### Client MAC Address
-
+**IPv4 header (20 bytes)**
 ```
-Client MAC: AA:BB:CC:DD:EE:FF
-
-This is CRITICAL:
-- Only form of identity the client has
-- Server uses this to know who requested IP
-- Server stores MAC → IP mapping
-- Even though client has no IP, it has a MAC
+45 00 01 48 00 00 00 00 40 11 79 a6 00 00 00 00 ff ff ff ff
+│  │  │   │  │   │   │  │  │   │   └ src 0.0.0.0 ┘ └ dst 255.255.255.255 ┘
+│  │  │   │  │   │   │  │  └ header checksum 0x79a6
+│  │  │   │  │   │   │  └ protocol 0x11 = UDP
+│  │  │   │  │   │   └ TTL 0x40 = 64
+│  │  │   │  └ flags/fragment offset 0 (DF not set)
+│  │  │   └ identification 0
+│  │  └ total length 0x0148 = 328
+│  └ DSCP/ECN 0
+└ version 4, IHL 5
 ```
-
-#### DHCP Options
-
-**Option 53: DHCP Message Type**
-
+**UDP header (8 bytes)**
 ```
-Option 53: Message Type
-Length: 1 byte
-Value: 1 (DISCOVER)
-
-Message Types:
-1 = DHCPDISCOVER
-2 = DHCPOFFER
-3 = DHCPREQUEST
-4 = DHCPDECLINE
-5 = DHCPACK
-6 = DHCPNAK
-7 = DHCPRELEASE
-8 = DHCPINFORM
+00 44   00 43   01 34   72 15
+ 68      67      308     checksum 0x7215
 ```
+(308 = 8 + 300)
 
-**Option 55: Parameter Request List**
-
+**DHCP (300 bytes; first 44 shown)**
 ```
-Option 55: Parameter Request List
-Length: Variable
-Value: List of requested options
-
-Example:
-[1, 3, 6, 15, 28, 33]
-
-Meaning:
-1  = Subnet Mask
-3  = Router (Gateway)
-6  = DNS Server
-15 = Domain Name
-28 = Broadcast Address
-33 = Static Route
-
-Client says: "Please include these in your OFFER"
+01 01 06 00  39 03 f3 26  00 00 80 00
+op htype hlen hops   xid = 0x3903F326   secs=0   flags=0x8000
+00 00 00 00 (ciaddr) 00 00 00 00 (yiaddr) 00 00 00 00 (siaddr) 00 00 00 00 (giaddr)
+aa bb cc 11 22 33 00 00 00 00 00 00 00 00 00 00   ← chaddr (MAC + 10 zero bytes)
+... 64 zero bytes (sname) + 128 zero bytes (file) ...
+63 82 53 63                                        ← magic cookie
+35 01 01                    ← option 53, length 1, value 1 = DISCOVER
+3d 07 01 aa bb cc 11 22 33  ← option 61 (0x3d), length 7, type 01 + MAC
+0c 06 6c 61 70 74 6f 70     ← option 12, length 6, "laptop"
+37 06 01 03 06 0f 1c 33     ← option 55 (0x37): request 1,3,6,15,28,51
+ff                          ← option 255 (end)
+00 00 ...                   ← padding up to 300 bytes
 ```
+Sizes: DHCP 300 → UDP 308 → IP 328 → **frame 342 bytes** (+ 4 FCS on the wire).
 
-**Option 61: Client Identifier**
+Layer-by-layer summary (encapsulation; each layer only looks at its own header):
 
 ```
-Option 61: Client Identifier
-Length: Variable
-Value: Typically hardware type + MAC
-
-Example:
-01:AA:BB:CC:DD:EE:FF
-
-01 = Ethernet
-AA:BB:CC:DD:EE:FF = MAC address
-
-Purpose: Unique identifier (more reliable than MAC field)
+Ethernet: dst ff:ff:ff:ff:ff:ff  src aa:bb:cc:11:22:33   type IPv4
+  IPv4:   src 0.0.0.0            dst 255.255.255.255      proto UDP   TTL 64
+    UDP:  68 → 67
+      DHCP: op=BOOTREQUEST xid=0x3903f326  chaddr=aa:bb:cc:11:22:33  options: [53=Discover, 61, 12, 55 …]
 ```
 
 ---
 
-### The Human-Readable Message
+## 10. What happens at the server (or relay)
 
-**What the DHCP message conceptually says:**
+1. The router's NIC accepts the broadcast frame; the IP layer sees protocol UDP, destination port **67**; the DHCP server process (listening on it) receives the payload.
+2. It checks: message type Discover; which **interface** it arrived on (→ which subnet's pool to use); has this client (by client-ID / MAC) had a lease before? Any static reservation? Is the pool exhausted?
+3. It **reserves** a candidate address temporarily (so it isn't offered to someone else in the same moment), possibly after **checking it isn't in use** (an ICMP echo or ARP probe; ISC dhcpd does this by default), then sends the **Offer** (Chapter 36).
+4. If there is **no** matching pool or the pool is exhausted, it stays silent, and the client retries with backoff; after repeated failure Windows and macOS fall back to link-local `169.254.x.x` (Chapter 32).
+
+### DHCP relay (server on another network)
+Broadcasts don't cross routers. Enterprise networks have one central DHCP server; each router interface facing clients runs a **relay agent** (`ip helper-address` on Cisco, `dhcrelay` on Linux):
 
 ```
-"Hello!
-
-I am a computer with MAC address AA:BB:CC:DD:EE:FF.
-I don't have an IP address yet.
-I don't know who you are or where you are.
-
-Is there a DHCP server on this network?
-If so, please give me:
-- An IP address
-- A subnet mask
-- A default gateway
-- DNS server addresses
-
-Transaction ID: 0x3903F326
-(So I can match your reply to my request)
-
-This is a DISCOVER message.
-
-Thank you!"
+Client ─Discover (broadcast)─► Relay/router ─unicast─► Central DHCP server
+       hops=1, giaddr = relay's IP on the client's subnet ←(the server picks the pool matching giaddr)
 ```
+The relay sets **giaddr** (its address on the client's network) so the server knows which subnet to allocate from, and it adds **option 82** (relay agent information: circuit/remote ID) in some deployments.
 
 ---
 
-### Application Layer Summary
+## 11. Retransmission, timing and robustness
 
-```
-Application Layer creates DHCP DISCOVER:
-┌────────────────────────────────────────┐
-│ "I WANT AN IP ADDRESS"                 │
-│                                        │
-│ Message Type: DISCOVER                 │
-│ My MAC: AA:BB:CC:DD:EE:FF              │
-│ Transaction ID: 0x3903F326             │
-│ Requested info: IP, mask, gateway, DNS │
-│                                        │
-│ Size: ~300 bytes                       │
-└────────────────────────────────────────┘
-
-This data now passes to Transport Layer (L4)
-```
+- Discover retransmissions use exponential backoff with randomization (**~4 s, 8 s, 16 s, 32 s, 64 s**; RFC 2131). The randomness prevents everyone in a building from retrying at once after a power cut (a "DHCP storm").
+- Windows waits roughly a minute before falling back to APIPA and keeps trying every 5 minutes.
+- **`secs`** grows with each retry so servers can prioritize.
+- **`xid`** is random per transaction, so a client ignores replies meant for others.
 
 ---
 
-## Layer 4: Transport Layer - UDP Datagram
+## 12. Security notes
 
-### Why UDP?
+DHCP has **no authentication** in its basic form:
 
-**DHCP uses UDP, not TCP. Why?**
+| Threat | What happens | Defense |
+|---|---|---|
+| **Rogue DHCP server** | An attacker or a misplugged home router answers faster and hands out a wrong gateway/DNS (man-in-the-middle) | **DHCP snooping** on managed switches (trusted vs untrusted ports) |
+| **DHCP starvation** | Flood of Discovers with fake MACs exhausts the pool | Port security, rate limits, snooping |
+| **Spoofed release/requests** | Forcing clients off | Snooping bindings, dynamic ARP inspection |
 
-```
-TCP Requirements:
-- Three-way handshake (SYN, SYN-ACK, ACK)
-- Requires source IP and destination IP
-- Connection-oriented
-
-Problem: Client has NO IP address!
-- Can't complete TCP handshake without IP
-- Can't establish connection
-
-UDP Solution:
-- Connectionless
-- No handshake required
-- Can broadcast
-- Perfect for DHCP
-```
+A classic home/office incident: someone plugs an old router's **LAN** port into the wall by mistake; its DHCP server answers and half the office receives bogus addresses.
 
 ---
 
-### UDP Datagram Structure
+## 13. Docker and virtualization connection
 
-**UDP is simple: 8-byte header + data**
-
-```
-UDP Datagram:
-┌──────────────────────────────────────────┐
-│ Source Port: 68                          │  2 bytes
-├──────────────────────────────────────────┤
-│ Destination Port: 67                     │  2 bytes
-├──────────────────────────────────────────┤
-│ Length: 308 (8 header + 300 data)        │  2 bytes
-├──────────────────────────────────────────┤
-│ Checksum: 0x4F2A (calculated)            │  2 bytes
-├──────────────────────────────────────────┤
-│ Data: [DHCP Message from L7]             │  300 bytes
-│       (The entire DHCP DISCOVER)         │
-└──────────────────────────────────────────┘
-
-Total: 308 bytes
-```
+- **Docker does not use DHCP on its bridge**: the daemon's IPAM assigns container addresses directly; there is no Discover on `docker0` (unless you use `macvlan` with an external DHCP plugin).
+- **VMs**: VirtualBox/VMware NAT networks and libvirt's `virbr0` run a built-in **dnsmasq** DHCP server; a bridged VM sends a Discover onto your physical LAN and gets an address from your real router.
+- **Cloud:** VMs in AWS/Azure/GCP get their private address, gateway and DNS from the provider's DHCP service on boot, just like a laptop on a LAN.
+- **PXE boot:** a diskless machine's firmware sends a Discover with option 60 `PXEClient`, and the response carries `siaddr`/`file` (a boot server and boot file): the reason `sname`/`file` still exist.
 
 ---
 
-### Port Numbers: 68 and 67
+## 14. Lab
 
-**These are WELL-KNOWN ports, standardized across all systems:**
-
-```
-Port 68: DHCP Client
-- Client listens on port 68
-- Client sends FROM port 68
-- Destination for server replies
-
-Port 67: DHCP Server
-- Server listens on port 67
-- Server receives on port 67
-- Destination for client requests
-
-Direction in DISCOVER:
-Source: 68 (client)  →  Destination: 67 (server)
-```
-
-**Why these specific numbers?**
-
-```
-Port 67: DHCP/BOOTP Server (RFC 2131)
-Port 68: DHCP/BOOTP Client (RFC 2131)
-
-These are IANA-assigned well-known ports
-All DHCP implementations worldwide use these
-```
-
-**Example:**
-
-```
-Computer sends DHCP DISCOVER:
-UDP Source Port: 68
-UDP Destination Port: 67
-
-Router's DHCP server receives on port 67:
-"Ah, incoming DHCP request from a client"
-
-Router replies with DHCP OFFER:
-UDP Source Port: 67 (server)
-UDP Destination Port: 68 (client)
-
-Computer receives on port 68:
-"DHCP reply received!"
-```
-
----
-
-### Length Field
-
-```
-Length: Total UDP datagram size (header + data)
-
-Calculation:
-UDP Header: 8 bytes
-DHCP Data: ~300 bytes
-Total: 308 bytes
-
-Length field: 308 (0x0134)
-```
-
----
-
-### Checksum Field
-
-**Purpose:** Detect errors in transmission
-
-```
-Checksum: 0x4F2A (example)
-
-Calculation:
-1. Create pseudo-header (source IP, dest IP, protocol, length)
-2. Append UDP header and data
-3. Calculate 16-bit one's complement sum
-4. Store in checksum field
-
-Verification at receiver:
-1. Recalculate checksum
-2. Compare with received checksum
-3. If mismatch → discard packet (corrupted)
-```
-
-**For DHCP DISCOVER:**
-
-```
-Pseudo-header includes:
-Source IP: 0.0.0.0
-Dest IP: 255.255.255.255
-Protocol: 17 (UDP)
-UDP Length: 308
-
-Full checksum calculated over:
-- Pseudo-header
-- UDP header (8 bytes)
-- DHCP message (300 bytes)
-```
-
----
-
-### Transport Layer Summary
-
-```
-Transport Layer wraps DHCP message in UDP:
-
-┌────────────────────────────────────────┐
-│ UDP Header (8 bytes)                   │
-│ ┌────────────────────────────────────┐ │
-│ │ Source: 68 (client)                │ │
-│ │ Dest: 67 (server)                  │ │
-│ │ Length: 308                        │ │
-│ │ Checksum: 0x4F2A                   │ │
-│ └────────────────────────────────────┘ │
-│                                        │
-│ UDP Data (300 bytes)                   │
-│ ┌────────────────────────────────────┐ │
-│ │ [DHCP DISCOVER message from L7]    │ │
-│ │ "I want an IP..."                   │ │
-│ └────────────────────────────────────┘ │
-└────────────────────────────────────────┘
-
-This UDP datagram now passes to Network Layer (L3)
-```
-
----
-
-## Layer 3: Network Layer - IP Packet
-
-### The Critical Question
-
-**How do you send an IP packet when you have no IP address?**
-
-```
-Problem:
-- IP packets require source IP address
-- Computer has no IP address yet
-- How to send packet?
-
-Solution:
-- Source IP: 0.0.0.0 (special "no address" value)
-- Destination IP: 255.255.255.255 (broadcast to all)
-```
-
----
-
-### IP Packet Structure
-
-**IPv4 header: 20 bytes (without options)**
-
-```
-IPv4 Packet:
-┌──────────────────────────────────────────────┐
-│ Version: 4 (IPv4)           │ IHL: 5         │  1 byte
-│ (4 bits)                    │ (4 bits)       │
-├──────────────────────────────────────────────┤
-│ DSCP: 0  │ ECN: 0                            │  1 byte
-│ (6 bits) │ (2 bits)                          │
-├──────────────────────────────────────────────┤
-│ Total Length: 328                            │  2 bytes
-│ (20 IP header + 8 UDP header + 300 data)    │
-├──────────────────────────────────────────────┤
-│ Identification: 0x1234                       │  2 bytes
-├──────────────────────────────────────────────┤
-│ Flags: 0x4000 (Don't Fragment)               │  2 bytes
-│ Fragment Offset: 0                           │
-├──────────────────────────────────────────────┤
-│ TTL: 64                                      │  1 byte
-├──────────────────────────────────────────────┤
-│ Protocol: 17 (UDP)                           │  1 byte
-├──────────────────────────────────────────────┤
-│ Header Checksum: 0x7A3B                      │  2 bytes
-├──────────────────────────────────────────────┤
-│ Source IP: 0.0.0.0                           │  4 bytes
-├──────────────────────────────────────────────┤
-│ Destination IP: 255.255.255.255              │  4 bytes
-├──────────────────────────────────────────────┤
-│ Payload: [UDP datagram with DHCP]           │  308 bytes
-└──────────────────────────────────────────────┘
-
-Total: 328 bytes
-```
-
----
-
-### Key Fields Explained
-
-#### Version and IHL
-
-```
-Version: 4 (IPv4)
-Binary: 0100
-
-IHL (Internet Header Length): 5
-Binary: 0101
-
-Combined byte: 0x45
-
-IHL = 5 means 5 × 4 = 20 bytes header length
-(Minimum IPv4 header, no options)
-```
-
-#### Total Length
-
-```
-Total Length: 328 bytes
-
-Breakdown:
-IP Header: 20 bytes
-UDP Header: 8 bytes
-DHCP Data: 300 bytes
-Total: 328 bytes
-
-This is the entire IP packet size
-```
-
-#### TTL (Time To Live)
-
-```
-TTL: 64
-
-Purpose: Prevent infinite routing loops
-
-How it works:
-- Starts at 64 (typical)
-- Each router decrements by 1
-- If TTL reaches 0, packet discarded
-- Router sends ICMP "Time Exceeded" back to source
-
-For DHCP DISCOVER:
-- Broadcast on local network only
-- No routing occurs
-- TTL could be any value
-- Typically set to 64 or 128
-```
-
-#### Protocol
-
-```
-Protocol: 17 (UDP)
-
-Common protocol numbers:
-1  = ICMP
-6  = TCP
-17 = UDP
-58 = ICMPv6
-
-Tells receiver: "Payload is UDP datagram"
-```
-
-#### Header Checksum
-
-```
-Header Checksum: 0x7A3B (example)
-
-Calculation:
-1. Sum all 16-bit words in header
-2. Add carry bits
-3. Take one's complement
-4. Result is checksum
-
-Note: Only covers IP header, not payload
-(UDP has its own checksum for payload)
-```
-
-#### Source IP: 0.0.0.0
-
-**This is the key to understanding DHCP DISCOVER:**
-
-```
-Source IP: 0.0.0.0
-
-Binary: 00000000.00000000.00000000.00000000
-
-Meaning: "I don't have an IP address"
-
-Special significance:
-- Reserved "no address" value
-- Indicates sender has no IP yet
-- Only valid in DHCP DISCOVER context
-- Routers/switches handle special case
-
-Why not invalid?
-- 0.0.0.0 is defined in RFC 791 (IPv4)
-- Specifically for "host on this network"
-- Allowed only for source, during initialization
-```
-
-**Analogy:**
-
-```
-Sending a letter:
-
-Normal letter:
-From: 123 Main Street, New York
-To: 456 Oak Avenue, Boston
-
-DHCP DISCOVER letter:
-From: "I don't have an address yet"
-To: "Everyone in this building"
-
-The postal system (network) understands this special case
-and delivers to all mailboxes (broadcast)
-```
-
-#### Destination IP: 255.255.255.255
-
-**Limited broadcast address:**
-
-```
-Destination IP: 255.255.255.255
-
-Binary: 11111111.11111111.11111111.11111111
-
-Meaning: "Send to EVERYONE on local network"
-
-Characteristics:
-- All bits set to 1
-- Limited broadcast (local network only)
-- Never forwarded by routers
-- All devices on same network segment receive it
-
-Why not a specific IP?
-- Computer doesn't know router's IP
-- Computer doesn't know network topology
-- Solution: Ask everyone!
-```
-
-**Broadcast behavior:**
-
-```
-Computer sends to 255.255.255.255:
-
-┌─────────┐
-│ Switch  │
-└────┬────┘
-     │
-     ├──────────────────────────────┐
-     │              │               │
-┌────▼────┐    ┌────▼────┐    ┌────▼────┐
-│ Router  │    │   PC    │    │ Printer │
-│ DHCP    │    │         │    │         │
-└─────────┘    └─────────┘    └─────────┘
-   ✓              ✓              ✓
-Receives      Receives       Receives
-Responds      Ignores        Ignores
-
-All three devices receive the packet
-Only DHCP server (router) responds
-```
-
----
-
-### Network Layer Summary
-
-```
-Network Layer wraps UDP datagram in IP packet:
-
-┌──────────────────────────────────────────────┐
-│ IP Header (20 bytes)                         │
-│ ┌──────────────────────────────────────────┐ │
-│ │ Version: 4, IHL: 5                       │ │
-│ │ Total Length: 328                        │ │
-│ │ TTL: 64                                  │ │
-│ │ Protocol: 17 (UDP)                       │ │
-│ │ Source IP: 0.0.0.0        ← No IP!      │ │
-│ │ Dest IP: 255.255.255.255  ← Broadcast!  │ │
-│ └──────────────────────────────────────────┘ │
-│                                              │
-│ IP Payload (308 bytes)                       │
-│ ┌──────────────────────────────────────────┐ │
-│ │ [UDP datagram with DHCP]                 │ │
-│ │ Ports 68 → 67                            │ │
-│ │ "I want an IP..."                        │ │
-│ └──────────────────────────────────────────┘ │
-└──────────────────────────────────────────────┘
-
-This IP packet now passes to Data Link Layer (L2)
-```
-
----
-
-## Layer 2: Data Link Layer - Ethernet Frame
-
-### The MAC Address Challenge
-
-**Another critical question:**
-
-```
-Problem:
-- Computer needs to send frame to router
-- Computer doesn't know router's MAC address
-- Can't use ARP (requires IP addresses)
-
-Solution:
-- Destination MAC: FF:FF:FF:FF:FF:FF (broadcast)
-- All devices on network segment receive frame
-```
-
----
-
-### Ethernet Frame Structure
-
-**Ethernet II frame format:**
-
-```
-Ethernet Frame:
-┌──────────────────────────────────────────────┐
-│ Preamble: 0xAA-AA-AA-AA-AA-AA-AA            │  7 bytes
-│ (Alternating 10101010 pattern)               │
-├──────────────────────────────────────────────┤
-│ SFD: 0xAB (Start Frame Delimiter)            │  1 byte
-│ (10101011)                                   │
-├──────────────────────────────────────────────┤
-│ Destination MAC: FF:FF:FF:FF:FF:FF           │  6 bytes
-│ (Broadcast)                                  │
-├──────────────────────────────────────────────┤
-│ Source MAC: AA:BB:CC:DD:EE:FF                │  6 bytes
-│ (Computer's NIC MAC)                         │
-├──────────────────────────────────────────────┤
-│ EtherType: 0x0800 (IPv4)                     │  2 bytes
-├──────────────────────────────────────────────┤
-│ Payload: [IP packet with UDP/DHCP]          │  328 bytes
-│                                              │
-│ (Minimum payload: 46 bytes)                  │
-│ (Our payload: 328 bytes - OK!)               │
-├──────────────────────────────────────────────┤
-│ FCS (Frame Check Sequence): 0x12345678       │  4 bytes
-│ (CRC-32 checksum)                            │
-└──────────────────────────────────────────────┘
-
-Total: 354 bytes (without preamble/SFD)
-Total with preamble: 362 bytes
-```
-
----
-
-### Key Fields Explained
-
-#### Preamble and SFD
-
-```
-Preamble: 7 bytes of 0xAA (10101010)
-
-Purpose:
-- Clock synchronization
-- Receiver locks onto signal timing
-- Prepares for actual data
-
-SFD: 1 byte of 0xAB (10101011)
-
-Purpose:
-- "Start Frame Delimiter"
-- Marks end of preamble
-- Next byte is actual frame data
-
-Not counted in frame size
-Often handled by NIC hardware automatically
-```
-
-#### Destination MAC: FF:FF:FF:FF:FF:FF
-
-**Broadcast MAC address:**
-
-```
-Destination MAC: FF:FF:FF:FF:FF:FF
-
-Binary (each byte): 11111111
-
-Meaning: "Send to ALL devices on this network segment"
-
-Behavior:
-- Switch forwards to all ports (except source port)
-- Every NIC on network receives frame
-- Each device checks destination MAC
-- All devices process broadcast frames
-- Only interested parties (like DHCP server) respond
-```
-
-**Why broadcast MAC?**
-
-```
-Computer's dilemma:
-- Needs to send to router
-- Doesn't know router's MAC address
-- Normal process: Use ARP to find MAC
-- But ARP requires destination IP
-- Computer doesn't know router's IP!
-
-Solution:
-- Use broadcast MAC (FF:FF:FF:FF:FF:FF)
-- Send to everyone
-- Router's DHCP server receives and responds
-```
-
-**Network behavior:**
-
-```
-Switch receives frame with FF:FF:FF:FF:FF:FF:
-
-┌──────────────────────┐
-│      Switch          │
-│  MAC Table:          │
-│  Port 1: AA:BB:..    │
-│  Port 2: 11:22:..    │
-│  Port 3: RR:RR:..    │
-└──┬──────┬──────┬─────┘
-   │      │      │
-   │      │      │
-  Port1  Port2  Port3
-   │      │      │
-   ▼      ▼      ▼
-Computer PC2   Router
-
-Switch action:
-Destination FF:FF:FF:FF:FF:FF = Broadcast
-→ Forward to ALL ports except source
-→ Computer (source) doesn't get copy back
-→ PC2 receives frame
-→ Router receives frame
-```
-
-#### Source MAC: AA:BB:CC:DD:EE:FF
-
-```
-Source MAC: AA:BB:CC:DD:EE:FF
-
-This is the computer's NIC MAC address
-
-Purpose:
-- Identifies sender
-- Router uses this to reply
-- Router stores: MAC → IP mapping
-
-Example flow:
-1. Computer sends DISCOVER with source MAC AA:BB:CC:DD:EE:FF
-2. Router receives, sees source MAC
-3. Router decides to assign IP 192.168.1.20
-4. Router creates mapping: AA:BB:CC:DD:EE:FF → 192.168.1.20
-5. Router sends OFFER frame:
-   Destination MAC: AA:BB:CC:DD:EE:FF (now knows who to reply to!)
-```
-
-**Why MAC is critical:**
-
-```
-MAC address is the ONLY identity the computer has:
-- No IP yet
-- No hostname
-- No configuration
-
-The MAC address is burned into NIC hardware
-It's the computer's "birth certificate" on the network
-```
-
-#### EtherType: 0x0800
-
-```
-EtherType: 0x0800
-
-Meaning: "Payload is IPv4 packet"
-
-Common EtherType values:
-0x0800 = IPv4
-0x0806 = ARP
-0x86DD = IPv6
-0x8100 = VLAN-tagged frame
-
-Tells receiver: "Parse payload as IPv4 packet"
-```
-
-#### Payload
-
-```
-Payload: 328 bytes (IP packet with UDP/DHCP)
-
-Ethernet requirements:
-Minimum payload: 46 bytes
-Maximum payload: 1500 bytes (MTU)
-
-Our payload: 328 bytes
-✓ Above minimum
-✓ Below maximum
-✓ No padding needed
-```
-
-#### FCS (Frame Check Sequence)
-
-```
-FCS: 4 bytes (0x12345678 example)
-
-Algorithm: CRC-32 (Cyclic Redundancy Check)
-
-Calculated over:
-- Destination MAC
-- Source MAC
-- EtherType
-- Payload
-
-NOT calculated over:
-- Preamble
-- SFD
-
-Purpose:
-- Detect transmission errors
-- Bit flips, corruption
-- If FCS mismatch → frame discarded silently
-```
-
-**FCS calculation example:**
-
-```
-Frame data (simplified):
-Dest MAC: FF:FF:FF:FF:FF:FF
-Source MAC: AA:BB:CC:DD:EE:FF
-EtherType: 0x0800
-Payload: [328 bytes]
-
-CRC-32 calculation:
-1. Treat all data as binary polynomial
-2. Divide by CRC-32 polynomial
-3. Remainder is FCS
-4. Append to frame
-
-Receiver:
-1. Recalculate CRC-32
-2. Compare with received FCS
-3. Match → OK, forward to IP layer
-4. Mismatch → Discard frame
-```
-
----
-
-### Data Link Layer Summary
-
-```
-Data Link Layer wraps IP packet in Ethernet frame:
-
-┌────────────────────────────────────────────────┐
-│ Ethernet Header (14 bytes)                     │
-│ ┌────────────────────────────────────────────┐ │
-│ │ Dest MAC: FF:FF:FF:FF:FF:FF  ← Broadcast │ │
-│ │ Source MAC: AA:BB:CC:DD:EE:FF              │ │
-│ │ EtherType: 0x0800 (IPv4)                   │ │
-│ └────────────────────────────────────────────┘ │
-│                                                │
-│ Ethernet Payload (328 bytes)                   │
-│ ┌────────────────────────────────────────────┐ │
-│ │ [IP packet with UDP/DHCP]                  │ │
-│ │ 0.0.0.0 → 255.255.255.255                  │ │
-│ │ Ports 68 → 67                              │ │
-│ │ "I want an IP..."                          │ │
-│ └────────────────────────────────────────────┘ │
-│                                                │
-│ Ethernet Trailer (4 bytes)                     │
-│ ┌────────────────────────────────────────────┐ │
-│ │ FCS: 0x12345678 (CRC-32)                   │ │
-│ └────────────────────────────────────────────┘ │
-└────────────────────────────────────────────────┘
-
-Total frame: 346 bytes (14 + 328 + 4)
-With preamble/SFD: 354 bytes
-
-This frame now passes to Physical Layer (L1)
-```
-
----
-
-## Layer 1: Physical Layer - Electrical Signals
-
-### Converting Frame to Bits
-
-**The Ethernet frame (346 bytes) is now converted to electrical signals.**
-
-```
-Frame (binary):
-11111111 11111111 11111111 11111111 11111111 11111111  ← Dest MAC
-10101010 10111011 11001100 11011101 11101110 11111111  ← Source MAC
-00001000 00000000                                      ← EtherType
-...
-(346 bytes = 2,768 bits total)
-```
-
----
-
-### Encoding Method
-
-**Ethernet uses various encoding schemes depending on speed:**
-
-**For 100 Mbps Ethernet (Fast Ethernet):**
-
-```
-Encoding: 4B/5B + MLT-3
-
-4B/5B: Every 4 data bits encoded as 5 signal bits
-MLT-3: Multi-Level Transmit, 3 voltage levels
-
-Result: Signals on twisted-pair cable
-```
-
-**For 1 Gbps Ethernet (Gigabit Ethernet):**
-
-```
-Encoding: 8B/10B or PAM-5
-
-More complex encoding for higher speeds
-```
-
-**For 10 Mbps Ethernet (Legacy):**
-
-```
-Encoding: Manchester encoding
-
-Bit 0: High-to-low transition
-Bit 1: Low-to-high transition
-
-Example:
-Data: 1 0 1 1 0
-Signal: /_/‾\_/\_/‾\_/‾
-```
-
----
-
-### Physical Transmission
-
-**Twisted-pair Ethernet cable (Cat5e/Cat6):**
-
-```
-Cable: 8 wires in 4 twisted pairs
-
-Typical usage (100BaseTX):
-Pair 1 (Orange): TX+ and TX- (Transmit)
-Pair 2 (Green): RX+ and RX- (Receive)
-Pair 3 (Blue): Unused (or for Gigabit)
-Pair 4 (Brown): Unused (or for Gigabit)
-
-Voltage levels:
-+2.5V = Logical 1
-0V = Neutral
--2.5V = Logical 0
-
-Frame transmission:
-Computer's NIC sends electrical signals on TX pins
-Router's NIC receives signals on RX pins
-```
-
-**Signal characteristics:**
-
-```
-Frequency: 100 MHz (for 100 Mbps)
-Modulation: Differential signaling
-Distance: Up to 100 meters
-```
-
-**What happens on the wire:**
-
-```
-Time →
-
-                    ┌─────────────────────────────────┐
-                    │ Preamble (Clock sync)           │
-Voltage  +2.5V  ────┤ Alternating 10101010...         │
-                    │                                 │
-         0V     ────┼─────────────────────────────────┤
-                    │                                 │
-        -2.5V  ─────┴─────────────────────────────────┘
-
-                    ┌──────┬──────┬──────┬──────┬─────┐
-                    │ Dest │Source│Ether │Payld │ FCS │
-Voltage  +2.5V  ────┤ MAC  │ MAC  │Type  │      │     │
-                    │ FF:  │ AA:  │0x08  │...   │0x12 │
-         0V     ────┤ FF:  │ BB:  │ 00   │...   │...  │
-                    │ FF:  │ CC:  │      │      │     │
-        -2.5V  ─────┴──────┴──────┴──────┴──────┴─────┘
-
-Actual signals are differential and more complex,
-but conceptually: voltage changes represent bits
-```
-
----
-
-### Physical Layer Summary
-
-```
-Physical Layer converts frame to electrical signals:
-
-Ethernet Frame (346 bytes)
-         ↓
-Binary representation (2,768 bits)
-         ↓
-Encoding (4B/5B, Manchester, etc.)
-         ↓
-Electrical signals (+2.5V, 0V, -2.5V)
-         ↓
-Transmitted on twisted-pair cable
-         ↓
-Travels at ~2/3 speed of light in copper
-         ↓
-Received by router's NIC
-         ↓
-Decoded back to binary
-         ↓
-Passed up through router's network stack
-```
-
----
-
-## The Complete DHCP DISCOVER Packet
-
-### Full Stack View
-
-**All layers combined:**
-
-```
-┌────────────────────────────────────────────────────────┐
-│ Layer 1 (Physical)                                     │
-│ Electrical signals on wire                             │
-│ ~2,768 bits transmitted                                │
-└────────────────────┬───────────────────────────────────┘
-                     │
-┌────────────────────▼───────────────────────────────────┐
-│ Layer 2 (Data Link) - Ethernet Frame                   │
-│ ┌────────────────────────────────────────────────────┐ │
-│ │ Dest MAC: FF:FF:FF:FF:FF:FF (Broadcast)            │ │
-│ │ Source MAC: AA:BB:CC:DD:EE:FF (Computer)           │ │
-│ │ EtherType: 0x0800 (IPv4)                           │ │
-│ │ FCS: 0x12345678                                    │ │
-│ └────────────────────────────────────────────────────┘ │
-│ Total: 346 bytes                                       │
-└────────────────────┬───────────────────────────────────┘
-                     │
-┌────────────────────▼───────────────────────────────────┐
-│ Layer 3 (Network) - IP Packet                          │
-│ ┌────────────────────────────────────────────────────┐ │
-│ │ Version: 4, IHL: 5, TTL: 64                        │ │
-│ │ Protocol: 17 (UDP)                                 │ │
-│ │ Source IP: 0.0.0.0 (No IP yet!)                    │ │
-│ │ Dest IP: 255.255.255.255 (Broadcast!)              │ │
-│ │ Total Length: 328 bytes                            │ │
-│ └────────────────────────────────────────────────────┘ │
-└────────────────────┬───────────────────────────────────┘
-                     │
-┌────────────────────▼───────────────────────────────────┐
-│ Layer 4 (Transport) - UDP Datagram                     │
-│ ┌────────────────────────────────────────────────────┐ │
-│ │ Source Port: 68 (DHCP Client)                      │ │
-│ │ Dest Port: 67 (DHCP Server)                        │ │
-│ │ Length: 308 bytes                                  │ │
-│ │ Checksum: 0x4F2A                                   │ │
-│ └────────────────────────────────────────────────────┘ │
-└────────────────────┬───────────────────────────────────┘
-                     │
-┌────────────────────▼───────────────────────────────────┐
-│ Layer 7 (Application) - DHCP Message                   │
-│ ┌────────────────────────────────────────────────────┐ │
-│ │ Op: 1 (BOOTREQUEST)                                │ │
-│ │ Transaction ID: 0x3903F326                         │ │
-│ │ Client MAC: AA:BB:CC:DD:EE:FF                      │ │
-│ │ Client IP: 0.0.0.0                                 │ │
-│ │ Server IP: 0.0.0.0                                 │ │
-│ │ Options:                                           │ │
-│ │   Message Type: DISCOVER (1)                       │ │
-│ │   Parameter Request: 1,3,6,15 (mask,gw,dns,domain)│ │
-│ │ Message: "I want an IP address!"                   │ │
-│ └────────────────────────────────────────────────────┘ │
-│ Total: ~300 bytes                                      │
-└────────────────────────────────────────────────────────┘
-
-Total packet size: 346 bytes (L2 frame)
-Payload size: 300 bytes (DHCP message)
-Overhead: 46 bytes (14 Ethernet + 20 IP + 8 UDP + 4 FCS)
-```
-
----
-
-### Hexadecimal Representation
-
-**What the packet looks like in raw hex (simplified excerpt):**
-
-```
-Ethernet Header:
-FF FF FF FF FF FF  AA BB CC DD EE FF  08 00
-└── Dest MAC ───┘  └── Source MAC ──┘  └─EType
-
-IP Header:
-45 00 01 48  12 34 40 00  40 11 7A 3B
-│  │  └─Total Len  │  │   │  │  └─Checksum
-│  └─IHL           │  │   │  └─Protocol(17=UDP)
-└─Ver              │  │   └─TTL (64)
-                   └─ID  └─Flags
-
-00 00 00 00  FF FF FF FF
-└─Source IP┘  └─Dest IP┘
-
-UDP Header:
-00 44  00 43  01 34  4F 2A
-└Port68  Port67  Len   Cksm
-
-DHCP Message:
-01 01 06 00  39 03 F3 26  00 00 00 00  00 00 00 00
-│  │  │  │   └─Transaction ID  │         │
-│  │  │  └─Hops                │         │
-│  │  └─Hlen                   │         │
-│  └─Htype                     │         │
-└─Op                           └─Secs    └─Flags
-
-00 00 00 00  00 00 00 00  00 00 00 00  00 00 00 00
-└─Client IP┘  └─Your IP──┘  └─Server IP  └─Gateway
-
-AA BB CC DD EE FF ...
-└─Client MAC (16 bytes, 6 used)
-
-...DHCP options...
-63 82 53 63  35 01 01 ...
-└─Magic──────┘  └Option 53: Type=DISCOVER
-
-... more options ...
-
-FF  (End option)
-
-Ethernet Trailer:
-12 34 56 78
-└─FCS (CRC)
-```
-
----
-
-### Packet Journey Visualization
-
-```
-Step 1: Application Layer creates DHCP message
-┌─────────────────────────────────────────┐
-│ "I want an IP address"                  │
-│ Transaction ID: 0x3903F326              │
-│ My MAC: AA:BB:CC:DD:EE:FF               │
-└─────────────────────────────────────────┘
-
-Step 2: Transport Layer adds UDP header
-┌─────────────────────────────────────────┐
-│ Port 68 → Port 67                       │
-├─────────────────────────────────────────┤
-│ "I want an IP address"                  │
-│ Transaction ID: 0x3903F326              │
-│ My MAC: AA:BB:CC:DD:EE:FF               │
-└─────────────────────────────────────────┘
-
-Step 3: Network Layer adds IP header
-┌─────────────────────────────────────────┐
-│ 0.0.0.0 → 255.255.255.255               │
-│ Protocol: UDP                           │
-├─────────────────────────────────────────┤
-│ Port 68 → Port 67                       │
-├─────────────────────────────────────────┤
-│ "I want an IP address"                  │
-│ Transaction ID: 0x3903F326              │
-│ My MAC: AA:BB:CC:DD:EE:FF               │
-└─────────────────────────────────────────┘
-
-Step 4: Data Link Layer adds Ethernet header/trailer
-┌─────────────────────────────────────────┐
-│ FF:FF:FF:FF:FF:FF ← AA:BB:CC:DD:EE:FF   │
-│ EtherType: IPv4                         │
-├─────────────────────────────────────────┤
-│ 0.0.0.0 → 255.255.255.255               │
-│ Protocol: UDP                           │
-├─────────────────────────────────────────┤
-│ Port 68 → Port 67                       │
-├─────────────────────────────────────────┤
-│ "I want an IP address"                  │
-│ Transaction ID: 0x3903F326              │
-│ My MAC: AA:BB:CC:DD:EE:FF               │
-├─────────────────────────────────────────┤
-│ FCS: 0x12345678                         │
-└─────────────────────────────────────────┘
-
-Step 5: Physical Layer converts to electrical signals
-Transmitted on Ethernet cable to all devices
-```
-
----
-
-## Router Reception and Processing
-
-### How Router Receives DHCP DISCOVER
-
-**Router's perspective:**
-
-```
-Step 1: Physical Layer receives electrical signals
-└─> Decodes to binary frame (2,768 bits)
-
-Step 2: Data Link Layer processes Ethernet frame
-├─> Checks destination MAC: FF:FF:FF:FF:FF:FF
-│   (Broadcast - accept and process)
-├─> Checks FCS: Recalculate CRC-32
-│   (Match - frame valid)
-└─> Strips Ethernet header/trailer
-    Passes IP packet to Network Layer
-
-Step 3: Network Layer processes IP packet
-├─> Checks destination IP: 255.255.255.255
-│   (Broadcast - accept and process)
-├─> Checks protocol: 17 (UDP)
-├─> Verifies checksum
-└─> Strips IP header
-    Passes UDP datagram to Transport Layer
-
-Step 4: Transport Layer processes UDP datagram
-├─> Checks destination port: 67
-│   (DHCP server port - accept)
-├─> Verifies checksum
-└─> Strips UDP header
-    Passes DHCP message to Application Layer
-
-Step 5: Application Layer processes DHCP message
-├─> DHCP server daemon receives message
-├─> Reads Op: 1 (BOOTREQUEST)
-├─> Reads Transaction ID: 0x3903F326
-├─> Reads Client MAC: AA:BB:CC:DD:EE:FF
-├─> Reads Option 53: Message Type = 1 (DISCOVER)
-├─> Reads Option 55: Requested parameters
-└─> DECISION: "Client needs IP, send OFFER"
-
-Step 6: DHCP server constructs OFFER message
-```
-
----
-
-### Router's DHCP Server Logic
-
-```
-DHCP Server receives DISCOVER:
-
-┌─────────────────────────────────────────┐
-│ Incoming DISCOVER                       │
-│ From MAC: AA:BB:CC:DD:EE:FF             │
-│ Transaction ID: 0x3903F326              │
-│ Requests: IP, mask, gateway, DNS        │
-└─────────────────────────────────────────┘
-              ↓
-┌─────────────────────────────────────────┐
-│ Check DHCP pool                         │
-│ Available IPs: 192.168.1.10 - .254     │
-│ Already assigned: .10, .15, .20        │
-│ Next available: 192.168.1.21           │
-└─────────────────────────────────────────┘
-              ↓
-┌─────────────────────────────────────────┐
-│ Create lease entry                      │
-│ MAC: AA:BB:CC:DD:EE:FF                  │
-│ IP: 192.168.1.21                        │
-│ Lease: 86400 sec (24 hours)            │
-│ State: OFFERED                          │
-└─────────────────────────────────────────┘
-              ↓
-┌─────────────────────────────────────────┐
-│ Construct DHCP OFFER                    │
-│ To MAC: AA:BB:CC:DD:EE:FF               │
-│ Transaction ID: 0x3903F326 (same)       │
-│ Your IP: 192.168.1.21                   │
-│ Subnet: 255.255.255.0                   │
-│ Gateway: 192.168.1.1                    │
-│ DNS: 8.8.8.8, 8.8.4.4                   │
-│ Lease: 86400 seconds                    │
-└─────────────────────────────────────────┘
-              ↓
-          Send OFFER
-    (Next step in DORA)
-```
-
----
-
-## Why This Deep Dive Matters
-
-### Understanding Real Networking
-
-**Before this chapter:**
-
-```
-You knew: "Computer sends DHCP DISCOVER"
-Abstract understanding
-Memorized process
-```
-
-**After this chapter:**
-
-```
-You know:
-- Exact packet structure (all 346 bytes)
-- Why source IP is 0.0.0.0
-- Why destination IP is 255.255.255.255  
-- Why ports 68 and 67 are used
-- Why MAC broadcast is FF:FF:FF:FF:FF:FF
-- How each layer adds its header
-- How broadcasts work at L2 and L3
-- What signals travel on the wire
-
-You FEEL the networking
-You understand from first principles
-```
-
----
-
-### Troubleshooting Applications
-
-**Scenario 1: DHCP not working**
-
-```
-Problem: Computer not getting IP address
-
-Before this chapter:
-"DHCP is broken, check router"
-
-After this chapter:
-├─> Check Physical: Cable connected? Link lights?
-├─> Check L2: Is switch forwarding broadcasts?
-├─> Check firewall: Blocking UDP port 67?
-├─> Check DHCP server: Is daemon running?
-├─> Capture packets: See DISCOVER but no OFFER? → Pool exhausted
-└─> See DISCOVER with wrong MAC? → NIC hardware issue
-```
-
-**Scenario 2: Slow DHCP response**
-
-```
-Before: "Network is slow"
-
-After:
-Use tcpdump:
-$ sudo tcpdump -i eth0 -n port 67 or port 68
-
-Observe:
-DISCOVER sent at 10:00:00.000
-OFFER received at 10:00:05.000
-
-5-second delay!
-
-Diagnose:
-├─> DHCP server overloaded?
-├─> Network congestion?
-├─> Broadcast storm?
-└─> DHCP relay misconfigured?
-```
-
----
-
-### Packet Capture Example
-
-**Using tcpdump to see DHCP DISCOVER:**
+### 14.1 Watch a real Discover on your machine (safe: it only observes)
 
 ```bash
-$ sudo tcpdump -i eth0 -vvv -n port 67 or port 68
-
-Output:
-10:15:23.456789 IP (tos 0x0, ttl 64, id 4660, offset 0, flags [none], proto UDP (17), length 328)
-    0.0.0.0.68 > 255.255.255.255.67: [udp sum ok] BOOTP/DHCP, Request from aa:bb:cc:dd:ee:ff, length 300, xid 0x3903f326, Flags [none] (0x0000)
-      Client-Ethernet-Address aa:bb:cc:dd:ee:ff
-      Vendor-rfc1048 Extensions
-        Magic Cookie 0x63825363
-        DHCP-Message Option 53, length 1: Discover
-        Parameter-Request Option 55, length 4: Subnet-Mask, Default-Gateway, Domain-Name-Server, Domain-Name
-
-Breakdown:
-- Source IP: 0.0.0.0
-- Dest IP: 255.255.255.255
-- Source port: 68
-- Dest port: 67
-- Protocol: UDP
-- DHCP message type: Discover
-- Client MAC: aa:bb:cc:dd:ee:ff
-- Transaction ID: 0x3903f326
+sudo tcpdump -i any -nn -vv -e 'udp port 67 or udp port 68'
+# in another terminal, force your machine to renew (disconnect and reconnect Wi-Fi, or):
+sudo dhclient -r eth0 && sudo dhclient -v eth0        # release, then a fresh DORA  (name your interface)
+# NetworkManager systems: nmcli device reapply eth0   or   nmcli con down "<name>" && nmcli con up "<name>"
 ```
+Look for `Discover`, and identify: source `0.0.0.0.68`, dest `255.255.255.255.67`, `Client-Ethernet-Address`, `xid`, options 53/55/61/12. Save with `-w dhcp.pcap` and open in **Wireshark** (`bootp` display filter).
+
+### 14.2 A private DHCP server and client in namespaces
+
+Needs `dnsmasq`, `isc-dhcp-client` (dhclient), `tcpdump`. Nothing touches your real network. (Use `-sf /bin/true` so the client does not run its script and change your host's DNS settings.)
+
+```bash
+sudo ip netns add srv; sudo ip netns add cli
+sudo ip link add s0 type veth peer name c0
+sudo ip link set s0 netns srv; sudo ip link set c0 netns cli
+sudo ip netns exec srv ip addr add 192.168.50.1/24 dev s0
+sudo ip netns exec srv ip link set s0 up; sudo ip netns exec cli ip link set c0 up
+
+# capture in the background (in the server namespace)
+sudo ip netns exec srv tcpdump -nn -vv -e -i s0 -w /tmp/dhcp.pcap 'udp port 67 or udp port 68' &
+sleep 1
+
+# DHCP server: no DNS (port=0), pool .100–.150, 12 h lease, advertise the router, log every message
+sudo ip netns exec srv dnsmasq --no-daemon --port=0 --interface=s0 --bind-interfaces \
+     --dhcp-range=192.168.50.100,192.168.50.150,12h \
+     --dhcp-option=option:router,192.168.50.1 --dhcp-option=option:dns-server,1.1.1.1 \
+     --dhcp-leasefile=/tmp/lab.leases --log-dhcp &
+sleep 1
+
+# DHCP client, one attempt, verbose, script disabled
+sudo ip netns exec cli dhclient -1 -v -sf /bin/true -lf /tmp/cli.lease -pf /tmp/cli.pid c0
+cat /tmp/cli.lease /tmp/lab.leases                                     # the lease the client stored / the server table
+sudo pkill tcpdump; sudo tcpdump -nn -vv -e -r /tmp/dhcp.pcap | head -60   # read the DORA
+```
+You should see four packets: DHCPDISCOVER, DHCPOFFER, DHCPREQUEST, DHCPACK, and the server's `--log-dhcp` output describing each.
+
+Clean up:
+```bash
+sudo pkill dnsmasq; sudo pkill dhclient
+sudo ip netns del srv; sudo ip netns del cli; rm -f /tmp/dhcp.pcap /tmp/cli.* /tmp/lab.leases
+```
+
+### 14.3 Rebuild the packet yourself (Python, no libraries)
+
+```python
+import struct
+mac = bytes.fromhex("aabbcc112233")
+opts = bytes([53,1,1]) + bytes([61,7,1]) + mac + bytes([12,6]) + b"laptop" + bytes([55,6,1,3,6,15,28,51])
+dhcp = struct.pack("!BBBBIHH4s4s4s4s", 1,1,6,0, 0x3903F326, 0, 0x8000, b"\0"*4,b"\0"*4,b"\0"*4,b"\0"*4)
+dhcp += mac + b"\0"*10 + b"\0"*64 + b"\0"*128 + bytes.fromhex("63825363") + opts + b"\xff"
+dhcp = dhcp.ljust(300, b"\0")
+print(len(dhcp))        # 300
+```
+Extend it with the UDP/IP headers (the checksum method is in Chapters 23–24 and 30) and compare against the bytes in §9. To *send* one on a lab network, use `scapy` (`Ether()/IP()/UDP()/BOOTP()/DHCP()`).
 
 ---
 
-### Wireshark Dissection
+## 15. Troubleshooting Discover problems
 
-**Opening DHCP DISCOVER in Wireshark:**
+| Symptom | Where to look |
+|---|---|
+| Client stuck at "obtaining IP address" / gets `169.254.x.x` | Capture on the client: are Discovers leaving? Capture on the server side: do they arrive? Answered? |
+| Discovers leave, none arrive at the server | Switch/VLAN/port issue, wrong VLAN, DHCP snooping dropping frames, missing **relay** (`ip helper-address`) |
+| Discovers arrive, no Offer | Server not listening on that interface, no pool for that subnet, **pool exhausted**, reservation/ACL blocks the MAC, firewall blocks UDP 67/68 |
+| Offers received, from an unexpected server | **Rogue DHCP** |
+| Works on cable, not on Wi-Fi | Wi-Fi client isolation, broadcast filtering, AP/controller DHCP proxy settings |
+| Works after a while | Slow Offer, pool nearly full, server does ICMP conflict checks (added delay) |
+| Container can't get DHCP | Docker bridge doesn't run DHCP; use `docker network` IPAM or macvlan with a DHCP plugin |
 
-```
-Frame 1: 346 bytes on wire
-
-Ethernet II
-├─ Destination: Broadcast (ff:ff:ff:ff:ff:ff)
-├─ Source: Computer_dd:ee:ff (aa:bb:cc:dd:ee:ff)
-├─ Type: IPv4 (0x0800)
-
-Internet Protocol Version 4
-├─ Version: 4
-├─ Header Length: 20 bytes
-├─ Total Length: 328
-├─ Protocol: UDP (17)
-├─ Source: 0.0.0.0
-├─ Destination: 255.255.255.255
-
-User Datagram Protocol
-├─ Source Port: 68
-├─ Destination Port: 67
-├─ Length: 308
-├─ Checksum: 0x4f2a [correct]
-
-Dynamic Host Configuration Protocol (Discover)
-├─ Message type: Boot Request (1)
-├─ Hardware type: Ethernet (0x01)
-├─ Hardware address length: 6
-├─ Transaction ID: 0x3903f326
-├─ Client IP address: 0.0.0.0
-├─ Your (client) IP address: 0.0.0.0
-├─ Next server IP address: 0.0.0.0
-├─ Relay agent IP address: 0.0.0.0
-├─ Client MAC address: aa:bb:cc:dd:ee:ff
-├─ Option: (53) DHCP Message Type = DHCP Discover
-├─ Option: (55) Parameter Request List
-│   ├─ Subnet Mask
-│   ├─ Router
-│   ├─ Domain Name Server
-│   └─ Domain Name
-└─ Option: (255) End
-```
+Useful: `journalctl -u NetworkManager | grep -i dhcp`, `journalctl -u systemd-networkd`, `sudo dhclient -v`, `nmap --script broadcast-dhcp-discover` (lists DHCP servers on your segment), `dhcpdump`.
 
 ---
 
-## Summary and Key Takeaways
+## 16. Common misconceptions
 
-### The Complete Journey
-
-**DHCP DISCOVER packet construction:**
-
-```
-1. Application Layer (L7):
-   Creates "I want an IP" message
-   → ~300 bytes DHCP message
-
-2. Transport Layer (L4):
-   Wraps in UDP: ports 68 → 67
-   → 308 bytes UDP datagram
-
-3. Network Layer (L3):
-   Wraps in IP: 0.0.0.0 → 255.255.255.255
-   → 328 bytes IP packet
-
-4. Data Link Layer (L2):
-   Wraps in Ethernet: AA:BB... → FF:FF:FF:FF:FF:FF
-   → 346 bytes Ethernet frame
-
-5. Physical Layer (L1):
-   Converts to electrical signals
-   → 2,768 bits on wire
-```
+| Misconception | Reality |
+|---|---|
+| "DHCP only assigns IPs" | It also delivers mask, gateway, DNS, lease time, NTP, domain, PXE boot info, and more |
+| "DHCP uses TCP" | UDP, ports 67 (server) and 68 (client) |
+| "Discover is sent to the server's IP" | It's a broadcast; the client doesn't know the server |
+| "The source IP is 255.255.255.255" | Source `0.0.0.0`, destination `255.255.255.255` |
+| "Routers forward DHCP broadcasts" | Not unless a **relay agent** converts them |
+| "Every message is a broadcast" | Discover/Request broadcast at first; replies may be unicast; renewals are unicast |
+| "The Discover message identifies itself by port" | The **option 53** value identifies the message type |
+| "DHCP is secure" | No authentication; use snooping |
+| "Docker containers use DHCP" | Docker's IPAM assigns statically from the network's pool |
 
 ---
 
-### Critical Concepts
+## 17. Summary
 
-**1. Broadcasting at Multiple Layers**
-
-```
-L3 Broadcast: IP 255.255.255.255
-- "Send to all IPs on local network"
-- Routers don't forward
-
-L2 Broadcast: MAC FF:FF:FF:FF:FF:FF
-- "Send to all MACs on network segment"
-- Switches forward to all ports
-```
-
-**2. The "No IP Yet" Problem**
-
-```
-Source IP: 0.0.0.0
-- Special reserved value
-- Means "I have no IP address"
-- Only valid during initialization
-- RFC 791 defines this
-```
-
-**3. Well-Known Ports**
-
-```
-Port 68: DHCP Client (source)
-Port 67: DHCP Server (destination)
-- IANA-assigned
-- Universal across all systems
-- Enables interoperability
-```
-
-**4. MAC as Identity**
-
-```
-Client MAC: AA:BB:CC:DD:EE:FF
-- Only identity computer has
-- Burned into NIC hardware
-- Server uses for replies
-- Creates MAC → IP mapping
-```
+- **DHCP** automates address configuration through a four-message conversation: **D**iscover, **O**ffer, **R**equest, **A**cknowledge.
+- **Discover** is a **broadcast**: DHCP message (op=1, xid, chaddr, options 53/61/55…) → **UDP 68→67** → IP **`0.0.0.0` → `255.255.255.255`** → Ethernet **`ff:ff:ff:ff:ff:ff`**.
+- The message layout is inherited from **BOOTP** (240 fixed bytes with the magic cookie `63 82 53 63`, then TLV options ending in `255`).
+- **Broadcasts don't cross routers**; **relay agents** (giaddr) carry them to a central server.
+- DHCP is unauthenticated: use **DHCP snooping** against rogue servers.
 
 ---
 
-### Packet Size Breakdown
+## 18. Check your understanding
 
-```
-Total on wire: 346 bytes (L2 frame)
+1. Why does Discover use source `0.0.0.0` and destination `255.255.255.255`?
+2. Why does DHCP use UDP, and why fixed ports 67/68?
+3. Which option actually says "this is a Discover"?
+4. What is `xid` used for? What is `chaddr`?
+5. What does the broadcast flag change?
+6. How do the sizes work out: DHCP 300 bytes → frame ___ bytes?
+7. The DHCP server is on another subnet. What must exist and what does `giaddr` do?
+8. What happens on Windows if no server ever answers?
 
-Overhead:
-- Ethernet header: 14 bytes
-- IP header: 20 bytes
-- UDP header: 8 bytes
-- Ethernet trailer (FCS): 4 bytes
-- Total overhead: 46 bytes
+<details>
+<summary>Answers</summary>
 
-Actual data:
-- DHCP message: 300 bytes
+1. The client has no address and doesn't know the server or subnet; `0.0.0.0` means "this host, this network" and `255.255.255.255` reaches everyone on the local link.
+2. TCP needs an established connection between known addresses and can't broadcast; the fixed ports let broadcast replies reach the client's DHCP process (BOOTP legacy).
+3. Option 53 (DHCP Message Type) with value 1.
+4. `xid` matches replies to the request; `chaddr` carries the client's hardware address so the server can identify it and reply.
+5. It tells the server whether to reply by broadcast (`0x8000`) or by unicast to the client's MAC before it has an IP.
+6. 300 + 8 (UDP) + 20 (IP) + 14 (Ethernet) = 342 bytes (+4 FCS).
+7. A relay agent on the client's router interface forwards the broadcast as unicast to the server; `giaddr` lets the server choose the pool for the client's subnet.
+8. After retries it self-assigns a `169.254.x.x` link-local address and keeps trying DHCP periodically.
+</details>
 
-Efficiency: 300/346 = 86.7% payload
-```
+**Practice**
 
----
-
-### Why Every Layer Matters
-
-**Physical (L1):** Without proper electrical signals, nothing works
-**Data Link (L2):** MAC broadcast ensures all devices receive frame
-**Network (L3):** IP broadcast enables routing decision
-**Transport (L4):** UDP enables connectionless communication
-**Application (L7):** DHCP message carries actual request
-
-**Remove any layer: System fails**
-
----
-
-## Conclusion
-
-DHCP DISCOVER is not magic—it's engineering. A computer with no IP address manages to send a network request by exploiting well-defined special cases:
-
-- **0.0.0.0** as source IP: "I don't have an address"
-- **255.255.255.255** as destination IP: "Send to everyone locally"
-- **FF:FF:FF:FF:FF:FF** as destination MAC: "Forward to all ports"
-- **Ports 68 and 67**: Universal DHCP client/server ports
-- **Broadcast at every applicable layer**: Ensures delivery without specific targeting
-
-By breaking down the packet layer by layer, field by field, byte by byte, you now understand not just *what* happens, but *how* and *why* it happens. This is the difference between memorizing networking and truly understanding it.
-
-When you capture a DHCP DISCOVER packet in Wireshark or tcpdump, you won't see random hexadecimal values—you'll see:
-- The desperate plea of a computer seeking network identity
-- The clever use of broadcast addresses at multiple layers
-- The precise structure that enables automatic configuration
-- The foundation of modern plug-and-play networking
-
-**This is what it means to FEEL networking.** You've gone from abstract concepts to concrete reality. You understand the first message your computer ever sends on a network, bit by bit, layer by layer.
-
-**DHCP DISCOVER: The first word spoken by a computer entering the network, and now you know exactly what it says and how it speaks.**
+1. Capture your own Discover/Offer/Request/Ack (§14.1) and fill in a table of xid, options and addresses for each packet.
+2. Run the namespace lab; change the pool and lease time; watch how the packets change.
+3. Use `nmap --script broadcast-dhcp-discover` on a network you own and identify every DHCP server (any surprises?).
+4. Reproduce the 342-byte frame in Python/scapy and check it with `tcpdump -r`.
+5. Explain how the exchange would change with a relay in the path (draw the addresses in each hop).
 
 ---
 
-## Further Reading
-
-- **RFC 2131:** Dynamic Host Configuration Protocol (DHCP specification)
-- **RFC 791:** Internet Protocol (IPv4 specification, defines 0.0.0.0)
-- **RFC 768:** User Datagram Protocol (UDP specification)
-- **IEEE 802.3:** Ethernet standards
-- **"TCP/IP Illustrated, Volume 1" by W. Richard Stevens:** Chapter on DHCP
-- **Wireshark DHCP capture analysis tutorials**
-- **"Computer Networks" by Andrew S. Tanenbaum:** Physical and Data Link layers
-- **IANA Port Number Registry:** Well-known ports including 67 and 68
-- **"Internetworking with TCP/IP" by Douglas Comer:** Bootstrap protocols
-- **RFC 1542:** Clarifications and Extensions for BOOTP (DHCP predecessor)
+**Next:** [Chapter 36 – DHCP Offer Deep Dive](36_dhcp_offer_deep_dive_in_details.md)
