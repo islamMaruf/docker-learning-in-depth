@@ -1,1860 +1,548 @@
-# Chapter 28: DNS - Domain Name System In Details
+# Chapter 28: DNS (the Domain Name System) in Detail
 
-## Overview
+> **In one sentence:** DNS is the internet's distributed, hierarchical, cached "phone book": it turns names people can remember (`www.example.com`) into the IP addresses (and other facts) that computers need, through a chain of resolvers and name servers that each know one small piece.
 
-The Domain Name System (DNS) is one of the Internet's most fundamental yet frequently misunderstood protocols. It serves as the Internet's phone book, translating human-friendly domain names like `www.google.com` into machine-readable IP addresses like `142.250.185.206`. Without DNS, you'd need to memorize numerical IP addresses for every website you visit—an impossible task in today's world with billions of websites.
+**Level:** 🟢 Beginner → 🟡 Intermediate → 🔴 Expert · **Reading time:** ~70 minutes
 
-DNS is remarkable not just for what it does, but for *how* it does it. It's a globally distributed, hierarchical database system that processes billions of queries per day with remarkable speed and reliability. When you type a URL into your browser, DNS resolution typically completes in under 100 milliseconds, involving multiple servers across continents working in perfect coordination.
-
-This chapter provides a complete technical exploration of DNS: the anatomy of URLs, the multi-layered resolution process, caching strategies at every level, the hierarchy of name servers (root, TLD, authoritative), why DNS uses UDP instead of TCP, security considerations, and troubleshooting techniques. Understanding DNS deeply is essential because every network request you make—whether loading a webpage, sending an email, or connecting to an API—begins with DNS resolution.
-
-DNS is the invisible infrastructure that makes the Internet usable. Let's understand it comprehensively.
+**Prerequisites:** [Chapter 22](22_tcp_ip_model.md) and [Chapter 24](24_udp_in_details.md) (UDP and TCP); [Chapter 25](25_http_1_0_in_details.md) (URLs).
 
 ---
 
-## Why DNS Exists: The Human-Machine Translation Problem
+## What you will learn
 
-### The Fundamental Incompatibility
-
-Humans and machines process information differently:
-
-**Humans excel at:**
-- Language
-- Text
-- Sentences
-- Meaningful words
-- Pattern recognition in linguistic structures
-
-**Machines excel at:**
-- Numbers
-- Binary representations
-- Numerical addresses
-- Mathematical operations
-
-**Example:**
-
-```
-Human remembers:    "facebook.com"
-Machine needs:      142.250.185.206
-
-Human remembers:    "google.com"
-Machine needs:      172.217.14.206
-
-Human remembers:    "github.com"
-Machine needs:      140.82.121.4
-```
-
-Try memorizing `142.250.185.206` for Facebook. Now memorize 100 more IP addresses for the websites you use daily. Impossible, right? Most people can't even remember their own phone numbers consistently.
-
-### The Real-World Analogy: Home Addresses
-
-Think about physical addresses:
-
-```
-Human-Readable Address:
-Flat 1A, 32 Bashundhara,
-Progoti Sarani, Gulshan,
-Dhaka 1212
-
-Machine-Readable Address (GPS Coordinates):
-23.7808° N, 90.4125° E
-```
-
-Just as you tell someone "I live at 32 Bashundhara, Gulshan" rather than "I live at coordinates 23.7808, 90.4125," you type `facebook.com` instead of `142.250.185.206`.
-
-DNS performs this translation automatically, transparently, every time you make a network request.
-
-### Historical Context: Pre-DNS Internet (1970s-1983)
-
-Before DNS existed, the ARPANET (Internet's predecessor) used a **single text file** called `HOSTS.TXT`:
-
-```
-# HOSTS.TXT (simplified example from 1982)
-10.0.0.1    MIT-MULTICS
-10.0.0.2    SRI-NIC
-10.0.0.3    UCLA-CCN
-10.0.0.4    STANFORD-AI
-```
-
-**The HOSTS.TXT System Worked Like This:**
-
-1. Stanford Research Institute (SRI) maintained the master `HOSTS.TXT` file
-2. Every computer downloaded this file via FTP
-3. Local system parsed the file to resolve names to IP addresses
-4. When new hosts joined, SRI updated `HOSTS.TXT` manually
-5. Everyone re-downloaded the file (sometimes daily)
-
-**Why HOSTS.TXT Failed:**
-
-- **Scalability Crisis:** By 1983, hundreds of hosts existed (today: billions of devices)
-- **Update Lag:** Manual updates took days to propagate
-- **Naming Conflicts:** No central authority to prevent duplicate names
-- **Bandwidth Waste:** Every computer downloading entire file repeatedly
-- **No Structure:** Flat namespace with no hierarchy
-
-In 1983, Paul Mockapetris invented DNS (RFC 882/883) to solve these problems through **distributed, hierarchical architecture**. DNS remains one of the oldest Internet protocols still in active use, largely unchanged since 1987 (RFC 1034/1035).
+- Why DNS exists, and the history that led to it (`HOSTS.TXT`)
+- The parts of a **URL** and of a **domain name** (labels, TLD, FQDN, the trailing dot)
+- The **hierarchy**: root, TLD, authoritative servers, and the roles of **stub**, **recursive resolver**, and **authoritative** servers
+- The complete **resolution process**, with the layers of **caching** and **TTL**
+- **Record types** (A, AAAA, CNAME, MX, TXT, NS, SOA, PTR, SRV, CAA...), zone files and **glue**
+- The **DNS message** and response codes; UDP vs TCP; **EDNS**, DoT, DoH
+- **Security**: cache poisoning, DNSSEC, hijacking, amplification, privacy
+- DNS on your machine (`/etc/hosts`, `resolv.conf`, `nsswitch.conf`, systemd-resolved), in **Docker** and **Kubernetes**
+- Operations: TTL strategy, migrations, load balancing, troubleshooting
+- Hands-on labs with `dig`, `host`, `getent`, `tcpdump`, and a local DNS server in Docker
 
 ---
 
-## Anatomy of a URL
+## 1. Why DNS exists
 
-Before diving into DNS mechanics, let's dissect the URL structure.
+Computers route by **IP addresses** (`93.184.216.34`, `2606:2800:220:1:248:1893:25c8:1946`). People remember **names** (`example.com`). Something has to translate, and it has to do so for billions of names, updated constantly, worldwide, in milliseconds.
 
-### Complete URL Breakdown
+### Before DNS: one file
+In the ARPANET era (1970s to 1983) a single file, **`HOSTS.TXT`**, maintained by the Stanford Research Institute's Network Information Center, listed every host name and address. Everyone downloaded it periodically. That failed to scale:
 
-```
-https://blog.example.com:443/path/to/resource?query=value#fragment
-│      │ │    │       │   │   │               │            │
-│      │ │    │       │   │   │               │            └─ Fragment
-│      │ │    │       │   │   │               └────────────── Query String
-│      │ │    │       │   │   └────────────────────────────── Path
-│      │ │    │       │   └────────────────────────────────── Port
-│      │ │    │       └────────────────────────────────────── TLD
-│      │ │    └────────────────────────────────────────────── Domain
-│      │ └─────────────────────────────────────────────────── Subdomain
-│      └───────────────────────────────────────────────────── Scheme
-```
+| Problem | Why |
+|---|---|
+| **Size and traffic** | Every machine kept downloading the whole file |
+| **Slow updates** | Changes went through one central maintainer; copies were stale for days |
+| **Name collisions** | A flat namespace with one authority |
+| **Single point of failure** | One file, one place |
 
-### Component Details
+In **1983** Paul Mockapetris designed **DNS** (RFCs 882/883, replaced by **RFC 1034/1035 in 1987**, which are still the core of DNS today) with three ideas that solved all of these:
 
-**1. Scheme (Protocol)**
+1. **A hierarchy of names** (`www.example.com`), so each organization manages its own part.
+2. **Distributed authority** (delegation): thousands of servers each responsible for a slice.
+3. **Caching** with expiry times, so most lookups never leave your network.
 
-```
-http://     → HTTP (unencrypted)
-https://    → HTTPS (encrypted with TLS/SSL)
-ftp://      → File Transfer Protocol
-ws://       → WebSocket
-wss://      → WebSocket Secure
-```
-
-The scheme tells the browser which protocol to use for communication. Modern browsers default to `https://` if you omit the scheme.
-
-**2. Subdomain**
-
-```
-blog.example.com     → "blog" is the subdomain
-mail.example.com     → "mail" is the subdomain
-api.example.com      → "api" is the subdomain
-www.example.com      → "www" is the subdomain (historical convention)
-```
-
-Subdomains are hierarchical labels to the left of the main domain. Think of them as children of the parent domain—like districts within a city (Gulshan within Dhaka, Narayanganj as a sub-city).
-
-**Use Cases:**
-- **Functional separation:** `blog.company.com`, `shop.company.com`, `support.company.com`
-- **Geographic separation:** `us.example.com`, `eu.example.com`, `asia.example.com`
-- **Environment separation:** `dev.example.com`, `staging.example.com`, `prod.example.com`
-
-**Key Point:** One domain can have unlimited subdomains. Buying `example.com` allows you to create `blog.example.com`, `mail.example.com`, `store.example.com` without additional purchases.
-
-**3. Domain (Second-Level Domain)**
-
-```
-example.com    → "example" is the domain
-google.com     → "google" is the domain
-facebook.com   → "facebook" is the domain
-github.com     → "github" is the domain
-```
-
-This is what you register/purchase from domain registrars (GoDaddy, AWS Route 53, Namecheap, etc.).
-
-**Domain Registration:**
-- Must be globally unique
-- Purchased for 1-10 year periods (renewable)
-- Costs vary: $10-$50/year for `.com`
-- After expiration, domain returns to available pool
-
-**4. Top-Level Domain (TLD)**
-
-```
-.com      → Commercial (most common)
-.org      → Organization (originally non-profit)
-.net      → Network (originally ISPs)
-.gov      → US Government
-.edu      → Educational institutions (US)
-.io       → Popular for tech startups (British Indian Ocean Territory)
-.ai       → Popular for AI companies (Anguilla)
-.uk       → United Kingdom
-.de       → Germany (Deutschland)
-.jp       → Japan
-```
-
-**TLD Categories:**
-
-- **gTLD (Generic TLD):** `.com`, `.org`, `.net`, `.info`
-- **ccTLD (Country Code TLD):** `.us`, `.uk`, `.de`, `.jp`, `.bd`
-- **New gTLD:** `.tech`, `.app`, `.dev`, `.cloud`, `.blog` (introduced 2013+)
-
-**Historical Note:** Originally, TLDs had strict meanings (`.com` for commercial, `.org` for non-profit), but today anyone can register any gTLD regardless of purpose.
-
-**5. Port (Optional)**
-
-```
-https://example.com:443    → Explicit HTTPS port
-http://example.com:80      → Explicit HTTP port
-http://localhost:3000      → Custom development port
-```
-
-Default ports:
-- HTTP: `80`
-- HTTPS: `443`
-- FTP: `21`
-- SSH: `22`
-
-Browsers hide default ports (`:80` for `http://`, `:443` for `https://`) in the address bar.
-
-**6. Path**
-
-```
-https://example.com/products/laptops/dell
-                    └─────────────────────┘
-                           Path
-```
-
-Specifies the resource location on the server. Analogous to file system paths.
-
-**7. Query String**
-
-```
-https://example.com/search?q=dns&category=networking&sort=date
-                            └───────────────────────────────────┘
-                                      Query Parameters
-```
-
-Key-value pairs passed to the server:
-- `q=dns` (search query)
-- `category=networking` (filter)
-- `sort=date` (sorting preference)
-
-**8. Fragment**
-
-```
-https://example.com/docs#dns-resolution
-                         └──────────────┘
-                            Fragment
-```
-
-Identifies a specific section within the page (client-side only, not sent to server).
-
-### Complete URL Examples
-
-**Example 1: LinkedIn Engineering Blog**
-
-```
-https://engineering.linkedin.com/blog
-
-Scheme:         https
-Subdomain:      engineering
-Domain:         linkedin
-TLD:            .com
-Path:           /blog
-```
-
-**Example 2: Facebook.com**
-
-```
-https://www.facebook.com
-
-Scheme:         https
-Subdomain:      www
-Domain:         facebook
-TLD:            .com
-```
-
-Note: `www` is a conventional subdomain, not required. `facebook.com` and `www.facebook.com` typically point to the same IP address.
-
-**Example 3: GitHub Repository**
-
-```
-https://github.com/torvalds/linux/tree/master/kernel
-
-Scheme:         https
-Domain:         github
-TLD:            .com
-Path:           /torvalds/linux/tree/master/kernel
-```
+(The old file lives on as `/etc/hosts` on your machine, which you can still use for overrides.)
 
 ---
 
-## What is DNS? The Domain Name System
-
-### Defining "System"
-
-DNS is called a **system** (not just a protocol) because it involves multiple independent components working together:
-
-**System Characteristics:**
-1. **Multiple Components:** Root servers, TLD servers, authoritative servers, resolvers, caches
-2. **Input from Environment:** User's domain query
-3. **Coordinated Processing:** Each component performs specific role
-4. **Output to Environment:** Resolved IP address returned to client
-
-**Analogy: Social System**
+## 2. Anatomy of a URL and a domain name
 
 ```
-Social System Components:
-├── Universities (education)
-├── Teachers (knowledge transfer)
-├── Students (learners)
-├── Shops (commerce)
-├── Farmers (food production)
-└── Government (administration)
-
-Input: Students want education
-Process: Universities organize, teachers instruct, students learn
-Output: Educated workforce
+   https://blog.example.com:443/path/to/page?query=value#section
+   └─┬──┘   └──────┬───────┘└┬┘└─────┬─────┘└─────┬─────┘└──┬──┘
+   scheme        host       port    path       query    fragment
 ```
 
-Similarly, DNS has multiple server types (components) working together to convert domain names (input) into IP addresses (output).
+The **host** part is what DNS resolves. A domain name is a sequence of **labels** separated by dots, read **right to left** from most general to most specific:
 
-### DNS Resolution Defined
+```
+   blog . example . com .          ← the trailing dot is the DNS ROOT
+    │        │       │
+    │        │       └ top-level domain (TLD)
+    │        └──────── second-level domain (what you register)
+    └───────────────── subdomain (whatever the owner of example.com creates)
+```
 
-**Resolution:** The process of converting a domain name into an IP address.
+| Term | Meaning |
+|---|---|
+| **Label** | One part between dots (1–63 characters: letters, digits, hyphen; case-insensitive) |
+| **FQDN** (fully qualified domain name) | The complete name, formally ending in a dot: `blog.example.com.` The final dot names the **root**; applications usually add it silently |
+| **TLD** | Top-level domain. **gTLD**: `.com`, `.org`, `.net`, `.dev`, `.app`... **ccTLD** (country code): `.uk`, `.de`, `.jp`, `.bd`... |
+| **Second-level domain (SLD)** | `example` in `example.com`; what you **register** |
+| **Subdomain** | Any label added to the left; the owner can create unlimited ones for free (`blog.`, `api.`, `staging.`) |
+| **Apex / bare / root domain** | `example.com` itself (the "zone apex") |
+| **Registrar / registry / registrant** | The company you buy from (Namecheap...) / the organization that runs the TLD (Verisign for `.com`) / you, the owner |
 
-**Etymology:**
-- **Verb:** Resolve → To find a solution, to settle a problem
-- **Noun:** Resolution → The solution itself
+Limits: a full name is at most **253 characters**. Names may contain **internationalized characters** (e.g. `münchen.de`) which are encoded as **Punycode** (`xn--mnchen-3ya.de`).
 
-**Example Usage:**
-"Two people are fighting. A mediator helps them *resolve* their dispute. The outcome is the *resolution*."
+**Public suffixes:** for `bbc.co.uk` the *registrable* domain is `bbc.co.uk` because `co.uk` is a "public suffix" (like a TLD). Browsers and cookie logic use the **Public Suffix List** to decide what counts as one "site".
 
-**In DNS Context:**
-"The browser needs to *resolve* `facebook.com`. The DNS system provides the *resolution*: `142.250.185.206`."
-
-### Why "Domain Name System" is Multi-Component
-
-If DNS were just one server storing all domain-to-IP mappings, it would:
-
-1. **Fail to Scale:** Billions of domains, billions of devices querying simultaneously
-2. **Create Single Point of Failure:** One server down = entire Internet unusable
-3. **Cause Update Bottlenecks:** Every new domain requires updating one server
-4. **Waste Bandwidth:** Every query travels to single central location
-
-**Solution:** Distribute and hierarchically organize the workload across thousands of servers worldwide.
+Not everything is `www`: `www` is just a customary subdomain, and `example.com` and `www.example.com` are **two different names** that the owner typically points to the same place.
 
 ---
 
-## The DNS Hierarchy: Root, TLD, and Authoritative Servers
-
-DNS uses a tree structure, similar to file systems.
-
-### The DNS Tree
+## 3. Who is who in DNS
 
 ```
-                            . (Root)
-                            │
-        ┌───────────────────┼───────────────────┐
-        │                   │                   │
-       com                 org                 net
-        │                   │                   │
-   ┌────┴────┐         ┌────┴────┐        ┌────┴────┐
-   │         │         │         │        │         │
- google  facebook  wikipedia  mozilla  cloudflare example
-   │
-   ├── www
-   ├── mail
-   ├── drive
-   └── docs
+   Your app ─► STUB RESOLVER ─► RECURSIVE RESOLVER ─────────► ROOT servers        "ask the .com servers"
+   (browser/OS)  (in your OS)    (ISP, company, 8.8.8.8,  ─► TLD servers (.com)  "ask example.com's servers"
+                                  1.1.1.1, 9.9.9.9)       ─► AUTHORITATIVE       "here's the answer"
+                                                              servers for example.com
 ```
 
-**Full Qualified Domain Name (FQDN):**
+| Role | Job |
+|---|---|
+| **Stub resolver** | The tiny resolver in your OS/library (`getaddrinfo()`); it just asks a configured recursive resolver and waits for the final answer |
+| **Recursive resolver** (a.k.a. caching resolver, "DNS server" of your ISP, Google Public DNS `8.8.8.8`, Cloudflare `1.1.1.1`, Quad9 `9.9.9.9`, or one you run: Unbound, dnsmasq, BIND) | Does the *legwork*: walks the hierarchy on your behalf, **caches** every answer, and returns the result |
+| **Root servers** | Know only where the **TLD** servers are. **13 named server "letters" (a–m.root-servers.net)** but over **1,700 physical instances** worldwide using **anycast** (the same IP is announced from many places; you reach the nearest) |
+| **TLD servers** | Know which **authoritative servers** handle each domain in that TLD (e.g. `.com`'s servers know example.com's name servers). They give **referrals**, not final answers |
+| **Authoritative servers** | Hold the **actual records** for a zone (`example.com`): the source of truth. Run by the owner, or by a DNS host (Cloudflare, Route 53, Azure DNS, Google Cloud DNS, your registrar) |
 
-What you type:
-```
-www.google.com
-```
+Two query styles:
 
-What DNS actually resolves:
-```
-www.google.com.
-              └─ Notice the trailing dot (root)
-```
-
-The trailing dot represents the root of the DNS tree. Browsers add it automatically (you don't need to type it).
-
-### Three Server Types in DNS Hierarchy
-
-#### 1. Root Name Servers
-
-**Purpose:** Know where to find TLD servers (`.com`, `.org`, `.net`, etc.)
-
-**Count:** 13 root server clusters worldwide (labeled A-M):
-```
-a.root-servers.net
-b.root-servers.net
-c.root-servers.net
-...
-m.root-servers.net
-```
-
-**Misconception:** There aren't *only* 13 physical servers. Each "server" is actually a **cluster** of hundreds of servers distributed globally using Anycast routing. Total: 1000+ physical servers.
-
-**What Root Servers Know:**
-```
-Query:    "Who handles .com domains?"
-Response: "TLD Name Server for .com is at 192.5.6.30"
-
-Query:    "Who handles .org domains?"
-Response: "TLD Name Server for .org is at 199.19.57.1"
-```
-
-**What Root Servers DON'T Know:**
-They don't know `facebook.com`'s IP address. They only know which TLD server to ask.
-
-**Organizations Managing Root Servers:**
-- Verisign (A, J)
-- USC-ISI (B)
-- Cogent Communications (C)
-- University of Maryland (D)
-- NASA (E)
-- Internet Systems Consortium (F)
-- US DoD (G, H)
-- Autonomica (I)
-- RIPE NCC (K)
-- ICANN (L)
-- WIDE Project (M)
-
-#### 2. TLD (Top-Level Domain) Name Servers
-
-**Purpose:** Know where to find authoritative servers for specific domains within their TLD.
-
-**Organized by TLD:**
-```
-.com TLD Server      → Knows about google.com, facebook.com, amazon.com
-.org TLD Server      → Knows about wikipedia.org, mozilla.org, apache.org
-.net TLD Server      → Knows about cloudflare.net, speedtest.net
-.uk TLD Server       → Knows about bbc.co.uk, gov.uk
-```
-
-**Example: .com TLD Server Knowledge**
-
-```
-Query:    "Who is authoritative for facebook.com?"
-Response: "Authoritative Name Server for facebook.com is ns1.facebook.com (IP: 31.13.64.1)"
-
-Query:    "Who is authoritative for google.com?"
-Response: "Authoritative Name Server for google.com is ns1.google.com (IP: 216.239.32.10)"
-```
-
-**What TLD Servers DON'T Know:**
-They don't know the actual IP address of `facebook.com`. They only know which authoritative server has that information.
-
-**TLD Server Management:**
-- **gTLD (.com, .net, .org):** Managed by Verisign, Public Interest Registry
-- **ccTLD (.uk, .de, .jp):** Managed by respective countries' network information centers
-
-#### 3. Authoritative Name Servers
-
-**Purpose:** Store the actual IP address mappings for specific domains.
-
-**Example: facebook.com Authoritative Server**
-
-```
-Domain:        facebook.com
-Name Servers:  ns1.facebook.com, ns2.facebook.com
-Records Stored:
-
-facebook.com              → 157.240.11.35 (A record)
-www.facebook.com          → 157.240.11.35 (A record)
-mail.facebook.com         → 31.13.64.1 (A record)
-facebook.com              → fb.mail.gandi.net (MX record - email)
-```
-
-**Authoritative Server Responsibilities:**
-- Store all DNS records for the domain (A, AAAA, CNAME, MX, TXT, etc.)
-- Return definitive answers (not cached)
-- Update when domain owner changes settings
-
-**Who Runs Authoritative Servers?**
-- **Company-owned:** Google runs its own authoritative servers (`ns1.google.com`)
-- **Hosting providers:** AWS Route 53, Cloudflare DNS, Azure DNS
-- **Domain registrars:** GoDaddy, Namecheap
+- **Recursive query** (stub → resolver): "give me the *final* answer, and do whatever it takes." Flag `RD` (recursion desired).
+- **Iterative queries** (resolver → root/TLD/authoritative): each server answers with either the answer or **a referral**: "I don't know, but ask these servers." The resolver follows the referrals itself.
 
 ---
 
-## DNS Resolution: The Complete 20-Step Process
+## 4. The resolution process, step by step
 
-When you type `facebook.com` in your browser and hit Enter, here's **exactly** what happens:
+You type `www.example.com` in a browser.
 
-### Step-by-Step Resolution Journey
+### 4.1 On your machine
 
-```
-┌─────────────┐
-│  Browser    │  ← You type "facebook.com"
-└──────┬──────┘
-       │
-```
+1. **Browser cache.** Browsers keep their own short-lived DNS cache (Chrome: `chrome://net-internals/#dns`; entries obey TTL, with a floor of about a minute in some browsers).
+2. **Operating system.** The browser calls `getaddrinfo("www.example.com")` in the C library, which follows `/etc/nsswitch.conf` (`hosts: files dns`) to decide the sources and order:
+   1. **`/etc/hosts`** (local static entries; checked first)
+   2. **DNS**: the OS or its local caching service (systemd-resolved, macOS `mDNSResponder`, Windows DNS Client) checks *its* cache and, if empty, asks the configured resolver(s) from `/etc/resolv.conf` (Linux), the network settings (Windows/macOS), or the ones handed out by **DHCP** (Chapters 35–37).
+   (Note: modern browsers can bypass the OS and use their **own** resolver, including **DNS over HTTPS**.)
+3. The stub sends a **UDP query to port 53** of the recursive resolver.
 
-**Step 1: Browser Checks Its Own Cache**
-
-```
-Browser Cache Lookup:
-╔════════════════════════════════════╗
-║ Domain           │ IP Address      ║
-╠════════════════════════════════════╣
-║ google.com       │ 142.250.185.206 ║
-║ github.com       │ 140.82.121.4    ║
-║ facebook.com     │ ❌ NOT FOUND    ║
-╚════════════════════════════════════╝
-
-Result: MISS
-Action: Proceed to Step 2
-```
-
-**Why Check Browser Cache First?**
-- Fastest lookup (RAM access: ~1 nanosecond)
-- No network roundtrip
-- Reduces load on DNS infrastructure
-
-**Browser Cache Lifetime:** Typically 60 seconds to 5 minutes (varies by browser settings and DNS TTL).
-
----
-
-**Step 2: Browser Requests from Operating System**
+### 4.2 At the recursive resolver (cache miss)
+Assume it has nothing cached (a completely cold cache); real resolvers already know the root and often the `.com` servers:
 
 ```
-Browser → OS: "Do you have the IP for facebook.com?"
+ resolver ──► root server:            "www.example.com A?"
+          ◄── referral:               "I don't know, but .com is handled by a.gtld-servers.net (…and others). Here are their IPs (glue)"
+ resolver ──► .com TLD server:        "www.example.com A?"
+          ◄── referral:               "example.com is handled by a.iana-servers.net, b.iana-servers.net"
+ resolver ──► example.com authoritative server:  "www.example.com A?"
+          ◄── ANSWER (flag AA):       "www.example.com. 3600 IN A 93.184.216.34"
 ```
 
-The browser doesn't directly contact DNS servers. It asks the Operating System to resolve the domain.
+The resolver **caches** each piece (the `.com` servers for two days, `example.com`'s name servers, the final answer for its TTL), then returns the answer to the stub, which caches it in turn and hands it to the browser.
 
-**Why Involve the OS?**
-- OS has system-wide DNS cache (shared by all applications)
-- OS manages network interfaces and routing
-- Security policies enforced at OS level
+### 4.3 Then the real work begins
+Only now can the browser open a TCP (and TLS) connection to `93.184.216.34` and send the HTTP request. **DNS is on the critical path of every new connection to a new name**. (That's why `<link rel="dns-prefetch">` and `preconnect` exist.)
+
+### 4.4 Typical timing
+| Situation | Time |
+|---|---|
+| Answer in the browser or OS cache | ~0–1 ms |
+| Answer in the resolver's cache (very common) | ~1–30 ms (one round trip to the resolver) |
+| Cold resolution walking root → TLD → authoritative | ~50–300 ms (several round trips to distant servers) |
+
+### 4.5 Why the design scales
+- The **root servers** are only asked for **TLD delegations**, and those are cached for **2 days**, so they see a small fraction of the world's queries.
+- A resolver serving thousands of users answers most queries from cache: the first user to look up `example.com` pays the cost, and everyone else within the **TTL** benefits.
+- Authority is **delegated**: `.com` delegates `example.com` to its owner, who can delegate `dev.example.com` further. No one runs "all of DNS".
+
+### 4.5b Negative caching
+"That name does not exist" is cached too (**NXDOMAIN**), for the time given by the zone's **SOA minimum/negative TTL**. That's why a newly created record may "not exist" for a few minutes for someone who asked just before you created it.
 
 ---
 
-**Step 3: OS Checks Its Own Cache**
+## 5. TTL and caching
+
+Every record carries a **TTL** (time to live, in seconds): how long a cache may keep it.
 
 ```
-OS Cache Lookup:
-╔════════════════════════════════════╗
-║ Domain           │ IP Address      ║
-╠════════════════════════════════════╣
-║ linkedin.com     │ 108.174.10.10   ║
-║ stackoverflow.com│ 151.101.1.69    ║
-║ facebook.com     │ ❌ NOT FOUND    ║
-╚════════════════════════════════════╝
-
-Result: MISS
-Action: Proceed to Step 4
+www.example.com.   300   IN   A   93.184.216.34
+                   ↑ TTL
 ```
 
-**OS Cache Location (Linux):**
-```bash
-# View DNS cache on Linux (systemd-resolved)
-resolvectl statistics
+Caches count down: `dig` shows the *remaining* TTL when the answer comes from a cache (run it twice and watch the number fall). When it hits 0, the record must be re-fetched.
 
-# Flush DNS cache
-systemd-resolve --flush-caches
-```
+| TTL | Pros | Cons | Use for |
+|---|---|---|---|
+| **Low** (30–300 s) | Changes take effect quickly; easy failover | More queries, slightly slower on average, higher DNS cost | Records you may need to change fast: load balancers, failover, migrations |
+| **High** (3600–86400 s) | Fewer queries, better resilience if authoritative servers are unreachable | Changes are slow to take effect | Stable records (MX, NS, most static sites) |
 
-**OS Cache Lifetime:** Typically 60-300 seconds.
+**Important truths**
+
+- **"DNS propagation" is a myth of waiting caches.** There is no push; each cache independently expires. A change takes *up to the old TTL* to be seen everywhere (some resolvers or applications hold longer than the TTL. Java's default and some libraries are examples).
+- **Migration recipe:** 1–2 days before, lower the TTL (e.g. 60 s); wait for the old TTL to pass; change the record; verify; then raise the TTL again.
+- **Layers:** application (browser, Java, Node) → OS cache → local forwarder → recursive resolver. Flushing "DNS cache" on your machine clears only some of them.
 
 ---
 
-**Step 4: OS Responds to Browser**
-
-```
-OS → Browser: "I don't have it in cache. Let me query the DNS Resolver."
-```
-
----
-
-**Step 5: OS Requests from DNS Resolver**
-
-```
-OS → DNS Resolver: "What is the IP for facebook.com?"
-```
-
-**DNS Resolver = ISP Server**
-
-Your Internet Service Provider (ISP) runs DNS Resolver servers:
-
-**Examples (Bangladesh):**
-- Dot Internet
-- Amber IT
-- Banglalion
-- Grameenphone
-
-**Examples (Global):**
-- Google Public DNS: `8.8.8.8`, `8.8.4.4`
-- Cloudflare DNS: `1.1.1.1`, `1.0.0.1`
-- Quad9: `9.9.9.9`
-
-**Why Use ISP's DNS Resolver?**
-Your router is typically configured with your ISP's DNS servers by default (via DHCP).
-
----
-
-**Step 6: DNS Resolver Checks Its Own Cache**
-
-```
-DNS Resolver Cache Lookup:
-╔════════════════════════════════════╗
-║ Domain           │ IP Address      ║
-╠════════════════════════════════════╣
-║ amazon.com       │ 176.32.103.205  ║
-║ netflix.com      │ 52.85.229.90    ║
-║ facebook.com     │ ❌ NOT FOUND    ║
-╚════════════════════════════════════╝
-
-Result: MISS
-Action: Begin full DNS resolution (Step 7-13)
-```
-
-**If HIT (facebook.com found in cache):**
-```
-Fast Path:
-Step 7:  DNS Resolver → OS → Browser (Return 157.240.11.35)
-Step 8:  Browser → facebook.com server at 157.240.11.35
-[Resolution complete in ~10ms]
-```
-
-**Resolver Cache Benefits:**
-- One ISP serves 100,000+ users
-- If one user queries `facebook.com`, result cached for all users
-- Drastically reduces redundant queries to root/TLD/authoritative servers
-
----
-
-**Step 7-13: Full DNS Resolution (Cache MISS Scenario)**
-
-When the DNS Resolver doesn't have the answer cached, it must traverse the DNS hierarchy.
-
-**Step 7: DNS Resolver → Root Name Server**
-
-```
-DNS Resolver → Root Server (.):
-  "Who is authoritative for .com domains?"
-
-Root Server → DNS Resolver:
-  "TLD Name Server for .com: 192.5.6.30 (a.gtld-servers.net)"
-```
-
-**Root Server Response Format:**
-
-```
-;; QUESTION SECTION:
-;facebook.com.    IN    A
-
-;; AUTHORITY SECTION:
-com.             172800  IN  NS  a.gtld-servers.net.
-com.             172800  IN  NS  b.gtld-servers.net.
-com.             172800  IN  NS  c.gtld-servers.net.
-
-;; ADDITIONAL SECTION:
-a.gtld-servers.net.  172800  IN  A  192.5.6.30
-b.gtld-servers.net.  172800  IN  A  192.33.14.30
-c.gtld-servers.net.  172800  IN  A  192.26.92.30
-```
-
-The root server says: "I don't know `facebook.com`, but the `.com` TLD servers (a/b/c.gtld-servers.net) can help you."
-
----
-
-**Step 8: Root Server Responds with TLD Server IP**
-
-```
-DNS Resolver receives:
-TLD Server IP: 192.5.6.30 (a.gtld-servers.net)
-```
-
----
-
-**Step 9: DNS Resolver → TLD Name Server (.com)**
-
-```
-DNS Resolver → .com TLD Server (192.5.6.30):
-  "Who is authoritative for facebook.com?"
-
-.com TLD Server → DNS Resolver:
-  "Authoritative Name Server for facebook.com: ns1.facebook.com (31.13.64.1)"
-```
-
-**TLD Server Response Format:**
-
-```
-;; QUESTION SECTION:
-;facebook.com.    IN    A
-
-;; AUTHORITY SECTION:
-facebook.com.    172800  IN  NS  ns1.facebook.com.
-facebook.com.    172800  IN  NS  ns2.facebook.com.
-facebook.com.    172800  IN  NS  ns3.facebook.com.
-
-;; ADDITIONAL SECTION:
-ns1.facebook.com.  172800  IN  A  31.13.64.1
-ns2.facebook.com.  172800  IN  A  31.13.65.1
-ns3.facebook.com.  172800  IN  A  31.13.66.1
-```
-
-The TLD server says: "I don't know the IP, but Facebook's authoritative name servers (ns1/ns2/ns3.facebook.com) have the answer."
-
----
-
-**Step 10: TLD Server Responds with Authoritative Server IP**
-
-```
-DNS Resolver receives:
-Authoritative Server IP: 31.13.64.1 (ns1.facebook.com)
-```
-
----
-
-**Step 11: DNS Resolver → Authoritative Name Server**
-
-```
-DNS Resolver → ns1.facebook.com (31.13.64.1):
-  "What is the IP address for facebook.com?"
-
-Authoritative Server → DNS Resolver:
-  "facebook.com → 157.240.11.35"
-```
-
-**Authoritative Server Response Format:**
-
-```
-;; QUESTION SECTION:
-;facebook.com.    IN    A
-
-;; ANSWER SECTION:
-facebook.com.    300    IN    A    157.240.11.35
-
-;; AUTHORITY SECTION:
-facebook.com.    172800  IN  NS  ns1.facebook.com.
-
-;; ADDITIONAL SECTION:
-ns1.facebook.com.  172800  IN  A  31.13.64.1
-```
-
-**This is the definitive answer.** The authoritative server is the source of truth for `facebook.com`.
-
----
-
-**Step 12: Authoritative Server Responds with Actual IP Address**
-
-```
-DNS Resolver receives:
-facebook.com → 157.240.11.35
-```
-
----
-
-**Step 13: DNS Resolver Stores in Cache**
-
-```
-DNS Resolver Cache Update:
-╔════════════════════════════════════╗
-║ Domain           │ IP Address      ║
-╠════════════════════════════════════╣
-║ amazon.com       │ 176.32.103.205  ║
-║ netflix.com      │ 52.85.229.90    ║
-║ facebook.com     │ 157.240.11.35   ║ ← NEW
-╚════════════════════════════════════╝
-
-TTL: 300 seconds (5 minutes)
-```
-
-**Why Cache?**
-If 1,000 users in the ISP's network request `facebook.com` in the next 5 minutes, the resolver serves from cache without re-querying root/TLD/authoritative servers.
-
----
-
-**Step 14: DNS Resolver Responds to OS**
-
-```
-DNS Resolver → OS:
-  "facebook.com → 157.240.11.35"
-```
-
----
-
-**Step 15: OS Stores in Cache**
-
-```
-OS Cache Update:
-╔════════════════════════════════════╗
-║ Domain           │ IP Address      ║
-╠════════════════════════════════════╣
-║ linkedin.com     │ 108.174.10.10   ║
-║ stackoverflow.com│ 151.101.1.69    ║
-║ facebook.com     │ 157.240.11.35   ║ ← NEW
-╚════════════════════════════════════╝
-```
-
----
-
-**Step 16: OS Responds to Browser**
-
-```
-OS → Browser:
-  "facebook.com → 157.240.11.35"
-```
-
----
-
-**Step 17: Browser Stores in Cache**
-
-```
-Browser Cache Update:
-╔════════════════════════════════════╗
-║ Domain           │ IP Address      ║
-╠════════════════════════════════════╣
-║ google.com       │ 142.250.185.206 ║
-║ github.com       │ 140.82.121.4    ║
-║ facebook.com     │ 157.240.11.35   ║ ← NEW
-╚════════════════════════════════════╝
-```
-
-**DNS Resolution Complete.**
-
----
-
-**Step 18: Browser Initiates HTTP/HTTPS Request**
-
-```
-Browser → 157.240.11.35:
-  1. TCP 3-way handshake (SYN, SYN-ACK, ACK)
-  2. TLS handshake (if HTTPS)
-  3. HTTP GET request
-
-GET / HTTP/1.1
-Host: facebook.com
-User-Agent: Mozilla/5.0 ...
-```
-
----
-
-**Step 19: Server Processes Request**
-
-```
-Facebook Server (157.240.11.35):
-  - Receives HTTP request
-  - Authenticates user (if logged in)
-  - Queries database for feed
-  - Generates HTML
-```
-
----
-
-**Step 20: Server Responds with Data**
-
-```
-Server → Browser:
-  HTTP/1.1 200 OK
-  Content-Type: text/html
-  
-  <!DOCTYPE html>
-  <html>
-  ...
-  </html>
-```
-
-**Browser renders the webpage.**
-
----
-
-### Visual Summary: Complete DNS Resolution Flow
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                    DNS Resolution Flow                           │
-└─────────────────────────────────────────────────────────────────┘
-
-User types: facebook.com
-
-1. Browser Cache        ❌ MISS
-2. OS Cache            ❌ MISS
-3. DNS Resolver Cache  ❌ MISS
-   ↓
-4. DNS Resolver → Root Name Server
-   "Who handles .com?"
-   ↓
-5. Root → DNS Resolver
-   ".com TLD Server: 192.5.6.30"
-   ↓
-6. DNS Resolver → TLD Server (.com)
-   "Who is authoritative for facebook.com?"
-   ↓
-7. TLD → DNS Resolver
-   "ns1.facebook.com: 31.13.64.1"
-   ↓
-8. DNS Resolver → Authoritative Server (ns1.facebook.com)
-   "What is the IP for facebook.com?"
-   ↓
-9. Authoritative → DNS Resolver
-   "157.240.11.35"
-   ↓
-10. DNS Resolver → OS → Browser
-    "157.240.11.35"
-    ↓
-11. Browser → 157.240.11.35 (HTTP request)
-    ↓
-12. Server → Browser (HTTP response)
-
-Total Time: ~100-200ms (first query)
-Subsequent Queries: ~1-10ms (cached)
-```
-
----
-
-## DNS Caching Strategy: Three Layers
-
-DNS performance relies heavily on caching at multiple levels.
-
-### Layer 1: Browser DNS Cache
-
-**Location:** RAM (in-memory cache within browser process)
-
-**Scope:** Per-browser instance (Chrome cache ≠ Firefox cache)
-
-**Typical TTL:** 60 seconds (Chrome), 300 seconds (Firefox)
-
-**Viewing Browser Cache (Chrome):**
-
-```
-chrome://net-internals/#dns
-```
-
-**Clearing Browser Cache:**
-
-```
-Chrome:
-Settings → Privacy and Security → Clear Browsing Data
-→ Check "Cached images and files"
-→ Clear Data
-
-Or programmatically:
-chrome://net-internals/#dns → Click "Clear host cache"
-```
-
-**Browser Cache Advantages:**
-- Fastest lookup (~1ms)
-- No network overhead
-- Per-site performance optimization
-
-**Browser Cache Disadvantages:**
-- Not shared across applications
-- Lost when browser closes (unless persistent cache enabled)
-- Vulnerable to cache poisoning attacks
-
----
-
-### Layer 2: Operating System DNS Cache
-
-**Location:** OS kernel or system service (systemd-resolved, nscd, dnsmasq)
-
-**Scope:** System-wide (shared by all applications)
-
-**Typical TTL:** 60-300 seconds
-
-**Viewing OS Cache (Linux):**
-
-```bash
-# systemd-resolved (Ubuntu 18.04+)
-resolvectl statistics
-sudo resolvectl query facebook.com
-
-# Check cache hit ratio
-resolvectl statistics
-```
-
-**Viewing OS Cache (macOS):**
-
-```bash
-# macOS doesn't provide direct cache inspection
-# But you can flush and monitor
-sudo dscacheutil -flushcache
-sudo killall -HUP mDNSResponder
-```
-
-**Viewing OS Cache (Windows):**
-
-```cmd
-ipconfig /displaydns
-```
-
-**Clearing OS Cache:**
-
-```bash
-# Linux (systemd-resolved)
-sudo systemd-resolve --flush-caches
-
-# macOS
-sudo dscacheutil -flushcache
-sudo killall -HUP mDNSResponder
-
-# Windows
-ipconfig /flushdns
-```
-
-**OS Cache Advantages:**
-- Shared across all applications (browser, email client, terminal)
-- Survives browser restarts
-- System-level security policies
-
-**OS Cache Disadvantages:**
-- Slower than browser cache (~5-10ms)
-- If OS reboots, cache cleared
-
----
-
-### Layer 3: DNS Resolver Cache (ISP)
-
-**Location:** ISP's DNS servers (or public DNS like Google/Cloudflare)
-
-**Scope:** Regional (all users of that ISP)
-
-**Typical TTL:** Respects authoritative server's TTL (often 300-3600 seconds)
-
-**Why ISP Caching Matters:**
-
-```
-Scenario: 100,000 users connected to ISP
-User 1 queries facebook.com → Full DNS resolution (200ms)
-Users 2-100,000 query facebook.com within 5 minutes → Cached (5ms)
-
-Bandwidth Saved:
-100,000 queries × 200ms = 20,000 seconds = 5.5 hours of query time
-Reduced to: 1 × 200ms + 99,999 × 5ms = 700 seconds = 11.6 minutes
-
-Efficiency Gain: 97% reduction in total query time
-```
-
-**Resolver Cache Advantages:**
-- Massive efficiency for popular domains
-- Reduces load on root/TLD/authoritative servers
-- Faster responses for entire ISP region
-
-**Resolver Cache Disadvantages:**
-- Single point of failure (if ISP DNS down, all users affected)
-- Potential for cache poisoning (malicious IP injection)
-- Slower DNS record updates (stale cache during domain migrations)
-
----
-
-### Cache Coherence and TTL (Time To Live)
-
-Every DNS record has a **TTL** value specifying how long resolvers should cache the response.
-
-**Example DNS Record:**
-
-```
-facebook.com.    300    IN    A    157.240.11.35
-                 └──┘
-                  TTL (300 seconds = 5 minutes)
-```
-
-**What Happens After TTL Expires:**
-
-```
-Time 0:00     → User queries facebook.com. Cacheد (TTL = 300s)
-Time 1:00     → Another user queries. Served from cache.
-Time 4:59     → Another user queries. Served from cache.
-Time 5:01     → TTL expired. Must re-query authoritative server.
-```
-
-**TTL Trade-offs:**
-
-| TTL Value | Advantages | Disadvantages |
-|-----------|------------|---------------|
-| **Low (60s)** | Fast DNS updates, accurate during migrations | High query volume to authoritative servers, slower for users |
-| **High (3600s)** | Fewer queries, faster for users | Slow DNS updates, stale records during changes |
-
-**Best Practice:**
-- **Production domains:** 300-3600 seconds (5 minutes to 1 hour)
-- **During migration:** 60 seconds (temporarily, to allow quick IP changes)
-- **Static domains:** 86400 seconds (24 hours)
-
----
-
-## Why DNS Uses UDP Instead of TCP
-
-DNS queries overwhelmingly use **UDP** (User Datagram Protocol), not TCP.
-
-### UDP vs TCP: Header Comparison
-
-**UDP Header:**
-
-```
-0      7 8     15 16    23 24    31
-+--------+--------+--------+--------+
-|     Source      |   Destination   |
-|      Port       |      Port       |
-+--------+--------+--------+--------+
-|     Length      |    Checksum     |
-+--------+--------+--------+--------+
-|           Data (Payload)          |
-+-----------------------------------+
-
-Header Size: 8 bytes
-```
-
-**TCP Header:**
-
-```
-0      7 8     15 16    23 24    31
-+--------+--------+--------+--------+
-|     Source      |   Destination   |
-|      Port       |      Port       |
-+--------+--------+--------+--------+
-|        Sequence Number            |
-+--------+--------+--------+--------+
-|     Acknowledgment Number         |
-+--------+--------+--------+--------+
-| Offset | Flags |  Window Size    |
-+--------+--------+--------+--------+
-|    Checksum     |  Urgent Pointer |
-+--------+--------+--------+--------+
-|         Options (0-40 bytes)      |
-+--------+--------+--------+--------+
-|           Data (Payload)          |
-+-----------------------------------+
-
-Header Size: 20-60 bytes (variable)
-```
-
-**Comparison:**
-
-| Feature | UDP | TCP |
-|---------|-----|-----|
-| **Header Size** | 8 bytes | 20-60 bytes |
-| **Connection** | Connectionless | Connection-oriented (3-way handshake) |
-| **Reliability** | No guarantees | Guaranteed delivery, ordering |
-| **Speed** | Fast | Slower |
-| **Use Case** | DNS, VoIP, gaming | HTTP, email, file transfer |
-
-### DNS Over UDP: The Performance Win
-
-**TCP DNS Query:**
-
-```
-Time 0ms:   Client → Server: SYN
-Time 50ms:  Server → Client: SYN-ACK
-Time 100ms: Client → Server: ACK
-Time 150ms: Client → Server: DNS Query
-Time 200ms: Server → Client: DNS Response
-Time 250ms: Client → Server: FIN
-Time 300ms: Server → Client: FIN-ACK
-
-Total: 300ms (6 round trips)
-```
-
-**UDP DNS Query:**
-
-```
-Time 0ms:   Client → Server: DNS Query
-Time 50ms:  Server → Client: DNS Response
-
-Total: 50ms (1 round trip)
-```
-
-**Speed Improvement: 6× faster**
-
-### When DNS Uses TCP
-
-DNS falls back to **TCP** in specific scenarios:
-
-1. **Response Size > 512 bytes** (UDP packet size limit)
-   - Example: DNSSEC responses with cryptographic signatures
-   - Solution: DNS server sends TC (Truncated) flag, client retries over TCP
-
-2. **Zone Transfers (AXFR/IXFR)**
-   - Transferring entire DNS zones between servers
-   - Requires reliability (TCP guarantees delivery)
-
-3. **DNS-over-TLS (DoT)** and **DNS-over-HTTPS (DoH)**
-   - Modern encrypted DNS protocols
-   - Require TCP connection for TLS handshake
-
-**Example: Large DNS Response (TCP Fallback)**
-
-```
-UDP Query:
-Client → Server: dns.com (UDP, 512 bytes max)
-Server → Client: [Response truncated, TC flag set]
-
-Client Retries with TCP:
-Client → Server: SYN
-Server → Client: SYN-ACK
-Client → Server: dns.com (TCP, no size limit)
-Server → Client: [Full response, 1024 bytes]
-```
-
-### UDP Reliability in DNS
-
-**Question:** "If UDP is unreliable, how does DNS ensure queries succeed?"
-
-**Answer:** Application-level retries.
-
-```python
-# Simplified DNS resolution with UDP retries
-def dns_query(domain, max_retries=3, timeout=2):
-    for attempt in range(max_retries):
-        try:
-            # Send UDP packet
-            sock.sendto(query, (dns_server, 53))
-            
-            # Wait for response (with timeout)
-            sock.settimeout(timeout)
-            response = sock.recvfrom(512)
-            
-            return response  # Success
-        except socket.timeout:
-            print(f"Attempt {attempt + 1} failed, retrying...")
-    
-    raise DNSTimeout("No response after 3 attempts")
-```
-
-**Typical Behavior:**
-- 1st attempt fails (packet lost): Retry after 2 seconds
-- 2nd attempt succeeds: Total time = 2 seconds
-- Still faster than TCP (which would take 300ms minimum)
-
----
-
-## DNS Record Types
-
-Authoritative name servers store various record types beyond simple IP address mappings.
-
-### Common DNS Record Types
-
-**1. A Record (Address Record)**
-
-Maps domain to IPv4 address.
-
-```
-example.com.    300    IN    A    192.0.2.1
-```
-
-**2. AAAA Record (IPv6 Address Record)**
-
-Maps domain to IPv6 address.
-
-```
-example.com.    300    IN    AAAA    2001:0db8:85a3::8a2e:0370:7334
-```
-
-**3. CNAME Record (Canonical Name)**
-
-Alias one domain to another.
-
-```
-www.example.com.    300    IN    CNAME    example.com.
-blog.example.com.   300    IN    CNAME    hosting.provider.com.
-```
-
-**Use Case:** Point multiple subdomains to the same target without duplicating A records.
-
-**4. MX Record (Mail Exchange)**
-
-Specifies mail server for domain.
-
-```
-example.com.    300    IN    MX    10    mail.example.com.
-example.com.    300    IN    MX    20    backup-mail.example.com.
-```
-
-Priority: Lower number = higher priority.
-
-**5. TXT Record (Text Record)**
-
-Arbitrary text data for various purposes.
-
-```
-example.com.    300    IN    TXT    "v=spf1 include:_spf.google.com ~all"
-_dmarc.example.com.  300  IN  TXT  "v=DMARC1; p=reject; rua=mailto:abuse@example.com"
-```
-
-**Use Cases:**
-- SPF (Sender Policy Framework) for email authentication
-- DKIM (DomainKeys Identified Mail) signatures
-- Domain verification (Google Search Console, SSL certificates)
-
-**6. NS Record (Name Server)**
-
-Specifies authoritative name servers for domain.
-
-```
-example.com.    172800    IN    NS    ns1.example.com.
-example.com.    172800    IN    NS    ns2.example.com.
-```
-
-**7. SOA Record (Start of Authority)**
-
-Contains administrative information about the zone.
-
-```
-example.com.    3600    IN    SOA    ns1.example.com. admin.example.com. (
-                                     2024031101  ; Serial
-                                     7200        ; Refresh
-                                     3600        ; Retry
-                                     1209600     ; Expire
-                                     3600 )      ; Minimum TTL
-```
-
-**8. PTR Record (Pointer Record)**
-
-Reverse DNS lookup (IP → domain).
-
-```
-1.2.0.192.in-addr.arpa.    300    IN    PTR    example.com.
-```
-
-**Use Case:** Email servers check PTR records to prevent spam.
-
-### Example: Complete DNS Zone File
+## 6. DNS records
+
+Authoritative servers store **resource records (RRs)**: `name  TTL  class  type  data`. Class is almost always `IN` (Internet).
+
+| Type | Purpose | Example |
+|---|---|---|
+| **A** | Name → IPv4 address | `www  300 IN A  93.184.216.34` |
+| **AAAA** | Name → IPv6 address | `www  300 IN AAAA 2606:2800:220:1:248:1893:25c8:1946` |
+| **CNAME** | Alias: "this name is really *that* name" | `blog  300 IN CNAME  sites.hosting.example.` |
+| **MX** | Mail servers for a domain, with **priority** (lower = preferred) | `@ IN MX 10 mail1.example.com.` / `@ IN MX 20 mail2.example.com.` |
+| **TXT** | Free text, widely used for verification and email policy | `@ IN TXT "v=spf1 include:_spf.google.com ~all"` |
+| **NS** | The authoritative name servers for a zone (delegation) | `@ IN NS ns1.example.com.` |
+| **SOA** | Zone metadata: primary server, admin e-mail, **serial**, refresh/retry/expire, negative-cache TTL | one per zone |
+| **PTR** | Reverse lookup: IP → name (`34.216.184.93.in-addr.arpa.`) | used by mail servers and logs |
+| **SRV** | Service location (host + port + priority + weight) | `_sip._tcp IN SRV 10 60 5060 sip.example.com.` (also used by Kubernetes, XMPP, Active Directory) |
+| **CAA** | Which certificate authorities may issue TLS certificates | `@ IN CAA 0 issue "letsencrypt.org"` |
+| **HTTPS / SVCB** | Service binding: advertises HTTP/2, HTTP/3, ports, ECH | modern browsers use it |
+| **DS / DNSKEY / RRSIG / NSEC(3)** | DNSSEC (section 9.2) | |
+
+Email-related TXT records: **SPF** (`v=spf1 ...`, which servers may send mail for the domain), **DKIM** (`selector._domainkey`, public key for message signatures), **DMARC** (`_dmarc`, policy for failures).
+
+### Rules and gotchas
+- **CNAME cannot coexist with other records at the same name**, and therefore **cannot be used at the zone apex** (`example.com`), which needs `SOA` and `NS`. Providers offer **ALIAS/ANAME/"CNAME flattening"** as a workaround.
+- **MX and NS targets must be names with A/AAAA records**, not CNAMEs.
+- A name can have **several A records**: resolvers return them (often rotated), a crude form of **round-robin load balancing**.
+- **Wildcards**: `*.example.com IN A ...` matches any name that has no more specific record.
+- **Glue records**: if `example.com`'s name server is `ns1.example.com`, the parent (`.com`) must also supply that server's IP ("glue"), otherwise you'd need `example.com` to find the server for `example.com`, an infinite loop.
+
+### A zone file
 
 ```
 $ORIGIN example.com.
 $TTL 3600
+@    IN SOA ns1.example.com. hostmaster.example.com. (
+          2025010101 ; serial   (increase on every change)
+          7200       ; refresh  (how often secondaries check)
+          3600       ; retry
+          1209600    ; expire
+          300 )      ; negative-caching TTL
 
-@    IN    SOA    ns1.example.com. admin.example.com. (
-                  2024031101  ; Serial
-                  7200        ; Refresh
-                  3600        ; Retry
-                  1209600     ; Expire
-                  3600 )      ; Minimum TTL
+     IN NS    ns1.example.com.
+     IN NS    ns2.example.com.
 
-; Name Servers
-     IN    NS     ns1.example.com.
-     IN    NS     ns2.example.com.
-
-; A Records (IPv4)
-@              IN    A      192.0.2.1
-www            IN    A      192.0.2.1
-mail           IN    A      192.0.2.10
-ftp            IN    A      192.0.2.20
-
-; AAAA Records (IPv6)
-@              IN    AAAA   2001:db8::1
-www            IN    AAAA   2001:db8::1
-
-; MX Records (Email)
-@              IN    MX     10    mail.example.com.
-@              IN    MX     20    backup.mail.provider.com.
-
-; CNAME Records (Aliases)
-blog           IN    CNAME  hosting.provider.com.
-shop           IN    CNAME  ecommerce.platform.com.
-
-; TXT Records (Verification)
-@              IN    TXT    "v=spf1 include:_spf.google.com ~all"
-_dmarc         IN    TXT    "v=DMARC1; p=reject"
+@    IN A     192.0.2.10
+@    IN AAAA  2001:db8::10
+www  IN CNAME @                 ; (or point at the same A record)
+mail IN A     192.0.2.20
+@    IN MX 10 mail.example.com.
+@    IN TXT   "v=spf1 mx -all"
+api  300 IN A 192.0.2.30
+*.dev IN A    192.0.2.40
 ```
+
+Zones are replicated from a **primary** to **secondary** servers by **zone transfers** (AXFR/IXFR over **TCP**), keyed by the SOA serial number.
 
 ---
 
-## DNS Tools and Commands
+## 7. The DNS message, ports and transport
 
-### dig (Domain Information Groper)
+A DNS message, the same shape for queries and responses, is tiny:
 
-**Basic Query:**
+```
+┌───────────────────────────────────────────────┐
+│ Header (12 bytes): ID | flags | QDCOUNT | ANCOUNT | NSCOUNT | ARCOUNT
+├───────────────────────────────────────────────┤
+│ Question section:   name, type, class           e.g. www.example.com. A IN
+├───────────────────────────────────────────────┤
+│ Answer section:     resource records
+├───────────────────────────────────────────────┤
+│ Authority section:  NS records (referrals), SOA
+├───────────────────────────────────────────────┤
+│ Additional section: extra useful records (glue, EDNS OPT)
+└───────────────────────────────────────────────┘
+```
+
+Header flags worth knowing: `QR` (query/response), `AA` (authoritative answer), `TC` (truncated: retry over TCP), `RD` (recursion desired), `RA` (recursion available), `AD` (authenticated data: DNSSEC verified), and the **RCODE**:
+
+| RCODE | Name | Meaning |
+|---|---|---|
+| 0 | **NOERROR** | Success (may still have zero answers: "NODATA": the name exists but not that type) |
+| 2 | **SERVFAIL** | The server couldn't complete the lookup (broken delegation, unreachable servers, DNSSEC failure) |
+| 3 | **NXDOMAIN** | The name doesn't exist |
+| 5 | **REFUSED** | The server won't answer you (policy) |
+
+### UDP first, TCP when needed
+DNS uses **port 53**. Queries normally use **UDP** because a typical exchange is one small question and one small answer: no handshake, no connection state on busy servers, and one round trip. A TCP lookup would need at least an extra round trip for the handshake (plus close). (Rough cost: about 2 round trips on TCP versus 1 on UDP; not "6×".) A UDP client that gets no answer simply **retries** (typically after ~1–2 s, or another server).
+
+**DNS falls back to TCP** when:
+1. The UDP answer is **truncated** (`TC=1`): originally at 512 bytes; with **EDNS(0)** the client advertises a larger buffer (commonly 1232 bytes since the 2020 "DNS Flag Day" recommendation, to avoid IP fragmentation). Big responses (DNSSEC, many records) trigger it.
+2. **Zone transfers** (AXFR/IXFR).
+3. The server or policy requires it, and for **DNS over TLS** (TCP 853), **DNS over HTTPS** (TCP 443 / HTTP/2 or HTTP/3), **DNS over QUIC** (UDP 853).
+
+Server operators must allow **both UDP and TCP** on port 53.
+
+---
+
+## 8. DNS on your machine, in Docker and in Kubernetes
+
+### 8.1 Linux/macOS/Windows
+| File / tool | Purpose |
+|---|---|
+| `/etc/hosts` (Windows: `C:\Windows\System32\drivers\etc\hosts`) | Static name → IP entries checked **before** DNS (`127.0.0.1 localhost`); handy for overrides |
+| `/etc/nsswitch.conf` | Lookup order: `hosts: files dns` (files = `/etc/hosts`) |
+| `/etc/resolv.conf` | Resolver settings: `nameserver 1.1.1.1`, `search corp.example.com` (suffixes tried for short names), `options ndots:1 timeout:2 attempts:3` |
+| systemd-resolved (Ubuntu and others) | A local caching stub at **127.0.0.53**; `resolvectl status`, `resolvectl query example.com`, `resolvectl flush-caches` |
+| macOS | `scutil --dns`; flush: `sudo dscacheutil -flushcache; sudo killall -HUP mDNSResponder` |
+| Windows | `ipconfig /displaydns`, `ipconfig /flushdns` |
+
+The **`search` list** and **`ndots`** matter: with `ndots:5` (Kubernetes default) a name like `api.example.com` (2 dots < 5) is first tried with each search suffix (`api.example.com.default.svc.cluster.local`, ...), producing several failing queries before the real one, which is a classic source of slowness. A trailing dot (`api.example.com.`) makes a name absolute and skips the search list.
+
+### 8.2 Docker
+- On the **default bridge network**, containers copy the host's resolvers into `/etc/resolv.conf`.
+- On **user-defined networks** Docker runs an **embedded DNS server** at **127.0.0.11** in each container; it resolves **container names, service names and network aliases** to container IPs and forwards everything else to the host's resolvers. That's why `ping db` works from another container on the same user-defined network (but not on the default bridge).
+- Override with `--dns 1.1.1.1`, `--dns-search example.com`, `--add-host myhost:10.0.0.5` (writes `/etc/hosts`), or the daemon's `/etc/docker/daemon.json` (`{"dns": ["1.1.1.1"]}`).
+- Common problem: containers can't resolve names because the host uses a VPN/corporate resolver or a `127.0.0.53` stub, so set `--dns` or fix the daemon config. Also check that UDP/53 isn't blocked.
+
+### 8.3 Kubernetes
+Each pod's resolver points to the cluster DNS service (CoreDNS). **Services** get names like `my-svc.my-namespace.svc.cluster.local` → the Service's cluster IP; short names work via the `search` list. Headless services return pod IPs; `SRV` records expose ports. Watch `ndots:5` (above) and CoreDNS latency in busy clusters.
+
+---
+
+## 9. Security and privacy
+
+### 9.1 Attacks
+| Attack | How | Defenses |
+|---|---|---|
+| **Cache poisoning** (Kaminsky, 2008) | Race the real answer with forged responses to get a false record cached (e.g. bank → attacker IP) | Source-port and query-ID randomization, 0x20 case randomization, **DNSSEC**, DNS cookies; keep resolvers patched |
+| **DNS hijacking** | Malware/router compromise changes your resolver settings, or an attacker takes over registrar/DNS-provider accounts | Strong 2FA and registry locks, monitor NS changes, DoH/DoT, secure routers |
+| **Amplification / reflection DDoS** | Spoofed-source small queries (`ANY`, large TXT/DNSSEC records) to **open resolvers** flood the victim with big answers | Don't run open resolvers, response-rate limiting, BCP38 filtering, minimal `ANY` responses |
+| **Subdomain takeover** | A dangling CNAME points to a deleted cloud resource that an attacker re-claims | Remove stale records; inventory DNS |
+| **Typosquatting / homograph** | Look-alike domains, Unicode confusables | Browser IDN policy, monitoring |
+| **Tunneling/exfiltration** | Data hidden in DNS queries | DNS monitoring, egress control |
+| **Outages of the DNS provider** | (The 2016 Dyn attack took down many major sites) | Multiple DNS providers, sensible TTLs |
+
+### 9.2 DNSSEC (integrity)
+**DNSSEC** adds **digital signatures** to DNS data so a validating resolver can prove an answer really came from the zone owner and wasn't altered: `RRSIG` signatures over each record set, `DNSKEY` public keys, and `DS` records in the parent zone forming a **chain of trust** from the **root** down. It provides **authenticity and integrity, not confidentiality**. Adoption is partial; a mistake (expired signatures, wrong `DS`) makes a domain **unreachable** for validating resolvers (`SERVFAIL`). Check with `dig +dnssec example.com` and look for the `ad` flag when asking a validating resolver.
+
+### 9.3 Privacy: DoT and DoH
+Classic DNS is **unencrypted**: the local network and your ISP see every name you look up. **DNS over TLS** (DoT, port 853, RFC 7858), **DNS over HTTPS** (DoH, RFC 8484, port 443), and **DNS over QUIC** encrypt the stub-to-resolver hop. This protects against eavesdropping and tampering on that leg, but the resolver still sees your queries (choose one you trust), and DoH inside browsers can bypass corporate DNS policy. (Encrypted ClientHello, ECH, helps hide the name in TLS as well.)
+
+---
+
+## 10. Operations and design
+
+- **Use two or more NS records** on different networks/providers for resilience; anycast DNS hosts help.
+- **Keep the SOA serial increasing** on each change (a date-based `YYYYMMDDnn` format is common).
+- **DNS-based load balancing:** multiple A records (round-robin), **weighted/latency/geo-based** answers (Route 53, Cloudflare), **health-checked failover**. But clients and resolvers cache, so DNS gives coarse and slow control; combine with a real load balancer.
+- **Split-horizon (split-brain) DNS:** answer differently for internal and external clients (internal IPs inside the company).
+- **Private zones:** cloud VPC private DNS; Kubernetes' `cluster.local`.
+- **Email deliverability** depends on correct MX, SPF, DKIM, DMARC, and PTR.
+- **Automating certificates:** ACME **DNS-01** challenges create a TXT record `_acme-challenge.example.com` to prove control (works for wildcards).
+- **Performance tips:** reduce the number of distinct hostnames a page uses; `dns-prefetch`/`preconnect` for third parties; run a local caching resolver on servers with heavy lookups; avoid `ndots` traps; use connection reuse (HTTP/2) so you resolve less often.
+
+---
+
+## 11. Hands-on labs
+
+Install tools if needed: `apt-get install -y dnsutils` (Debian/Ubuntu), `dnf install bind-utils`, `brew install bind`.
+
+**Lab 1: Basic lookups**
 
 ```bash
-dig facebook.com
-
-; <<>> DiG 9.18.1 <<>> facebook.com
-;; ANSWER SECTION:
-facebook.com.    300    IN    A    157.240.11.35
+dig example.com                 # full response: QUESTION, ANSWER, AUTHORITY, ADDITIONAL; note "Query time" and the TTL
+dig +short example.com          # just the answer
+dig example.com AAAA +short
+dig example.com MX +short
+dig example.com TXT +short
+dig example.com NS +short
+dig example.com SOA +short
+host example.com                # friendly summary
+getent hosts example.com        # what YOUR OS resolver (nsswitch: hosts, files, dns) returns; what apps see
 ```
 
-**Query Specific Record Type:**
+**Lab 2: Watch caching and TTL**
 
 ```bash
-dig facebook.com MX
-dig facebook.com AAAA
-dig facebook.com TXT
+dig example.com | grep -A1 'ANSWER SECTION'; sleep 5; dig example.com | grep -A1 'ANSWER SECTION'
+# the TTL number decreases if answered from a cache; compare with an authoritative answer:
+dig @$(dig +short NS example.com | head -1) example.com | grep -A1 'ANSWER SECTION'     # full TTL, flag "aa"
 ```
 
-**Trace Full DNS Resolution Path:**
+**Lab 3: Trace the hierarchy (what a resolver does)**
 
 ```bash
-dig +trace facebook.com
-
-; Start at root
-.                172800  IN  NS  a.root-servers.net.
-
-; Query .com TLD
-com.             172800  IN  NS  a.gtld-servers.net.
-
-; Query facebook.com authoritative
-facebook.com.    172800  IN  NS  ns1.facebook.com.
-
-; Final answer
-facebook.com.    300     IN  A   157.240.11.35
+dig +trace example.com
+# root servers (.) → NS for com. → NS for example.com. → final A record
 ```
 
-**Query Specific DNS Server:**
+Read each stage: who was asked, what it returned (referral or answer), and the TTLs (2 days on the delegations).
+
+**Lab 4: Choose the resolver and compare**
 
 ```bash
-dig @8.8.8.8 facebook.com       # Google DNS
-dig @1.1.1.1 facebook.com       # Cloudflare DNS
-dig @ns1.facebook.com facebook.com  # Authoritative server
+for s in 8.8.8.8 1.1.1.1 9.9.9.9; do echo -n "$s: "; dig @$s example.org | grep 'Query time'; done
+dig @1.1.1.1 www.github.com CNAME +short
 ```
 
-**Short Answer Only:**
+**Lab 5: Watch the packets**
 
 ```bash
-dig +short facebook.com
-157.240.11.35
+sudo tcpdump -i any -nn port 53 &
+dig example.com +norecurse @198.41.0.4         # ask a root server (a.root-servers.net) directly: you get a referral to .com, not an answer
+dig example.com +bufsize=512 +tcp              # force TCP; see the handshake and the length-prefixed messages
+dig example.com                                 # 1 UDP query + 1 UDP response
 ```
 
----
-
-### nslookup (Name Server Lookup)
-
-**Basic Query:**
+**Lab 6: NXDOMAIN, SERVFAIL, and flags**
 
 ```bash
-nslookup facebook.com
-
-Server:  8.8.8.8
-Address: 8.8.8.8#53
-
-Non-authoritative answer:
-Name:    facebook.com
-Address: 157.240.11.35
+dig doesnotexist.example.com | grep -E 'status|flags'       # status: NXDOMAIN
+dig dnssec-failed.org | grep status                         # SERVFAIL on a validating resolver (deliberately broken DNSSEC test domain)
+dig +dnssec example.com | grep -E 'flags|RRSIG'            # ad flag and signatures when validated
 ```
 
-**Reverse DNS Lookup:**
+**Lab 7: Reverse DNS**
 
 ```bash
-nslookup 157.240.11.35
-
-Server:  8.8.8.8
-Address: 8.8.8.8#53
-
-35.11.240.157.in-addr.arpa  name = edge-star-mini-shv-01-sea1.facebook.com.
+dig -x 8.8.8.8 +short          # dns.google.
+host 1.1.1.1
 ```
 
----
-
-### host
-
-**Simple Query:**
+**Lab 8: `/etc/hosts` override and the search order**
 
 ```bash
-host facebook.com
-
-facebook.com has address 157.240.11.35
-facebook.com has IPv6 address 2a03:2880:f12d:83:face:b00c:0:25de
-facebook.com mail is handled by 10 smtpin.vvv.facebook.com.
+echo '127.0.0.1 myapp.test' | sudo tee -a /etc/hosts
+getent hosts myapp.test         # 127.0.0.1 (from files)
+dig myapp.test +short           # empty! dig queries DNS directly and ignores /etc/hosts
+ping -c1 myapp.test
+sudo sed -i '/myapp.test/d' /etc/hosts
 ```
 
----
-
-### whois (Domain Registration Info)
+**Lab 9: DNS in Docker**
 
 ```bash
-whois facebook.com
-
-Domain Name: FACEBOOK.COM
-Registry Domain ID: 2320948_DOMAIN_COM-VRSN
-Registrar: RegistrarSafe, LLC
-Creation Date: 1997-03-29T05:00:00Z
-Registrar Registration Expiration Date: 2033-03-30T04:00:00Z
+docker network create labnet
+docker run -d --name web --network labnet nginx:1.27-alpine
+docker run --rm --network labnet alpine:3.20 sh -c 'cat /etc/resolv.conf; nslookup web; wget -qO- http://web | head -3'   # nameserver 127.0.0.11
+docker run --rm alpine:3.20 sh -c 'cat /etc/resolv.conf; nslookup web'      # default bridge: cannot resolve "web"
+docker run --rm --dns 9.9.9.9 --add-host demo.local:10.1.2.3 alpine:3.20 sh -c 'cat /etc/resolv.conf /etc/hosts | tail -4'
+docker rm -f web; docker network rm labnet
 ```
 
----
-
-### Checking Your Current DNS Servers
-
-**Linux:**
+**Lab 10: Run your own authoritative server + resolver locally with CoreDNS or dnsmasq**
 
 ```bash
-cat /etc/resolv.conf
-# Output:
-nameserver 8.8.8.8
-nameserver 8.8.4.4
+mkdir dns-lab && cd dns-lab
+cat > Corefile << 'EOF'
+lab.test:1053 {
+    file /zone.db
+    log
+}
+.:1053 {
+    forward . 1.1.1.1
+    cache 30
+    log
+}
+EOF
+cat > zone.db << 'EOF'
+$ORIGIN lab.test.
+@   3600 IN SOA ns.lab.test. admin.lab.test. 1 7200 3600 1209600 300
+    3600 IN NS  ns.lab.test.
+ns  3600 IN A   127.0.0.1
+www 60   IN A   10.10.10.10
+api 60   IN CNAME www
+EOF
+docker run -d --name coredns -p 1053:1053/udp -p 1053:1053/tcp \
+  -v "$PWD/Corefile":/Corefile:ro -v "$PWD/zone.db":/zone.db:ro coredns/coredns:1.11.3 -conf /Corefile
+dig @127.0.0.1 -p 1053 www.lab.test +noall +answer          # 10.10.10.10, flag aa (authoritative)
+dig @127.0.0.1 -p 1053 api.lab.test +noall +answer          # CNAME → www → A
+dig @127.0.0.1 -p 1053 example.com +noall +answer           # forwarded to 1.1.1.1 and cached 30 s
+docker logs coredns | tail; docker rm -f coredns
 ```
 
-**macOS:**
+You've just run an authoritative server and a forwarding cache. Change the record TTL to 5 s and edit the zone to watch clients re-query.
 
-```bash
-scutil --dns | grep nameserver
-```
-
-**Windows:**
-
-```cmd
-ipconfig /all | findstr /i "DNS"
-```
+**Lab 11: Measure DNS cost in a page load.** In Chrome DevTools → Network → click a request → Timing → "DNS Lookup"; or `curl -w 'dns %{time_namelookup}s connect %{time_connect}s total %{time_total}s\n' -o /dev/null -s https://example.com`. Repeat: DNS time drops to ~0 once cached by your OS/resolver.
 
 ---
 
-## DNS Security Considerations
+## 12. Troubleshooting
 
-### DNS Cache Poisoning
-
-**Attack Scenario:**
-
-```
-Normal DNS Query:
-Client → Resolver: "What is bank.com?"
-Resolver → Authoritative: "What is bank.com?"
-Authoritative → Resolver: "bank.com = 203.0.113.50"
-Resolver → Client: "bank.com = 203.0.113.50"
-
-Attacker Injects Fake Response:
-Client → Resolver: "What is bank.com?"
-Attacker → Resolver: "bank.com = 198.51.100.666" (fake, sent faster)
-Resolver caches: bank.com = 198.51.100.666 (POISONED)
-Resolver → Client: "bank.com = 198.51.100.666"
-
-User connects to attacker's server instead of real bank.
-```
-
-**Defense: DNSSEC (DNS Security Extensions)**
-
-DNSSEC adds cryptographic signatures to DNS records:
-
-```
-bank.com.    300    IN    A    203.0.113.50
-bank.com.    300    IN    RRSIG  A 8 2 300 ...signature...
-```
-
-Client verifies signature against trusted keys, rejecting forged responses.
+| Symptom | Likely cause | What to do |
+|---|---|---|
+| `Could not resolve host` / `Temporary failure in name resolution` | No resolver reachable, wrong `resolv.conf`, network down, firewall blocking UDP/53 | `cat /etc/resolv.conf`, `ping 1.1.1.1` (IP works?), `dig @1.1.1.1 example.com` |
+| Works with `dig` but not in the app (or vice versa) | `dig` bypasses `/etc/hosts`, nsswitch and the app's own caches | Test with `getent hosts name`; check `/etc/hosts`, the app's DNS cache (JVM `networkaddress.cache.ttl`), Docker's DNS |
+| Old IP after a change | Cached record (TTL not expired), or the app cached it | `dig +norecurse`, check TTL; flush the OS/browser cache; wait out the TTL; lower TTL before the next change |
+| Different answers from different resolvers | Geo/latency DNS, stale caches, split-horizon, poisoned or filtering resolver | Compare `dig @8.8.8.8` vs `@1.1.1.1` vs authoritative |
+| `NXDOMAIN` for a name that should exist | Typo, record missing at the *authoritative* server, delegation (NS) wrong, negative caching | `dig +trace`, query the authoritative servers directly |
+| `SERVFAIL` | Broken delegation, unreachable authoritative servers, DNSSEC validation failure | `dig +trace`, `dig +cd` (checking disabled), check DS records |
+| Slow first request; fast afterwards | Cold resolution, or a dead first resolver in `resolv.conf` (timeout 5 s per try) | Reorder or fix resolvers; use a local cache |
+| Slow lookups in Kubernetes | `ndots:5` search expansion, CoreDNS overloaded | Use FQDNs with a trailing dot, tune `ndots`, node-local DNS cache |
+| Email rejected/spam | Missing/incorrect MX, SPF, DKIM, DMARC, PTR | Check each record with `dig TXT`, `dig -x` |
+| Certificate issuance fails (DNS-01) | TXT record not published/propagated, wrong provider | `dig TXT _acme-challenge.example.com @authoritative` |
+| Container can't resolve names | Host resolver is `127.0.0.53`/VPN, blocked UDP/53, default bridge (no name resolution between containers) | `--dns`, user-defined network, check `/etc/resolv.conf` inside the container |
 
 ---
 
-### DNS Hijacking
+## 13. Common misconceptions
 
-**Attack:** Attacker modifies user's DNS settings to malicious servers.
-
-**Example:**
-```
-Original DNS:  8.8.8.8 (Google)
-After Attack:  198.51.100.1 (attacker's DNS server)
-
-All DNS queries now go to attacker's server, returning fake IPs.
-```
-
-**Defense:**
-- Use DNS-over-HTTPS (DoH) or DNS-over-TLS (DoT)
-- Monitor `/etc/resolv.conf` or router DNS settings
-- Use reputable public DNS (Google, Cloudflare, Quad9)
-
----
-
-### DNS-over-HTTPS (DoH)
-
-**Problem:** Standard DNS queries are unencrypted (visible to ISP, routers).
-
-**Solution:** Encrypt DNS queries using HTTPS.
-
-**How DoH Works:**
-
-```
-Traditional DNS (UDP port 53):
-Client → 8.8.8.8:53 (plaintext query)
-
-DNS-over-HTTPS (TCP port 443):
-Client → https://dns.google/dns-query (encrypted)
-```
-
-**DoH Servers:**
-- Google: `https://dns.google/dns-query`
-- Cloudflare: `https://1.1.1.1/dns-query`
-- Quad9: `https://dns.quad9.net/dns-query`
-
-**Browser Support:**
-- Firefox: Settings → Privacy → DNS over HTTPS
-- Chrome: Settings → Security → Use secure DNS
-- Edge: Settings → Privacy → Use secure DNS
+| Misconception | Reality |
+|---|---|
+| "DNS only maps names to IPv4 addresses" | It stores many record types (AAAA, MX, TXT, SRV, CAA, ...) |
+| "There are only 13 root servers" | 13 *addresses/names* (a–m), but 1,700+ anycast instances |
+| "Root servers know where facebook.com is" | They know only who runs each TLD; TLD servers know who runs the domain; the domain's servers know the answer |
+| "DNS changes take 24–48 hours to propagate" | Only as long as the **old TTL** (and buggy caches); with a low TTL, minutes |
+| "DNS uses UDP because it's faster" | Because one small query/answer needs no connection; it uses **TCP** when answers are large, for zone transfers, and for DoT/DoH |
+| "The browser talks directly to root/TLD servers" | Your **recursive resolver** does the walking; your stub asks it |
+| "`www` is required" | It's just a subdomain by convention |
+| "A CNAME can be at the apex" | It can't (it would conflict with SOA/NS records) |
+| "Each domain has one IP" | It can have many (round-robin, geo, anycast) |
+| "DNSSEC encrypts DNS" | It signs records for authenticity; it doesn't hide anything. Use DoT/DoH for privacy |
+| "`dig` shows what my app sees" | `dig` talks straight to DNS; apps use the OS resolver (`getaddrinfo`), `/etc/hosts`, caches, and search lists |
+| "Flushing my DNS cache fixes everything" | Only your local layers; the recursive resolver and others may still hold the old data until TTL expires |
 
 ---
 
-## Troubleshooting DNS Issues
+## 14. Summary
 
-### Problem: "DNS Server Not Responding"
-
-**Diagnosis:**
-
-```bash
-# Test DNS resolution
-dig google.com
-
-# If timeout, DNS server unreachable
-# Try alternative DNS
-dig @1.1.1.1 google.com
-```
-
-**Solutions:**
-
-1. **Flush DNS cache:**
-   ```bash
-   # Linux
-   sudo systemd-resolve --flush-caches
-   
-   # macOS
-   sudo dscacheutil -flushcache
-   
-   # Windows
-   ipconfig /flushdns
-   ```
-
-2. **Change DNS server:**
-   ```bash
-   # Edit /etc/resolv.conf (Linux)
-   nameserver 1.1.1.1
-   nameserver 8.8.8.8
-   ```
-
-3. **Restart network service:**
-   ```bash
-   # Linux
-   sudo systemctl restart systemd-resolved
-   
-   # macOS
-   sudo killall -HUP mDNSResponder
-   ```
+- **DNS** = a distributed, hierarchical, cached database mapping names to records; born in 1983 to replace `HOSTS.TXT`, defined by RFC 1034/1035.
+- Names are read **right to left**: root (`.`) → TLD → domain → subdomain. **Delegation** gives each organization control of its slice.
+- Roles: **stub resolver** (your OS) → **recursive resolver** (does the work and caches) → **root → TLD → authoritative** servers (referrals, then the answer).
+- **Caching with TTLs** at every layer makes it fast; changes take as long as the old TTL; failures are cached too (negative caching).
+- **Records:** A, AAAA, CNAME, MX, TXT, NS, SOA, PTR, SRV, CAA, HTTPS; CNAME can't live at the apex; glue records solve the chicken-and-egg problem of name servers inside their own zone.
+- Transport: **UDP 53** by default, **TCP 53** for large answers, transfers; **DoT/DoH/DoQ** for privacy; **DNSSEC** for authenticity.
+- Docker: embedded DNS at **127.0.0.11** for user-defined networks; Kubernetes: CoreDNS and `ndots`.
+- Tools: `dig`, `dig +trace`, `getent hosts`, `resolvectl`, `tcpdump port 53`.
 
 ---
 
-### Problem: Domain Resolves to Wrong IP
+## 15. Check your understanding
 
-**Diagnosis:**
+1. Read `mail.eu.example.co.uk.` from right to left and name each part. What does the trailing dot mean?
+2. What is the difference between a stub resolver, a recursive resolver, and an authoritative server?
+3. What do root and TLD servers return to a resolver looking up `www.example.com`?
+4. You change an A record with TTL 3600 at 10:00. When can everyone be sure to see the new value, and how would you have made it faster?
+5. Why can't you put a CNAME at `example.com`, and what can you use instead?
+6. When does DNS use TCP?
+7. `dig example.com` works, but `curl example.com` fails to resolve on the same machine. Give two possible causes.
+8. What does a container on a user-defined Docker network use to resolve other containers, and what address does its `resolv.conf` show?
+9. What does DNSSEC protect against, and what does DoH protect against? Do they overlap?
+10. Why do resolvers cache NXDOMAIN answers?
 
-```bash
-# Check cached IP
-dig example.com +short
+<details>
+<summary>Answers</summary>
 
-# Compare with authoritative server
-dig @ns1.example.com example.com +short
-```
+1. Root `.` → `uk` (ccTLD) → `co.uk` (public suffix/second-level) → `example` (the registered domain) → `eu` (subdomain) → `mail` (host). The trailing dot denotes the DNS root; the name is fully qualified.
+2. Stub: OS library that asks a configured resolver and waits. Recursive resolver: walks the hierarchy for you and caches the results. Authoritative: holds the zone's real records and gives definitive answers.
+3. Root: a referral to the `.com` TLD servers (with glue). TLD: a referral to example.com's authoritative name servers. Only the authoritative server returns the actual A record.
+4. Up to 11:00 (old TTL 1 hour): every cache holding the old record expires by then. Lower the TTL (e.g. to 60 s) a day before the change, wait out the old TTL, then change it.
+5. A CNAME can't coexist with the SOA/NS records the apex requires. Use A/AAAA records, or the provider's ALIAS/ANAME/CNAME-flattening feature.
+6. Truncated (large) responses, zone transfers (AXFR/IXFR), and DNS over TLS (also DoH/DoQ variants use TCP/QUIC); also when a server or policy requires it.
+7. `dig` bypasses `/etc/hosts` and nsswitch/OS caches, so the system resolver (or `resolv.conf`, `/etc/hosts` entry, search domain, broken local stub) is the problem, or curl uses a different resolver/proxy/IPv6 path.
+8. Docker's embedded DNS server; `resolv.conf` shows `nameserver 127.0.0.11`.
+9. DNSSEC: forged or altered answers (authenticity/integrity). DoH: eavesdropping/tampering on the client-to-resolver hop (confidentiality). They address different threats and complement each other.
+10. To avoid hammering authoritative servers with repeated queries for names that don't exist (governed by the SOA negative-caching TTL).
+</details>
 
-**Cause:** Stale cache or DNS propagation delay after IP change.
+**Practice**
 
-**Solution:**
-
-```bash
-# Clear caches
-sudo systemd-resolve --flush-caches
-
-# Wait for TTL expiration (check TTL)
-dig example.com
-# Look for TTL value in answer section
-```
-
----
-
-### Problem: Slow DNS Resolution
-
-**Diagnosis:**
-
-```bash
-# Measure query time
-dig facebook.com | grep "Query time"
-;; Query time: 247 msec
-
-# Acceptable: < 50ms
-# Slow: > 200ms
-```
-
-**Causes:**
-- Distant DNS server
-- DNS server overloaded
-- Network congestion
-
-**Solutions:**
-
-1. **Switch to faster DNS:**
-   ```bash
-   # Test multiple servers
-   dig @8.8.8.8 facebook.com | grep "Query time"
-   dig @1.1.1.1 facebook.com | grep "Query time"
-   dig @9.9.9.9 facebook.com | grep "Query time"
-   
-   # Use the fastest
-   ```
-
-2. **Use local DNS caching:**
-   ```bash
-   # Install dnsmasq (local cache)
-   sudo apt install dnsmasq
-   sudo systemctl enable dnsmasq
-   ```
-
-3. **Check network latency:**
-   ```bash
-   ping 8.8.8.8
-   # If ping is slow, DNS will be slow
-   ```
+1. Use `dig +trace` for three domains (a `.com`, a ccTLD and a subdomain) and draw the referral chain for each, with TTLs.
+2. Set up your own domain or a free subdomain at a DNS host (or use the CoreDNS lab), create A, CNAME, MX and TXT records, and verify each with `dig` at the authoritative server and at 8.8.8.8.
+3. Lower a record's TTL to 30 s, change it, and watch `dig @8.8.8.8` until the new value appears; measure how long it takes.
+4. Capture a DNS query and response with Wireshark; identify the transaction ID, flags, question, and answer; then force a truncated response (`+bufsize=512` on a large TXT record) and see the TCP retry.
+5. In Docker, compare name resolution between two containers on the default bridge and on a user-defined network. Explain the difference.
 
 ---
 
-## DNS Performance Optimization
-
-### 1. DNS Prefetching (Web Performance)
-
-Browsers can resolve domains before user clicks links.
-
-**HTML DNS Prefetch:**
-
-```html
-<!DOCTYPE html>
-<html>
-<head>
-  <!-- Prefetch DNS for external resources -->
-  <link rel="dns-prefetch" href="//cdn.example.com">
-  <link rel="dns-prefetch" href="//api.example.com">
-  <link rel="dns-prefetch" href="//fonts.googleapis.com">
-</head>
-<body>
-  <!-- When user loads page, DNS already resolved -->
-  <img src="https://cdn.example.com/logo.png">
-</body>
-</html>
-```
-
-**Performance Impact:**
-- Saves 100-200ms per external domain on first load
-- Especially effective for third-party resources (CDNs, analytics)
-
----
-
-### 2. Reduce DNS Lookups (Fewer Domains)
-
-**Bad Practice:**
-
-```html
-<!-- 5 different domains = 5 DNS lookups -->
-<link rel="stylesheet" href="https://cdn1.example.com/style.css">
-<script src="https://cdn2.example.com/app.js"></script>
-<img src="https://cdn3.example.com/logo.png">
-<script src="https://analytics.thirdparty.com/track.js"></script>
-<link href="https://fonts.googleapis.com/css?family=Roboto">
-```
-
-**Good Practice:**
-
-```html
-<!-- 2 domains = 2 DNS lookups -->
-<link rel="stylesheet" href="https://cdn.example.com/style.css">
-<script src="https://cdn.example.com/app.js"></script>
-<img src="https://cdn.example.com/logo.png">
-<!-- Minimize third-party scripts -->
-```
-
----
-
-### 3. Use HTTP/2 and Avoid Domain Sharding
-
-**HTTP/1.1 Era (Bad for DNS):**
-
-```
-Domain sharding to parallelize downloads:
-cdn1.example.com
-cdn2.example.com
-cdn3.example.com
-cdn4.example.com
-
-Problem: 4 DNS lookups + connection overhead
-```
-
-**HTTP/2 Era (Good for DNS):**
-
-```
-Single domain with multiplexing:
-cdn.example.com (handles 100+ parallel requests)
-
-Benefit: 1 DNS lookup + connection reuse
-```
-
----
-
-### 4. Optimize DNS TTL
-
-**For Stable Production:**
-
-```
-example.com.    3600    IN    A    192.0.2.1
-                └────┘
-                  1 hour TTL (good for stable IPs)
-```
-
-**Before DNS Migration:**
-
-```
-# 24 hours before changing IP, lower TTL
-example.com.    60    IN    A    192.0.2.1 (old IP)
-
-# After 24 hours, all caches have 60s TTL
-# Change IP
-example.com.    60    IN    A    198.51.100.1 (new IP)
-
-# Wait 1 hour for propagation
-# Raise TTL back
-example.com.    3600    IN    A    198.51.100.1
-```
-
----
-
-## DNS and the Seven-Layer OSI Model
-
-DNS operates at **Layer 7 (Application Layer)**, but interacts with **Layer 4 (Transport Layer)** via UDP/TCP.
-
-### Layer Interaction
-
-```
-┌────────────────────────────────────────────┐
-│  Layer 7: Application Layer                │
-│  DNS Query: "What is facebook.com?"        │
-└────────────────┬───────────────────────────┘
-                 │
-┌────────────────▼───────────────────────────┐
-│  Layer 4: Transport Layer                  │
-│  UDP Header (8 bytes) + DNS Payload        │
-│  Destination Port: 53                      │
-└────────────────┬───────────────────────────┘
-                 │
-┌────────────────▼───────────────────────────┐
-│  Layer 3: Network Layer                    │
-│  IP Header + UDP Packet                    │
-│  Destination IP: 8.8.8.8 (DNS server)      │
-└────────────────┬───────────────────────────┘
-                 │
-┌────────────────▼───────────────────────────┐
-│  Layer 2: Data Link Layer                  │
-│  Ethernet Frame                            │
-└────────────────┬───────────────────────────┘
-                 │
-┌────────────────▼───────────────────────────┐
-│  Layer 1: Physical Layer                   │
-│  Electrical signals over wire/wireless     │
-└────────────────────────────────────────────┘
-```
-
-**Key Point:** DNS resolution completes *before* the HTTP request begins. The browser needs the IP address (from DNS) before it can establish a TCP connection for HTTP/HTTPS.
-
----
-
-## Conclusion
-
-DNS is the invisible bridge between human usability and machine networking. Every time you type `google.com`, `facebook.com`, or any domain, a sophisticated distributed system springs into action: your browser checks its cache, your OS checks its cache, your ISP's DNS resolver checks its cache, and if all fail, a hierarchical journey begins through root servers, TLD servers, and authoritative name servers—all typically completing in under 100 milliseconds.
-
-The genius of DNS lies in its **hierarchical architecture** and **aggressive caching strategy**. No single server knows every domain-to-IP mapping; instead, knowledge is distributed across thousands of servers worldwide, each handling its specific domain of authority. Caching at every level (browser, OS, resolver) ensures that popular domains resolve almost instantly, reducing redundant queries and making the Internet feel instantaneous.
-
-Understanding DNS comprehensively—URL structure, the 20-step resolution process, caching layers, UDP vs TCP trade-offs, security considerations, and troubleshooting techniques—is foundational for any serious software engineer. When your application experiences network delays, understanding DNS helps you diagnose whether the bottleneck is DNS resolution (cached vs uncached), server processing, or network latency. When deploying applications, you'll know why lowering TTL before migration prevents downtime. When debugging email delivery, you'll understand MX records and SPF/DKIM validation.
-
-DNS is 41 years old (created 1983), yet remains one of the Internet's most critical and elegant protocols. Every HTTP request, every API call, every email sent, every service discovery—all begin with DNS resolution. Master DNS, and you master the foundation of Internet communication.
-
-The next time you effortlessly type a domain name and instant access a website, remember the intricate ballet happening behind the scenes: caching, hierarchical lookups, UDP datagrams, distributed servers worldwide—all working in perfect harmony to translate `facebook.com` into `157.240.11.35` in the blink of an eye.
-
-**Next:** TLS/SSL and HTTPS (understanding encryption, certificates, and secure communication built *on top of* DNS and TCP).
-
----
-
-## Further Reading
-
-- **RFC 1034:** Domain Names - Concepts and Facilities (1987)
-- **RFC 1035:** Domain Names - Implementation and Specification (1987)
-- **RFC 4033-4035:** DNS Security Extensions (DNSSEC)
-- **RFC 8484:** DNS Queries over HTTPS (DoH)
-- **RFC 7858:** DNS over TLS (DoT)
-- **"DNS and BIND" by Cricket Liu** - Comprehensive DNS administration guide
-- **Paul Mockapetris Papers** - Original DNS inventor's research
-- **Root Server Technical Operations** - root-servers.org
-- **ICANN DNS Resources** - icann.org/dns
+**Next:** [Chapter 29 – TLS (Transport Layer Security) in Detail](29_tls_transport_layer_security_in_details.md)
