@@ -1,1505 +1,482 @@
-# Chapter 27: HTTP/2 In Details
+# Chapter 27: HTTP/2 in Detail
 
-## Overview
+> **In one sentence:** HTTP/2 keeps the *meaning* of HTTP (methods, headers, status codes) but changes how messages are sent: as **binary frames** belonging to independent **streams** that are **multiplexed over one TCP connection**, with **compressed headers**, so slow responses no longer block fast ones at the HTTP level.
 
-HTTP/2, standardized in 2015 (RFC 7540), represents the first major revision of HTTP in nearly 20 years since HTTP/1.1 was introduced in 1997-1998. While HTTP/1.1 achieved a stunning 90% reduction in connection overhead compared to HTTP/1.0, it carried an inherent architectural limitation that became increasingly problematic as web pages evolved to load 100+ resources: **head-of-line (HOL) blocking**.
+**Level:** 🟡 Intermediate → 🔴 Expert · **Reading time:** ~60 minutes
 
-HTTP/2 was designed with a single, focused mission: **eliminate HOL blocking while maintaining backward compatibility with HTTP/1.1 semantics**. It achieves this through a revolutionary approach called **multiplexing**—the ability to send multiple HTTP requests and responses in parallel over a single TCP connection without any ordering constraints.
-
-This chapter provides a complete technical exploration of HTTP/2, explaining the fundamental innovation of binary framing and streams, how multiplexing works at the protocol level, the stream lifecycle, header compression (HPACK), server push capabilities, and the trade-offs that led to HTTP/3. Understanding HTTP/2 deeply is essential because it powers the modern web—every major browser and web server supports it, and protocols like gRPC are built directly on top of it.
-
-HTTP/2 is not a new application protocol; it's a new **transport encoding** for HTTP. All the semantics you know—GET, POST, headers, status codes—remain identical. What changed is *how* this information flows over the network.
+**Prerequisites:** [Chapter 26 – HTTP/1.1](26_http_1_1_in_details.md) (persistent connections, head-of-line blocking, browser connection pools) and [Chapter 23](23_tcp_in_details.md) (TCP loss and windows). TLS (Chapter 29) helps for the negotiation section, but isn't required.
 
 ---
 
-## The Problem HTTP/2 Solves: A Recap
+## What you will learn
 
-### HTTP/1.0's Limitation
-
-**Problem:** One TCP connection per request.
-
-```
-Request A → [TCP Handshake] → Send → Receive → [TCP Teardown]
-Request B → [TCP Handshake] → Send → Receive → [TCP Teardown]
-Request C → [TCP Handshake] → Send → Receive → [TCP Teardown]
-```
-
-**Cost:** For 100 resources, 100 TCP handshakes + 100 TCP teardowns = massive overhead.
-
-### HTTP/1.1's Improvement
-
-**Solution:** Persistent connections (keep-alive).
-
-```
-[TCP Handshake once]
-Request A → Send → Receive
-Request B → Send → Receive
-Request C → Send → Receive
-[TCP Teardown once]
-```
-
-**Achievement:** 90% reduction in connection overhead.
-
-### HTTP/1.1's New Problem
-
-**Issue:** Responses must be delivered in order (HOL blocking).
-
-```
-Request A (slow, 10s)  →  Must wait
-Request B (fast, 0.1s) →  Ready but blocked behind A
-Request C (fast, 0.1s) →  Ready but blocked behind A
-
-Timeline:
-t=0s:    Send A, B, C
-t=0.1s:  B and C ready on server (waiting)
-t=10s:   A finally ready
-t=10s:   Send A
-t=10.1s: Send B
-t=10.2s: Send C
-```
-
-Even though B and C were ready at 0.1s, the user waited 10+ seconds.
-
-### Browser Workaround: Connection Pooling
-
-Browsers compensated by opening **6-8 parallel TCP connections** per domain:
-
-```
-Connection 1:  A
-Connection 2:  B → Fast, arrives at 0.1s
-Connection 3:  C → Fast, arrives at 0.1s
-Connection 4:  D
-Connection 5:  E
-Connection 6:  F
-```
-
-**Problem with this workaround:**
-- More memory (each TCP connection = ~100KB)
-- More CPU (context switches, timers)
-- Bandwidth competition (6 TCP congestion controls competing)
-- Still limited to 6 parallel requests at a time
-
-### HTTP/2's Revolutionary Solution
-
-**Concept:** One TCP connection, **unlimited parallel streams**.
-
-```
-[Single TCP Connection]
-├── Stream 1: Request A (slow)  → Chunks: [A1][A2][A3]
-├── Stream 2: Request B (fast)  → Chunks: [B1][B2]
-├── Stream 3: Request C (fast)  → Chunks: [C1]
-└── Stream 4: Request D (fast)  → Chunks: [D1][D2]
-
-Transmission over TCP (interleaved):
-[A1][B1][C1][D1][A2][D2][B2][A3]
-
-Client receives and reconstructs:
-Stream 1: A1 + A2 + A3 = Complete response A
-Stream 2: B1 + B2 = Complete response B (arrives before A completes!)
-Stream 3: C1 = Complete response C (arrives before A completes!)
-Stream 4: D1 + D2 = Complete response D (arrives before A completes!)
-```
-
-Now B and C can arrive independently of A's completion. **No HOL blocking at the HTTP level.**
+- The problems HTTP/2 solves, in the order they arose
+- The **binary framing layer**: **frames**, **streams**, **messages**, **connections**, and the 9-byte frame header
+- **Multiplexing** and interleaving, with stream IDs and the stream life cycle
+- **HPACK** header compression (static table, dynamic table, Huffman) and why it is safe
+- **Flow control** (per-stream and per-connection windows) and **SETTINGS**
+- **Server push** and **priorities**: what they were, and why they faded
+- How HTTP/2 starts up: **ALPN**, the connection preface, and `h2c`
+- The **remaining problem** (TCP head-of-line blocking) and how **HTTP/3/QUIC** addresses it
+- Security: **Rapid Reset** and other HTTP/2-specific attacks
+- Performance reality, tuning, gRPC, and hands-on labs (`curl`, `nghttp`, `openssl`, Wireshark, nginx in Docker, Python)
 
 ---
 
-## Technical Foundation: Binary Framing Layer
+## 1. The story so far
 
-HTTP/2's core innovation is the **binary framing layer**—a new encoding mechanism that sits between the HTTP semantics (Layer 7) and the TCP transport (Layer 4).
+| Version | Fixed | Left behind |
+|---|---|---|
+| **HTTP/1.0** | Defined headers, status codes, content types | One TCP connection per request (Chapter 25) |
+| **HTTP/1.1** | Persistent connections, `Host`, chunking, caching | Responses on a connection are **strictly ordered** → **head-of-line (HOL) blocking**; browsers open ~6 connections/host and use hacks (domain sharding, bundling) (Chapter 26) |
+| **HTTP/2** (RFC 7540, 2015; revised as **RFC 9113**, 2022) | HOL blocking **at the HTTP level**, header redundancy, connection sprawl | **TCP-level** HOL blocking (one lost packet stalls *all* streams) |
+| **HTTP/3** (RFC 9114, 2022) | Runs over QUIC/UDP, so loss on one stream doesn't block others | Newer, UDP handling in some networks |
 
-### Layer Architecture
+HTTP/2 grew out of Google's experimental protocol **SPDY** (2009+). Importantly, **HTTP/2 doesn't change what HTTP means**: your `GET`, `POST`, `Content-Type`, `404` are identical. Application code usually doesn't need to change; the *encoding on the wire* does.
+
+---
+
+## 2. Big picture
+
+```
+HTTP/1.1  (text, ordered per connection)                    HTTP/2  (binary frames, multiplexed)
+
+conn 1: GET /a ─► resp /a │ GET /d ─► resp /d              ONE connection, many concurrent streams:
+conn 2: GET /b ─► resp /b │ GET /e ─► resp /e               stream 1: HEADERS(GET /a) …………… DATA DATA DATA
+conn 3: GET /c ─► resp /c │ …                               stream 3: HEADERS(GET /b) …… DATA
+   (≈ 6 connections, each request waits for a free one)      stream 5: HEADERS(GET /c) … DATA DATA
+                                                             on the wire, interleaved:  H1 H3 H5 D3 D1 D5 D1 D5 D1 …
+```
+
+Layering:
 
 ```
 ┌─────────────────────────────────────────┐
-│  Application Layer (L7)                 │
-│  HTTP Semantics: GET, POST, headers     │  ← Unchanged
-└─────────────────────────────────────────┘
-                    ↓
-┌─────────────────────────────────────────┐
-│  HTTP/2 Binary Framing Layer            │  ← NEW
-│  Streams, Frames, Multiplexing          │
-└─────────────────────────────────────────┘
-                    ↓
-┌─────────────────────────────────────────┐
-│  Transport Layer (L4)                   │
-│  TCP: Reliable, ordered byte stream     │  ← Unchanged
+│ HTTP semantics: methods, headers, status │   ← unchanged from HTTP/1.1
+├─────────────────────────────────────────┤
+│ HTTP/2 framing: streams, frames, HPACK   │   ← new (binary)
+├─────────────────────────────────────────┤
+│ TLS (in practice, always)                │
+├─────────────────────────────────────────┤
+│ TCP                                      │   ← unchanged: reliable, ordered byte stream
 └─────────────────────────────────────────┘
 ```
 
-HTTP/1.1 sent plain-text messages directly over TCP:
-```
-GET /index.html HTTP/1.1\r\n
-Host: example.com\r\n
-\r\n
-```
+---
 
-HTTP/2 converts HTTP messages into **binary frames** before sending:
-```
-+-----------------------------------------------+
-|                 Frame Header                  |
-+-----------------------------------------------+
-|                 Frame Payload                 |
-+-----------------------------------------------+
-```
+## 3. The binary framing layer
 
-### Key Concepts
+HTTP/1.x messages are text lines. HTTP/2 splits every message into **frames**, each a small binary unit.
 
-**Stream:**
-A bidirectional flow of frames within a single TCP connection. Each HTTP request/response pair uses one stream.
-
-**Frame:**
-The smallest unit of communication in HTTP/2. Each frame has a type (HEADERS, DATA, SETTINGS, etc.) and belongs to a specific stream.
-
-**Message:**
-A complete HTTP request or response, consisting of one or more frames.
-
-**Connection:**
-The TCP connection that carries all streams.
-
-### Relationship Diagram
+| Term | Meaning |
+|---|---|
+| **Connection** | One TCP (+TLS) connection between client and server |
+| **Stream** | An independent, bidirectional sequence of frames on that connection; **one request/response exchange = one stream** |
+| **Message** | A full HTTP request or response = one `HEADERS` frame (+ optional `CONTINUATION`s) then zero or more `DATA` frames |
+| **Frame** | The smallest unit; has a type, flags, a length and a **stream identifier** |
 
 ```
 Connection (TCP)
-    ├── Stream 1 (Request/Response for /index.html)
-    │   ├── HEADERS Frame (request headers)
-    │   ├── DATA Frame (request body, if POST)
-    │   ├── HEADERS Frame (response headers)
-    │   └── DATA Frame (response body)
-    │
-    ├── Stream 3 (Request/Response for /style.css)
-    │   ├── HEADERS Frame
-    │   └── DATA Frame
-    │
-    └── Stream 5 (Request/Response for /script.js)
-        ├── HEADERS Frame
-        └── DATA Frame (chunk 1)
-        └── DATA Frame (chunk 2)
-        └── DATA Frame (chunk 3, END_STREAM flag)
+ ├─ Stream 1:  HEADERS (request) ──► ◄── HEADERS (response) ◄── DATA ◄── DATA (END_STREAM)
+ ├─ Stream 3:  HEADERS (request) ──► ◄── HEADERS ◄── DATA (END_STREAM)
+ └─ Stream 5:  HEADERS + DATA (POST body) ──► ◄── HEADERS ◄── DATA
 ```
 
----
-
-## Stream Mechanics and Multiplexing
-
-### Stream Identifiers
-
-Streams are identified by **31-bit unsigned integers**.
-
-**Allocation Rules:**
-- **Client-initiated streams:** Use odd numbers (1, 3, 5, 7, ...)
-- **Server-initiated streams:** Use even numbers (2, 4, 6, 8, ...)
-- **Stream ID 0:** Reserved for connection-level control (SETTINGS, WINDOW_UPDATE, etc.)
-
-**Why odd/even distinction?**
-This prevents collision between client-initiated requests and server-initiated pushes. Both parties can allocate stream IDs independently without coordination.
-
-### Stream States
-
-Each stream progresses through a defined lifecycle:
-
-```
-                        idle
-                          |
-                          v
-            +-------------+--------------+
-            |                            |
-       HEADERS sent               HEADERS received
-            |                            |
-            v                            v
-          open ←----------------------→ open
-            |                            |
-       END_STREAM sent            END_STREAM received
-            |                            |
-            v                            v
-      half-closed                  half-closed
-       (local)                       (remote)
-            |                            |
-       END_STREAM received        END_STREAM sent
-            |                            |
-            +-------------+--------------+
-                          |
-                          v
-                       closed
-```
-
-**State Descriptions:**
-
-- **idle:** Stream ID exists but hasn't been used yet
-- **open:** Both sides can send frames
-- **half-closed (local):** Local endpoint sent END_STREAM, can only receive
-- **half-closed (remote):** Remote endpoint sent END_STREAM, can only send
-- **closed:** Stream complete, ID can be reused after a period
-
-### Example: Complete Request/Response Lifecycle
-
-**Scenario:** Client requests `/data.json` (Stream ID 1)
-
-```
-Time  | Client (Stream 1)              | Server (Stream 1)
-------|--------------------------------|----------------------------------
-t=0   | HEADERS frame                  |
-      |   :method: GET                 |
-      |   :path: /data.json            |
-      |   :scheme: https               |
-      |   :authority: api.example.com  |
-      |   END_HEADERS flag set         |
-      | State: open → half-closed      | State: idle → open
-------|--------------------------------|----------------------------------
-t=1   |                                | HEADERS frame
-      |                                |   :status: 200
-      |                                |   content-type: application/json
-      |                                | State: open
-------|--------------------------------|----------------------------------
-t=2   |                                | DATA frame (chunk 1)
-      |                                |   {\"users\": [
-      |                                | State: open
-------|--------------------------------|----------------------------------
-t=3   |                                | DATA frame (chunk 2)
-      |                                |   {\"id\": 1, \"name\": \"Alice\"},
-      |                                | State: open
-------|--------------------------------|----------------------------------
-t=4   |                                | DATA frame (chunk 3, END_STREAM)
-      |                                |   {\"id\": 2, \"name\": \"Bob\"}]}
-      | State: half-closed → closed    | State: open → closed
-```
-
-### Multiplexing in Action: Four Concurrent Requests
-
-Let's walk through a detailed example with timing.
-
-**Setup:**
-- Client requests 4 resources simultaneously
-- Single TCP connection
-- All requests sent immediately (no waiting)
-
-**Resources:**
-- A: `/index.html` (10KB, server processing: 10s)
-- B: `/style.css` (4KB, server processing: 0.1s)
-- C: `/script.js` (1KB, server processing: 0.1s)
-- D: `/logo.png` (3KB, server processing: 0.1s)
-
-**HTTP/2 Stream Assignment:**
-- Stream 1: `/index.html`
-- Stream 3: `/style.css`
-- Stream 5: `/script.js`
-- Stream 7: `/logo.png`
-
-**Frame Transmission Timeline:**
-
-```
-t=0.000s  Client → Server
-          [HEADERS:1 /index.html]  (Stream 1)
-          [HEADERS:3 /style.css]   (Stream 3)
-          [HEADERS:5 /script.js]   (Stream 5)
-          [HEADERS:7 /logo.png]    (Stream 7)
-
-t=0.100s  Server → Client
-          [HEADERS:3 200 OK]       (Stream 3 response ready)
-          [DATA:3 chunk1]
-          [DATA:3 chunk2 END_STREAM]
-          
-          [HEADERS:5 200 OK]       (Stream 5 response ready)
-          [DATA:5 chunk1 END_STREAM]
-          
-          [HEADERS:7 200 OK]       (Stream 7 response ready)
-          [DATA:7 chunk1]
-          [DATA:7 chunk2 END_STREAM]
-
-t=0.150s  Client has complete responses for streams 3, 5, 7
-          User sees CSS styling, JS executes, logo displays
-          Still waiting for stream 1 (HTML)...
-
-t=10.000s Server → Client
-          [HEADERS:1 200 OK]       (Stream 1 finally ready)
-          [DATA:1 chunk1]
-          [DATA:1 chunk2]
-          [DATA:1 chunk3 END_STREAM]
-
-t=10.050s Client has complete response for stream 1
-          Full page rendering complete
-```
-
-**Key Observation:**
-
-In HTTP/1.1, the user would stare at a blank screen for 10 seconds, then everything would appear at once. In HTTP/2, the CSS, JavaScript, and images arrive at 0.15s, providing **progressive rendering** while the slow HTML is still processing.
-
-### Data Chunking: How Large Payloads Are Split
-
-HTTP/2 doesn't send entire responses in one DATA frame. Instead, large payloads are divided into **chunks** (frames).
-
-**Example:** 10KB response split into frames
-
-```
-Original Request Data:
-┌────────────────────────────────────────────────────┐
-│  Request Body: 10KB (for POST request)             │
-└────────────────────────────────────────────────────┘
-
-HTTP/2 Chunking (assume 4KB frames):
-┌────────────┐  ┌────────────┐  ┌────────────┐
-│ Chunk 1    │  │ Chunk 2    │  │ Chunk 3    │
-│ 4KB        │  │ 4KB        │  │ 2KB        │
-│ Frame: 1   │  │ Frame: 1   │  │ Frame: 1   │
-│ Data       │  │ Data       │  │ Data       │
-│            │  │            │  │ END_STREAM │
-└────────────┘  └────────────┘  └────────────┘
-
-Transmission:
-[HEADERS:1]
-[DATA:1][DATA:1][DATA:1 END]
-```
-
-**Why chunk?**
-
-1. **Flow Control:** Prevents one stream from monopolizing bandwidth
-2. **Fairness:** Different streams can interleave frames
-3. **Memory Efficiency:** Don't need to buffer entire response before sending
-4. **Cancellation:** Can abort mid-transfer (RST_STREAM frame)
-
-### Interleaving: The Core of Multiplexing
-
-This is where HTTP/2's power becomes evident.
-
-**Scenario:** Streams 1, 2, 3 are all active simultaneously.
-
-**Stream Data (simplified):**
-- Stream 1: [A1][A2][A3][A4][A5]
-- Stream 2: [B1][B2]
-- Stream 3: [C1][C2][C3]
-
-**Actual wire transmission (interleaved):**
-```
-[HEADERS:1][HEADERS:2][HEADERS:3]
-[A1][B1][C1][A2][B2][C2][A3][C3][A4][A5]
-```
-
-Notice how Stream 2 completed (only 2 DATA frames) while Stream 1 was still sending. The server didn't have to wait—it could send B's response as soon as B was ready, regardless of A's state.
-
-**Client Reassembly:**
-
-The client receives this interleaved stream of frames and reconstructs each response:
-
-```
-Stream 1 buffer: A1 → A1+A2 → A1+A2+A3 → A1+A2+A3+A4 → A1+A2+A3+A4+A5 (complete)
-Stream 2 buffer: B1 → B1+B2 (complete)
-Stream 3 buffer: C1 → C1+C2 → C1+C2+C3 (complete)
-```
-
-Each stream's frames carry a **stream identifier** in the frame header, allowing the receiver to route frames to the correct stream buffer.
-
----
-
-## Frame Structure: The Binary Protocol
-
-HTTP/2 is a **binary protocol**, not text-based like HTTP/1.1. This improves parsing efficiency and reduces ambiguity.
-
-### Frame Format
-
-Every HTTP/2 frame has a 9-byte header followed by a payload:
+### 3.1 The frame format
+Every frame starts with a **9-byte header**:
 
 ```
 +-----------------------------------------------+
-|                 Length (24)                   |
+|                 Length (24 bits)              |   payload size in bytes (not counting these 9 bytes)
 +---------------+---------------+---------------+
 |   Type (8)    |   Flags (8)   |
 +-+-------------+---------------+-------------------------------+
-|R|                 Stream Identifier (31)                      |
+|R|                 Stream Identifier (31 bits)                 |   R = reserved, always 0
 +=+=============================================================+
-|                   Frame Payload (0...)                      ...
+|                   Frame Payload (Length bytes)               ...
 +---------------------------------------------------------------+
 ```
 
-**Field Descriptions:**
+- **Length:** default maximum **16,384 bytes** (`SETTINGS_MAX_FRAME_SIZE`); may be raised up to 16,777,215 (2²⁴ − 1).
+- **Stream ID 0** = frames that apply to the whole connection (`SETTINGS`, `PING`, `GOAWAY`, connection `WINDOW_UPDATE`).
 
-1. **Length (24 bits):**
-   - Size of frame payload (not including 9-byte header)
-   - Maximum: 2²⁴ - 1 = 16,777,215 bytes (~16 MB)
-   - Default max (SETTINGS_MAX_FRAME_SIZE): 16,384 bytes (16 KB)
+### 3.2 Frame types (RFC 9113 defines ten)
 
-2. **Type (8 bits):**
-   - Identifies frame type (HEADERS, DATA, SETTINGS, etc.)
-   - Valid values: 0x0 - 0xA (and extensible)
+| Type | Code | Purpose |
+|---|---|---|
+| **DATA** | 0x0 | Body bytes of a request/response |
+| **HEADERS** | 0x1 | Header block (HPACK-compressed) that opens a stream / carries response headers or trailers |
+| **PRIORITY** | 0x2 | Old dependency/weight priority signal (**deprecated** in RFC 9113) |
+| **RST_STREAM** | 0x3 | Abort one stream (cancel, error) without touching others |
+| **SETTINGS** | 0x4 | Connection parameters (frame size, concurrent streams, initial window...) |
+| **PUSH_PROMISE** | 0x5 | Server announces a pushed response |
+| **PING** | 0x6 | Liveness check / RTT measurement |
+| **GOAWAY** | 0x7 | Graceful shutdown: "finish existing streams; don't start new ones" |
+| **WINDOW_UPDATE** | 0x8 | Flow-control credit |
+| **CONTINUATION** | 0x9 | Continues a header block that didn't fit one `HEADERS` frame |
 
-3. **Flags (8 bits):**
-   - Frame-type-specific boolean flags
-   - Example: END_STREAM (0x1), END_HEADERS (0x4), PADDED (0x8)
+Important **flags**: `END_STREAM` (0x1, "no more frames from me on this stream"), `END_HEADERS` (0x4, header block is complete), `PADDED` (0x8), `PRIORITY` (0x20), and `ACK` (0x1 on `SETTINGS`/`PING`).
 
-4. **R (1 bit):**
-   - Reserved bit, must be 0
-
-5. **Stream Identifier (31 bits):**
-   - Which stream this frame belongs to
-   - 0 = connection-level control frame
-   - 1-2³¹ = stream-specific frames
-
-6. **Frame Payload:**
-   - Variable length (0 to Length bytes)
-   - Contents depend on frame type
-
-### Frame Types
-
-HTTP/2 defines 10 core frame types:
-
-| Type | ID | Purpose |
-|------|-----|---------|
-| **DATA** | 0x0 | Carries HTTP request/response body |
-| **HEADERS** | 0x1 | Carries HTTP request/response headers |
-| **PRIORITY** | 0x2 | Specifies stream priority (deprecated in practice) |
-| **RST_STREAM** | 0x3 | Immediately terminates a stream (error/cancel) |
-| **SETTINGS** | 0x4 | Connection-level configuration parameters |
-| **PUSH_PROMISE** | 0x5 | Server announces intent to push a resource |
-| **PING** | 0x6 | Connection liveness check (like TCP keepalive) |
-| **GOAWAY** | 0x7 | Graceful connection shutdown notification |
-| **WINDOW_UPDATE** | 0x8 | Flow control: advertises available buffer space |
-| **CONTINUATION** | 0x9 | Continues a sequence of HEADERS frames |
-
-### HEADERS Frame (Detailed)
-
-This is the most important frame type for understanding HTTP/2.
-
-**Purpose:** Carry HTTP request/response headers.
-
-**Structure:**
-```
-+---------------+
-|Pad Length? (8)|  (if PADDED flag set)
-+-+-------------+-----------------------------------------------+
-|E|                 Stream Dependency? (31)                     |  (if PRIORITY flag set)
-+-+-------------+-----------------------------------------------+
-|  Weight? (8)  |                                               |  (if PRIORITY flag set)
-+-+-------------+-----------------------------------------------+
-|                   Header Block Fragment (*)                 ...
-+---------------------------------------------------------------+
-|                           Padding (*)                       ...
-+---------------------------------------------------------------+
-```
-
-**Flags:**
-- **END_STREAM (0x1):** No more frames for this stream (e.g., GET request with no body)
-- **END_HEADERS (0x4):** Last HEADERS frame (if too large, use CONTINUATION frames)
-- **PADDED (0x8):** Frame contains padding for security (prevents traffic analysis)
-- **PRIORITY (0x20):** Contains stream priority information
-
-**Example:** HTTP GET request
+### 3.3 Pseudo-headers
+Instead of a request line and status line, HTTP/2 uses special headers that begin with `:` and come first:
 
 ```
-Frame Header:
-+-----------------------------------------------+
-| Length: 0x0032 (50 bytes)                     |
-+---------------+---------------+---------------+
-| Type: 0x01    | Flags: 0x05   |               |  (HEADERS, END_STREAM | END_HEADERS)
-+-+-------------+---------------+---------------+
-|0| Stream ID: 0x00000001 (1)                   |
-+=+==============================================+
-
-Frame Payload (Header Block, compressed via HPACK):
-0x82               → :method: GET
-0x86               → :scheme: https
-0x44               → :authority: (literal)
-  0x0f 0x777777... → www.example.com
-0x84               → :path: /
-0x41               → (literal header)
-  0x0a 0x6163...   → accept: text/html
+:method: GET
+:scheme: https
+:authority: www.example.com      ← replaces the HTTP/1.1 Host header
+:path: /index.html
 ```
-
-Notice the payload is **binary-encoded and compressed** using HPACK. This is radically different from HTTP/1.1's plain text.
-
-### DATA Frame (Detailed)
-
-**Purpose:** Carry HTTP message body (request body for POST, response body for GET/POST).
-
-**Structure:**
-```
-+---------------+
-|Pad Length? (8)|  (if PADDED flag set)
-+---------------+-----------------------------------------------+
-|                            Data (*)                         ...
-+---------------------------------------------------------------+
-|                           Padding (*)                       ...
-+---------------------------------------------------------------+
-```
-
-**Flags:**
-- **END_STREAM (0x1):** Last DATA frame for this stream
-- **PADDED (0x8):** Contains padding bytes
-
-**Example:** Response body for JSON data
-
-```
-Frame Header:
-+-----------------------------------------------+
-| Length: 0x0400 (1024 bytes)                   |
-+---------------+---------------+---------------+
-| Type: 0x00    | Flags: 0x00   |               |  (DATA, no flags yet)
-+-+-------------+---------------+---------------+
-|0| Stream ID: 0x00000001 (1)                   |
-+=+==============================================+
-
-Frame Payload (actual HTTP body):
-{"users": [{"id": 1, "name": "Alice"}, ... (1024 bytes total)
-
-[... more DATA frames ...]
-
-Final DATA Frame:
-+-----------------------------------------------+
-| Length: 0x0100 (256 bytes)                    |
-+---------------+---------------+---------------+
-| Type: 0x00    | Flags: 0x01   |               |  (DATA, END_STREAM)
-+-+-------------+---------------+---------------+
-|0| Stream ID: 0x00000001 (1)                   |
-+=+==============================================+
-
-Frame Payload:
-{"id": 100, "name": "Zack"}]}
-```
-
-The final DATA frame has the `END_STREAM` flag set, signaling completion.
+Response: `:status: 200` followed by ordinary headers such as `content-type`. **Header names are lowercase** in HTTP/2. There is no `Connection`, `Keep-Alive`, `Upgrade` or `Transfer-Encoding: chunked` (they are connection-specific, and HTTP/2 has its own framing).
 
 ---
 
-## Header Compression: HPACK
+## 4. Streams and multiplexing
 
-HTTP headers are repetitive and verbose. HTTP/1.1 sent them as plain text:
+### 4.1 Stream identifiers
+- 31-bit numbers. **Client-initiated streams use odd IDs** (1, 3, 5, ...); **server-initiated (push) streams use even IDs** (2, 4, ...). This lets both sides choose IDs without coordinating.
+- IDs **increase** and are **never reused** on a connection. When they run out (or after many requests), the connection is simply replaced by a new one (a `GOAWAY` tells the peer).
 
-```
-GET /index.html HTTP/1.1
-Host: www.example.com
-User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 ...
-Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8
-Accept-Language: en-US,en;q=0.5
-Accept-Encoding: gzip, deflate, br
-Connection: keep-alive
-Upgrade-Insecure-Requests: 1
-```
-
-This is ~300 bytes per request. For 100 requests, that's **30 KB of redundant headers**.
-
-HTTP/2 uses **HPACK** (Header Compression for HTTP/2, RFC 7541) to compress headers.
-
-### HPACK Core Concepts
-
-**1. Static Table (61 entries):**
-
-A predefined lookup table of common HTTP headers:
-
-| Index | Header Name          | Header Value |
-|-------|----------------------|--------------|
-| 1     | :authority           |              |
-| 2     | :method              | GET          |
-| 3     | :method              | POST         |
-| 4     | :path                | /            |
-| 5     | :path                | /index.html  |
-| 6     | :scheme              | http         |
-| 7     | :scheme              | https        |
-| 8     | :status              | 200          |
-| 9     | :status              | 204          |
-| ...   | ...                  | ...          |
-| 31    | content-type         | application/json |
-| ...   | ...                  | ...          |
-| 61    | www-authenticate     |              |
-
-**2. Dynamic Table:**
-
-A connection-specific table that learns headers during the session. When a new header appears, it's added to the dynamic table for future reference.
-
-**Example:**
-First request sends: `custom-header: my-app-v1.0`
-This gets added to dynamic table at index 62.
-Second request can reference: `62` (1 byte instead of 25 bytes)
-
-**3. Huffman Encoding:**
-
-String values are Huffman-encoded for additional compression.
-
-### HPACK Encoding Example
-
-**HTTP/1.1 Request:**
-```
-GET /resource HTTP/1.1
-Host: www.example.com
-```
-
-**HTTP/2 HEADERS Frame (HPACK-encoded):**
+### 4.2 Stream life cycle
 
 ```
-:method: GET         → 0x82 (index 2 in static table)
-:scheme: https       → 0x87 (index 7 in static table)
-:path: /resource     → 0x04 0x09 2f7265736f75726365 (literal, Huffman)
-:authority: www.example.com → 0x01 0x0f 777777772e6578616d706c652e636f6d (literal, Huffman)
+                       ┌───────┐
+                       │ idle  │
+                       └───┬───┘
+              send/recv HEADERS
+                       ▼
+                   ┌───────┐
+        ┌─ END_STREAM sent ──►│ open  │◄── END_STREAM received ─┐
+        ▼                     └───────┘                         ▼
+┌────────────────┐                                   ┌─────────────────┐
+│ half-closed    │    (each side finished sending    │ half-closed     │
+│ (local)        │     in one direction)             │ (remote)        │
+└───────┬────────┘                                   └────────┬────────┘
+        └──── END_STREAM received / sent, or RST_STREAM ──────┘
+                                  ▼
+                              ┌────────┐
+                              │ closed │
+                              └────────┘
 ```
 
-**Size comparison:**
-- HTTP/1.1: ~40 bytes (plain text)
-- HTTP/2: ~25 bytes (HPACK binary)
+A typical `GET`: the client sends `HEADERS` with `END_STREAM` (no body) → the stream is **half-closed (local)**; the server sends `HEADERS` and `DATA…` with `END_STREAM` on the last one → **closed**. A `RST_STREAM` closes one stream immediately (for example, the user navigated away) while every other stream continues, something impossible in HTTP/1.1 without dropping the connection.
 
-**40% reduction** on this small example. For real-world headers with cookies, authentication tokens, and custom headers, the savings approach **70-80%**.
+### 4.3 Multiplexing in practice
+Imagine the client sends four requests at once: `/index.html` (server needs 10 s), `/style.css`, `/script.js`, `/logo.png` (each ready in 0.1 s):
 
-### Security Consideration: HPACK and CRIME
+| Time | Wire (server → client) | User sees |
+|---|---|---|
+| 0.0 s | Client sends `HEADERS:1`, `HEADERS:3`, `HEADERS:5`, `HEADERS:7` back-to-back | |
+| 0.1 s | `HEADERS:3 200`, `DATA:3`… `END_STREAM`; same for 5 and 7 | CSS/JS/logo are complete already |
+| 10 s | `HEADERS:1 200`, `DATA:1`… `END_STREAM` | HTML arrives; page completes |
 
-HPACK was carefully designed to prevent **CRIME** (Compression Ratio Info-leak Made Easy) attacks. CRIME exploits compression to leak sensitive data by observing compressed size variations.
+In HTTP/1.1 on one connection the CSS, JS and image would have waited behind the HTML. (With 6 parallel connections the effect is similar, but at the cost of extra connections, and only 6 requests at a time.)
 
-**HPACK Protection:**
-- Never compresses header values from different contexts together
-- Uses a static dictionary that doesn't leak information
-- Optional: Sensitive headers (like cookies) can be marked as non-indexed
+Large bodies are split into multiple `DATA` frames, so frames from different streams **interleave** fairly on the wire:
+
+```
+[HEADERS:1][HEADERS:3][HEADERS:5]  [D:3][D:1][D:5][D:1][D:5][D:1]  ...
+```
+
+The receiver uses the **stream ID** in each frame header to reassemble each message separately. **Concurrency limit:** each side announces `SETTINGS_MAX_CONCURRENT_STREAMS` (recommended ≥ 100; nginx default 128); the practical limit is your bandwidth and server capacity, not six.
 
 ---
 
-## Server Push: Proactive Resource Delivery
+## 5. HPACK: header compression
 
-HTTP/2 introduces an optional feature: **server push**. The server can send resources to the client *before* the client requests them.
+HTTP headers are large and repetitive: `User-Agent`, `Accept`, `Accept-Language`, `Cookie` (often kilobytes) are resent on **every** request. Over 100 requests, that can be tens or hundreds of KB, all on the *upload* path, which is often the slow direction.
 
-### Motivation
+**HPACK** (RFC 7541) compresses header lists by **remembering what was already sent on this connection**:
 
-**Typical HTTP/1.1 Flow:**
-```
-1. Client requests /index.html
-2. Server sends /index.html
-3. Client parses HTML, discovers <link rel="stylesheet" href="/style.css">
-4. Client requests /style.css
-5. Server sends /style.css
-```
+1. **Static table**: 61 predefined entries for very common headers/values (`:method: GET` is index 2, `:method: POST` is 3, `:path: /` is 4, `:scheme: https` is 7, `:status: 200` is 8, and so on). A whole header sent as **one byte** (for example `0x82` = "indexed header field #2").
+2. **Dynamic table**: a per-connection, size-limited table both sides update as they go. The first time a header like `custom-header: my-app-v1.0` is sent, it is transmitted in full and added to the table (index 62+). Later requests just send the **index** (about 1 byte instead of ~25).
+3. **Huffman coding** of literal string values (a fixed table optimized for HTTP text), typically saving ~30% on them.
 
-Total time: 2 RTT (round trips) + processing
+Example: after the first request, a follow-up request for a different path can differ by a few bytes, because `:scheme`, `:authority`, `user-agent`, `accept`, and `cookie` are all references to table entries. Typical header cost falls from hundreds of bytes to **a handful per request** after the first, often 80–90% reduction on repeats.
 
-**HTTP/2 Server Push:**
-```
-1. Client requests /index.html
-2. Server sends /index.html
-3. Server ALSO sends /style.css (proactively, without request)
-```
+**Why not just use gzip?** In 2012 the **CRIME** attack showed that compressing secret data (cookies) together with attacker-controllable data with a general compressor leaks the secret through compressed sizes. HPACK's design avoids that: it only supports exact-match references and Huffman coding (no adaptive substring matching across values), and **sensitive headers can be marked "never indexed"** so they're never added to a table.
 
-Total time: 1 RTT + processing
-
-The server "pushes" resources it knows the client will need, eliminating the extra round trip.
-
-### PUSH_PROMISE Frame
-
-Before pushing a resource, the server sends a **PUSH_PROMISE** frame:
-
-```
-+---------------+
-|Pad Length? (8)|
-+-+-------------+-----------------------------------------------+
-|R|                  Promised Stream ID (31)                    |
-+-+------------------------------------------------------------+
-|                   Header Block Fragment (*)                 ...
-+---------------------------------------------------------------+
-|                           Padding (*)                       ...
-+---------------------------------------------------------------+
-```
-
-**Purpose:** Notify the client that "I'm about to push /style.css as Stream 4."
-
-**Client Options:**
-- Accept the push (let it arrive)
-- Reject the push (send RST_STREAM if already cached)
-
-**Example Timeline:**
-
-```
-Client → Server:  HEADERS:1 GET /index.html
-
-Server → Client:  HEADERS:1 200 OK
-                  PUSH_PROMISE:1 (will push Stream 2: /style.css)
-                  PUSH_PROMISE:1 (will push Stream 4: /script.js)
-                  DATA:1 (body of /index.html)
-                  
-Server → Client:  HEADERS:2 200 OK (pushed /style.css)
-                  DATA:2 (body of /style.css, END_STREAM)
-                  
-Server → Client:  HEADERS:4 200 OK (pushed /script.js)
-                  DATA:4 (body of /script.js, END_STREAM)
-```
-
-Client now has `/index.html`, `/style.css`, and `/script.js` without requesting the latter two.
-
-### Server Push: Trade-offs
-
-**Benefits:**
-- Eliminates request RTT for known dependencies
-- Useful for critical render-path resources (CSS, JS, fonts)
-- Great for resources with cache misses
-
-**Drawbacks:**
-- Server might push resources the client already has cached
-- Wastes bandwidth if client would have cached hit
-- Complicates client-side caching logic
-- Difficult to predict what client needs
-
-**Reality:** Server push is **rarely used** in practice (as of 2025). Most sites achieve better results with:
-- HTTP/2 multiplexing (fast enough)
-- Resource hints: `<link rel="preload">`
-- Service workers for cache management
-
-HTTP/3 **removed** server push entirely, replaced by `PRIORITY_UPDATE` and external push mechanisms.
+**Operational notes:** compression state is **per connection and per direction**, so a header block must be decoded in order (which is why `CONTINUATION` frames can't be interleaved with other frames), and servers cap table size and total header size (`SETTINGS_HEADER_TABLE_SIZE` default 4096 bytes, `SETTINGS_MAX_HEADER_LIST_SIZE`) to avoid memory abuse. HTTP/3 uses **QPACK**, a redesigned version that copes with out-of-order delivery.
 
 ---
 
-## Flow Control and Backpressure
+## 6. Flow control and SETTINGS
 
-HTTP/2 includes sophisticated **flow control** to prevent fast senders from overwhelming slow receivers.
+TCP already has flow control, but that treats the whole connection as one pipe. HTTP/2 multiplexes many streams over it, so it needs its own **application-level, credit-based flow control** so that a stalled consumer of *one* stream (a slow download) can't clog the whole connection or consume unbounded memory.
 
-### Problem Without Flow Control
-
-```
-Fast Server                            Slow Client (mobile, limited RAM)
-    |                                         |
-    |--- DATA:1 (10MB file, send fast) ----->| (buffer overflows!)
-    |                                         | Client can't process fast enough
-    |--- DATA:1 (more data)              --->| CRASH or connection drop
-```
-
-### HTTP/2 Flow Control Mechanism
-
-**Concept:** Credit-based system. Sender cannot send more than receiver has advertised available buffer space.
-
-**WINDOW_UPDATE Frame:**
+- Each receiver advertises a **window** (bytes it can buffer) **per stream** and **per connection**. The **default initial window is 65,535 bytes** (`SETTINGS_INITIAL_WINDOW_SIZE`); real implementations raise it (for example to several MB).
+- Only **`DATA`** frames are flow-controlled. Senders may not exceed the window; as the receiver consumes data it grants more credit with **`WINDOW_UPDATE`** (stream ID = a stream, or 0 = connection).
 
 ```
-+-+-------------------------------------------------------------+
-|R|              Window Size Increment (31)                     |
-+-+-------------------------------------------------------------+
+Stream 1 window: 65,535
+server sends DATA:1 (32,768)   → window 32,767
+server sends DATA:1 (32,767)   → window 0        (server must pause stream 1; other streams continue)
+client processes data, sends WINDOW_UPDATE:1 (+32,768) → window 32,768   (server resumes)
 ```
 
-**Stream ID:**
-- 0 → Connection-level window
-- N → Stream-specific window
+Too-small windows are a common cause of slow HTTP/2 downloads on high-latency links (throughput ≈ window ÷ RTT, just like TCP in Chapter 23).
 
-**Example: Stream-Level Flow Control**
-
-```
-Initial state:
-  Stream 1 window size: 65,535 bytes (default)
-
-Server → Client:  DATA:1 (32,768 bytes)
-  Stream 1 window: 65,535 - 32,768 = 32,767 remaining
-
-Server → Client:  DATA:1 (32,767 bytes)
-  Stream 1 window: 32,767 - 32,767 = 0 remaining
-  [Server must stop sending on Stream 1]
-
-Client (processes data, frees buffer):
-Client → Server:  WINDOW_UPDATE:1 (+32,768)
-  Stream 1 window: 0 + 32,768 = 32,768
-
-Server can now resume sending on Stream 1.
-```
-
-**Connection-Level Flow Control:**
-
-Same mechanism, but controls total data across all streams:
-
-```
-Client → Server:  WINDOW_UPDATE:0 (+65,536)
-  (All streams combined can receive 65,536 more bytes)
-```
-
-**Why both levels?**
-- **Connection level:** Prevents total memory exhaustion
-- **Stream level:** Fairly allocates bandwidth across streams (prevent one stream from monopolizing)
+### `SETTINGS` (exchanged at start, changeable later, always acknowledged)
+| Setting | Meaning | Typical |
+|---|---|---|
+| `HEADER_TABLE_SIZE` | HPACK dynamic table size | 4096 |
+| `ENABLE_PUSH` | Whether the client accepts pushes | 0 in modern browsers |
+| `MAX_CONCURRENT_STREAMS` | How many streams the sender of the setting will let its peer open | 100–128 |
+| `INITIAL_WINDOW_SIZE` | Initial stream flow-control window | 65,535 (raised by many) |
+| `MAX_FRAME_SIZE` | Largest frame payload | 16,384 |
+| `MAX_HEADER_LIST_SIZE` | Advisory limit on header size | server-defined |
 
 ---
 
-## Stream Prioritization (Deprecated)
+## 7. Starting an HTTP/2 connection
 
-HTTP/2 originally included a **stream prioritization** mechanism using dependency trees and weights.
-
-**Concept:** Mark some streams as higher priority:
+### 7.1 Negotiation with ALPN (the normal way)
+Browsers only use HTTP/2 over **TLS** (`h2`). Note that the *spec* doesn't require TLS; browsers do. During the TLS handshake the client lists supported protocols in the **ALPN** extension (Application-Layer Protocol Negotiation):
 
 ```
-Stream 1 (HTML, weight=128, priority=high)
-├── Stream 3 (CSS, weight=64, depends on 1)
-└── Stream 5 (JS, weight=64, depends on 1)
-        └── Stream 7 (image, weight=32, depends on 5)
+ClientHello:  ALPN = ["h2", "http/1.1"]
+ServerHello:  ALPN = "h2"           ← agreed; otherwise the server picks "http/1.1"
 ```
 
-This would tell the server: "Send HTML first, then CSS and JS in parallel, then images."
+No extra round trip is needed. After the TLS handshake:
 
-**Reality:** This was **rarely implemented correctly** in browsers or servers. The model was too complex and didn't match real-world needs.
+1. The client sends the **connection preface**: the fixed 24-byte string `PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n` followed by a `SETTINGS` frame. (The odd string deliberately looks like an invalid HTTP/1.x request, so HTTP/1.x servers reject it cleanly.)
+2. The server sends its `SETTINGS`.
+3. Each acknowledges the other's `SETTINGS` (`SETTINGS` with `ACK`).
+4. Requests can start immediately (clients may send requests right after their own preface, without waiting).
 
-**HTTP/2 RFC 7540 Errata (2022):** Formally **deprecated** stream priorities due to lack of adoption.
+### 7.2 Cleartext HTTP/2 (`h2c`)
+Possible with **prior knowledge** (the client just starts with the preface; used between services, gRPC inside a cluster, and behind TLS-terminating proxies). The old HTTP/1.1 `Upgrade: h2c` mechanism has been **deprecated** (RFC 9113) and is not supported by browsers.
 
-**HTTP/3 Replacement:** Uses **PRIORITY_UPDATE frames** with simpler "urgency" and "incremental" hints, designed based on lessons learned from HTTP/2's failed priority model.
+### 7.3 Connection reuse and coalescing
+Browsers use **one connection per origin** (scheme+host+port). Under certain conditions (same IP and a certificate valid for both names) they may **coalesce** requests for several hostnames onto one connection. HTTP/2 idle connections are kept open, and `PING` frames or TCP keepalives detect dead peers.
+
+### 7.4 Shutting down
+`GOAWAY(last_stream_id)` says "I won't accept streams above this ID; finish the ones in flight." Servers use it during deploys, and it lets clients safely retry requests that were not processed.
 
 ---
 
-## HTTP/2 vs HTTP/1.1: Complete Comparison
+## 8. Server push and priorities: features that faded
 
-| Feature | HTTP/1.1 | HTTP/2 |
-|---------|----------|--------|
-| **Encoding** | Text-based (ASCII) | Binary frames |
-| **Multiplexing** | No (sequential responses) | Yes (unlimited concurrent streams) |
-| **Header Compression** | None | HPACK (30-80% reduction) |
-| **Server Push** | No | Yes (rarely used) |
-| **Request Prioritization** | None | Yes (deprecated due to complexity) |
-| **Flow Control** | TCP-level only | Per-stream + connection-level |
-| **Streams per Connection** | 1 request/response at a time | Unlimited (limited by SETTINGS) |
-| **Connections per Domain** | 6-8 (browser workaround) | 1 (sufficient due to multiplexing) |
-| **HOL Blocking (HTTP-level)** | Yes (responses ordered) | No (responses interleaved) |
-| **HOL Blocking (TCP-level)** | Yes | Yes (still uses TCP) |
-| **Connection Overhead** | ~3.5 RTT per request (HTTP/1.0) / ~1 RTT (HTTP/1.1 keep-alive) | ~1.5 RTT total for all requests |
-| **Header Size (100 requests)** | ~30 KB (uncompressed) | ~6-9 KB (HPACK compressed) |
-| **Browser Support** | Universal | All modern browsers (2015+) |
-| **Server Support** | Universal | Nginx, Apache, Caddy, Node.js, Go, etc. |
+### Server push
+With `PUSH_PROMISE`, a server could send resources it *knew* the client would need (CSS for the HTML it was returning) before being asked, saving a round trip:
+
+```
+client: HEADERS:1 GET /index.html
+server: HEADERS:1 200 ...   PUSH_PROMISE:1 (promises stream 2: /style.css)   DATA:1 ...  HEADERS:2 200 / DATA:2 (style.css)
+```
+
+In practice it was hard to use well: the server can't know what the browser already has cached (so it wasted bandwidth), pushes competed with the critical HTML, and gains were small compared to alternatives. **Chrome removed support in version 106 (2022)**, other browsers followed or ignored it, nginx removed its `http2_push` directive in 1.25.1, and browsers advertise `SETTINGS_ENABLE_PUSH = 0`. Use **`<link rel="preload">`** or the **`103 Early Hints`** status code instead. (Server push technically still exists in the spec of HTTP/2 and HTTP/3, but treat it as legacy.)
+
+### Priorities
+HTTP/2's original **dependency tree + weights** scheme (`PRIORITY` frames) was complicated and inconsistently implemented by browsers and servers. **RFC 9113 deprecated it.** Its replacement is the simpler **Extensible Prioritization** scheme (**RFC 9218**): a `Priority: u=3, i` header (urgency 0–7 and an "incremental" flag) plus a `PRIORITY_UPDATE` frame, usable with both HTTP/2 and HTTP/3.
 
 ---
 
-## Implementation Deep Dive
+## 9. What HTTP/2 does *not* fix: TCP head-of-line blocking
 
-### Client-Side Behavior
-
-**HTTP/2 Connection Establishment:**
+HTTP/2 removes HOL blocking **within HTTP**. But all streams share **one TCP byte stream**, which must be delivered **in order**. If one packet is lost, TCP holds back *everything after it*, including data belonging to other, unaffected streams, until the retransmission arrives:
 
 ```
-1. TCP Handshake (SYN, SYN-ACK, ACK)
-2. TLS Handshake (if HTTPS)
-   - Client Hello includes ALPN extension: ["h2"]
-   - Server Hello agrees: ALPN protocol = "h2"
-3. HTTP/2 Connection Preface
-   Client → Server: "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n" (24 bytes magic string)
-   Client → Server: SETTINGS frame (connection parameters)
-4. Server → Client: SETTINGS frame (server parameters)
-5. Both send: SETTINGS ACK
-6. Connection ready, can send HEADERS + DATA frames
+TCP segments:  [1: stream 1][2: stream 3 ✗ LOST][3: stream 5][4: stream 7]
+               segments 3 and 4 arrived, but TCP can't hand them to HTTP/2 until segment 2 is repaired
 ```
 
-**ALPN (Application-Layer Protocol Negotiation):**
+On low-loss wired networks this rarely matters. On **lossy** networks (mobile, Wi-Fi, long distance), one lost packet can freeze the whole page, and HTTP/2 over a single connection can even **perform worse than HTTP/1.1's six independent connections**. Other issues: TCP+TLS setup needs 2–3 round trips, and connection changes (Wi-Fi ↔ cellular) break the connection.
 
-HTTP/2 requires TLS's ALPN extension to negotiate the protocol. The client says "I support h2 (HTTP/2)" in the TLS handshake, and the server agrees (or falls back to http/1.1).
-
-**HTTP/2 over plaintext (h2c):**
-
-Possible but rare. Requires HTTP/1.1 Upgrade mechanism:
-
-```
-GET / HTTP/1.1
-Host: example.com
-Connection: Upgrade, HTTP2-Settings
-Upgrade: h2c
-HTTP2-Settings: <base64-encoded SETTINGS frame>
-
-HTTP/1.1 101 Switching Protocols
-Connection: Upgrade
-Upgrade: h2c
-
-[HTTP/2 framing begins]
-```
-
-### Sending a Request (Pseudocode)
-
-```python
-import http2  # Hypothetical HTTP/2 library
-
-# Establish connection
-conn = http2.connect("https://api.example.com")
-
-# Send multiple requests concurrently
-stream1 = conn.request(
-    method="GET",
-    path="/users",
-    headers={
-        "accept": "application/json"
-    }
-)
-
-stream2 = conn.request(
-    method="POST",
-    path="/users",
-    headers={
-        "content-type": "application/json"
-    },
-    body='{"name": "Alice"}'
-)
-
-stream3 = conn.request(
-    method="GET",
-    path="/products",
-    headers={
-        "accept": "application/json"
-    }
-)
-
-# All three requests are sent immediately, no waiting
-
-# Receive responses (may arrive in any order)
-response1 = stream1.get_response()  # Might arrive 3rd
-response2 = stream2.get_response()  # Might arrive 1st
-response3 = stream3.get_response()  # Might arrive 2nd
-
-print(f"User list: {response1.body}")
-print(f"Created user: {response2.body}")
-print(f"Products: {response3.body}")
-```
-
-### Server-Side Implementation (Node.js Example)
-
-```javascript
-const http2 = require('http2');
-const fs = require('fs');
-
-// Create HTTP/2 server
-const server = http2.createSecureServer({
-    key: fs.readFileSync('server-key.pem'),
-    cert: fs.readFileSync('server-cert.pem')
-});
-
-server.on('stream', (stream, headers) => {
-    const method = headers[':method'];
-    const path = headers[':path'];
-    
-    console.log(`${method} ${path} (Stream ${stream.id})`);
-    
-    // Different streams handled concurrently
-    if (path === '/slow') {
-        // Simulate slow database query
-        setTimeout(() => {
-            stream.respond({
-                ':status': 200,
-                'content-type': 'text/plain'
-            });
-            stream.end('Slow response after 10 seconds');
-        }, 10000);
-    } else if (path === '/fast') {
-        // Fast response
-        stream.respond({
-            ':status': 200,
-            'content-type': 'application/json'
-        });
-        stream.end(JSON.stringify({ message: 'Fast!' }));
-    } else {
-        stream.respond({
-            ':status': 404
-        });
-        stream.end('Not Found');
-    }
-    
-    // Note: /fast responds immediately even if /slow is still processing
-    // This is the power of multiplexing
-});
-
-server.listen(8443, () => {
-    console.log('HTTP/2 server listening on https://localhost:8443');
-});
-```
-
-**Key Observation:** The server doesn't need explicit threading or async/await for multiplexing. The HTTP/2 framing layer handles interleaving automatically.
-
-### Frame Construction (Low-Level Example)
-
-**Creating a HEADERS frame manually:**
-
-```python
-import struct
-
-# HEADERS frame for: GET /api/data HTTP/2
-stream_id = 1
-
-# HPACK-encoded headers (simplified, not real HPACK)
-headers_payload = b'\x82'  # :method: GET (index 2 from static table)
-headers_payload += b'\x87'  # :scheme: https (index 7)
-headers_payload += b'\x84'  # :path: / (index 4)
-# ... more encoded headers ...
-
-length = len(headers_payload)
-frame_type = 0x01  # HEADERS
-flags = 0x05  # END_STREAM | END_HEADERS
-stream_id = 1
-
-# Construct 9-byte frame header
-frame_header = struct.pack(
-    '!IBBBI',
-    length >> 8,         # Length (upper 16 bits)
-    length & 0xFF,       # Length (lower 8 bits)
-    frame_type,          # Type
-    flags,               # Flags
-    stream_id & 0x7FFFFFFF  # Stream ID (31 bits, R bit = 0)
-)
-
-# Complete frame
-frame = frame_header + headers_payload
-
-# Send over TCP connection
-tcp_socket.send(frame)
-```
-
-**Receiving and parsing frames:**
-
-```python
-def read_frame(tcp_socket):
-    # Read 9-byte header
-    header = tcp_socket.recv(9)
-    if len(header) < 9:
-        raise ConnectionError("Incomplete frame header")
-    
-    # Parse header
-    length = (header[0] << 16) | (header[1] << 8) | header[2]
-    frame_type = header[3]
-    flags = header[4]
-    stream_id = int.from_bytes(header[5:9], 'big') & 0x7FFFFFFF
-    
-    # Read payload
-    payload = b""
-    while len(payload) < length:
-        chunk = tcp_socket.recv(length - len(payload))
-        if not chunk:
-            raise ConnectionError("Connection closed mid-frame")
-        payload += chunk
-    
-    return {
-        'length': length,
-        'type': frame_type,
-        'flags': flags,
-        'stream_id': stream_id,
-        'payload': payload
-    }
-
-# Usage
-while True:
-    frame = read_frame(tcp_socket)
-    if frame['type'] == 0x01:  # HEADERS
-        print(f"Received HEADERS on stream {frame['stream_id']}")
-        # Decode HPACK payload...
-    elif frame['type'] == 0x00:  # DATA
-        print(f"Received DATA on stream {frame['stream_id']}: {len(frame['payload'])} bytes")
-```
+**HTTP/3 = HTTP semantics over QUIC** (Chapter 24: a UDP-based transport). QUIC gives each stream its own loss recovery, integrates TLS 1.3 (1-RTT handshake, 0-RTT resumption), and supports connection migration. It uses the same ideas as HTTP/2 (streams, header compression via QPACK, multiplexing) with a different transport. Browsers discover it via the `Alt-Svc` header (`Alt-Svc: h3=":443"; ma=86400`) or DNS HTTPS records, and fall back to HTTP/2 if UDP is blocked. Adoption is substantial and growing among major sites and CDNs.
 
 ---
 
-## Real-World Performance Characteristics
+## 10. Security considerations
 
-### Benchmark: HTTP/1.1 vs HTTP/2
-
-**Test Setup:**
-- 100 resources (HTML, CSS, JS, 97 images)
-- Each resource: 10 KB average
-- Network: 100ms RTT, 10 Mbps bandwidth
-- Server processing: 10ms per resource (average)
-
-**HTTP/1.1 (6 connections):**
-```
-Connection 1-6 each handle ~17 resources
-Each resource: 1 RTT (request/response) = 100ms
-Total time per batch: 100ms
-Batches needed: 17 batches
-Total: 17 × 100ms = 1,700ms = 1.7 seconds
-```
-
-**HTTP/2 (1 connection, full multiplexing):**
-```
-All 100 requests sent immediately (pipelined)
-Server processes in parallel (limited by CPU)
-Responses arrive as ready (interleaved)
-Total: 100ms (initial RTT) + 10ms (processing) = 110ms
-```
-
-**Result:** HTTP/2 is **15× faster** for this workload.
-
-**Note:** This is a synthetic best-case. Real-world improvements are typically **2-3× faster** due to:
-- Bandwidth limitations (multiplexing doesn't add bandwidth)
-- Server processing bottlenecks
-- Not all resources ready simultaneously
-
-### CDN and HTTP/2
-
-Major CDNs (Cloudflare, Fastly, Akamai, AWS CloudFront) all support HTTP/2:
-
-**Benefits:**
-- Reduced origin server load (fewer connections)
-- Faster edge-to-client delivery (multiplexing)
-- Lower bandwidth costs (header compression)
-
-**Cloudflare Reports (2016):**
-- 30% reduction in page load time (average)
-- 50% reduction in connection count
-- 40% reduction in bandwidth (HPACK + multiplexing efficiency)
-
-### gRPC: HTTP/2's Killer Application
-
-**gRPC** (Google Remote Procedure Call) is built **exclusively** on HTTP/2.
-
-**Why gRPC Uses HTTP/2:**
-
-1. **Bidirectional Streaming:** gRPC supports streaming RPCs (client sends stream, server responds with stream). HTTP/2's full-duplex streams enable this natively.
-
-2. **Multiplexing:** Single connection for all RPC calls. No connection pool management.
-
-3. **Flow Control:** Per-stream backpressure prevents overwhelming services.
-
-4. **Binary Encoding:** gRPC uses Protocol Buffers (binary). HTTP/2's binary framing is a perfect match.
-
-**Example gRPC Call (HTTP/2 frames):**
-
-```
-Client → Server:  HEADERS:1 (RPC: /users.UserService/GetUser)
-                  DATA:1 (Protobuf: {user_id: 42}, END_STREAM)
-
-Server → Client:  HEADERS:1 (gRPC status: OK)
-                  DATA:1 (Protobuf: {id: 42, name: "Alice"}, END_STREAM)
-```
-
-This is just HTTP/2 HEADERS + DATA frames with gRPC-specific semantics in the headers.
-
-**gRPC Streaming Example:**
-
-```
-Client → Server:  HEADERS:1 (RPC: /chat.ChatService/StreamMessages)
-
-Server → Client:  HEADERS:1 (gRPC status: OK)
-                  DATA:1 (message 1)
-                  DATA:1 (message 2)
-                  ...
-                  DATA:1 (message 100, END_STREAM)
-```
-
-Server sends 100 messages over the same stream. HTTP/1.1 couldn't do this—it would need 100 requests or chunked encoding hacks.
+| Issue | Description | Mitigation |
+|---|---|---|
+| **Rapid Reset** (CVE-2023-44487, Oct 2023) | The client opens a stream and immediately cancels it with `RST_STREAM`, repeatedly. Cancelled streams don't count against the concurrent-stream limit, but the server has already begun work, so a tiny number of connections can generate record-breaking request rates | Patch servers/proxies; rate-limit resets per connection; close abusive connections (`GOAWAY`); use a DDoS-capable edge |
+| **Other resource-exhaustion attacks** (continuation flood, settings flood, ping flood, "zero-window", HPACK bombs) | Abuse HTTP/2's flexibility to make the peer allocate memory or CPU | Keep software updated; enforce limits on frames, headers, and control-frame rates |
+| **Request smuggling via HTTP/2 → HTTP/1.1 downgrade** | A front-end that translates HTTP/2 to HTTP/1.1 must correctly rebuild `Content-Length`, `Transfer-Encoding` and header syntax | Use HTTP/2 end-to-end, or a well-tested proxy; reject invalid characters (`\r\n`) in header values and pseudo-headers |
+| **Cleartext exposure** | `h2c` has no encryption | Use TLS (`h2`) over untrusted networks |
+| **TLS requirements** | The spec forbids weak TLS settings (old versions/ciphers) | TLS 1.2+ with modern ciphers (TLS 1.3 preferred) |
+| **Compression side channels** | CRIME/BREACH-style attacks | HPACK design; avoid reflecting secrets in compressed *bodies* alongside attacker input (BREACH concerns body compression) |
 
 ---
 
-## HTTP/2 Limitations and HTTP/3's Motivation
+## 11. Performance: honest expectations
 
-Despite HTTP/2's strengths, it has one critical flaw: **TCP head-of-line blocking**.
+- Best case (many small resources, high latency): large gains (multiple times) vs HTTP/1.1 with the same connection limits, because the requests all start immediately and the header cost drops.
+- Typical real sites: **modest** but real improvement (often tens of percent). Multiplexing removes waiting for connection slots, not bandwidth limits, server think-time or render-blocking resources.
+- Lossy networks: can be slower than well-tuned HTTP/1.1 because of TCP HOL blocking, while HTTP/3 helps.
+- **Undo old HTTP/1.1 tricks** (domain sharding especially: it defeats connection reuse, HPACK context, and prioritization). Bundling is less essential, but still reduces overhead and improves compression; moderate bundle sizes with good cache control are a balance.
+- **TLS overhead** is paid once per connection: a single connection amortizes it.
+- **CDNs and reverse proxies** almost universally terminate HTTP/2 at the edge and may talk HTTP/1.1 or HTTP/2 to your origin.
 
-### The TCP HOL Problem
-
-HTTP/2 eliminates HTTP-level HOL blocking, but **TCP-level HOL blocking** remains.
-
-**Scenario: Packet Loss**
-
-```
-TCP Connection (single byte stream):
-[Packet 1][Packet 2][Packet 3][Packet 4][Packet 5]
-
-Transmission:
-[Packet 1] → Arrives ✓
-[Packet 2] → LOST ✗
-[Packet 3] → Arrives (buffered, waiting for 2)
-[Packet 4] → Arrives (buffered, waiting for 2)
-[Packet 5] → Arrives (buffered, waiting for 2)
-
-TCP must wait for Packet 2 retransmit before delivering 3, 4, 5.
-```
-
-**Impact on HTTP/2 Streams:**
-
-```
-Stream 1 data in Packet 2 (lost)
-Stream 3 data in Packet 3 (arrived but blocked)
-Stream 5 data in Packet 4 (arrived but blocked)
-Stream 7 data in Packet 5 (arrived but blocked)
-
-All streams are blocked by Stream 1's lost packet!
-```
-
-Even though Streams 3, 5, 7 have received all their data, TCP withholds delivery because Packet 2 is missing. This is **TCP head-of-line blocking**.
-
-**HTTP/1.1 with 6 connections:**
-
-If one connection loses a packet, only that connection's stream blocks. The other 5 connections continue unaffected. Counterintuitively, HTTP/1.1's multiple connections provide resilience against TCP HOL.
-
-### When TCP HOL Matters
-
-**Mobile Networks:**
-- Packet loss rate: 1-5% (vs 0.1% on wired)
-- HTTP/2 can perform **worse** than HTTP/1.1 on high-loss networks
-
-**High-Latency Networks:**
-- Satellite (500ms RTT): Retransmit takes 500ms, blocking all streams
-
-**Congested Networks:**
-- Coffee shop WiFi: Packet loss spikes to 10%+
-
-### HTTP/3's Solution: QUIC
-
-HTTP/3 replaces TCP with **QUIC** (Quick UDP Internet Connections):
-
-**QUIC Characteristics:**
-- Built on UDP (not TCP)
-- Per-stream reliability (not per-connection)
-- Stream 1 loss doesn't block Stream 3
-- Integrated TLS 1.3 (1-RTT handshake)
-- Connection migration (switch from WiFi to cellular seamlessly)
-
-**HTTP/3 Benefits:**
-- No TCP HOL blocking
-- Faster connection establishment (0-RTT in some cases)
-- Better mobile performance
-
-**HTTP/3 Adoption (2025):**
-- Supported by all major browsers
-- Supported by Cloudflare, Google, Facebook, etc.
-- ~30% of top 1000 websites use HTTP/3
+### gRPC
+**gRPC** uses HTTP/2 as its transport: each RPC is one stream (`HEADERS` with `:path: /pkg.Service/Method`, `content-type: application/grpc`, then `DATA` with length-prefixed Protocol Buffers messages, and **trailers** carrying `grpc-status`). It relies on multiplexing (many calls on one connection), streaming in both directions, and flow control. That's why gRPC through a proxy needs an HTTP/2-capable proxy (and why some browsers need gRPC-Web).
 
 ---
 
-## Browser Developer Tools and HTTP/2
+## 12. Configuration
 
-### Inspecting HTTP/2 Traffic
-
-**Chrome DevTools:**
-
-1. Open DevTools (F12)
-2. Network tab
-3. Right-click column header → Enable "Protocol"
-4. Reload page
-
-You'll see:
-```
-Name           Status  Type       Protocol    Time
-index.html     200     document   h2          245ms
-style.css      200     stylesheet h2          12ms
-script.js      200     script     h2          18ms
-logo.png       200     image      h2          25ms
-```
-
-"h2" indicates HTTP/2. "http/1.1" indicates HTTP/1.1.
-
-**Connection ID:**
-
-Right-click → Enable "Connection ID"
-
-```
-Name           Protocol  Connection ID
-index.html     h2        127
-style.css      h2        127
-script.js      h2        127
-logo.png       h2        127
-```
-
-All using the same connection (127), demonstrating multiplexing.
-
-**Timing Breakdown:**
-
-Click a resource → Timing tab:
-
-```
-Queueing:           0.5ms   (waiting for available connection slot)
-Stalled:            0.0ms   (HTTP/2 = no stalling!)
-DNS Lookup:         0.0ms   (cached)
-Initial Connection: 0.0ms   (reusing existing)
-SSL:                0.0ms   (reusing existing)
-Request sent:       0.2ms
-Waiting (TTFB):     10.0ms  (server processing)
-Content Download:   2.0ms
-```
-
-Notice "Stalled" is 0.0ms—HTTP/2 never waits for connection slots.
-
-### Firefox Developer Tools
-
-Similar to Chrome:
-1. DevTools → Network
-2. Click gear icon → Show "HTTP Version"
-3. Look for "HTTP/2.0" in the Protocol column
-
-### curl and HTTP/2
-
-```bash
-# Test HTTP/2 support
-curl -I --http2 https://www.google.com
-
-# Verbose output showing HTTP/2 frames
-curl -v --http2 https://www.google.com
-
-# Force HTTP/2 (fail if not supported)
-curl --http2-prior-knowledge https://www.google.com
-```
-
-**Sample output:**
-```
-* ALPN, offering h2
-* ALPN, offering http/1.1
-* TLSv1.3 ...
-* ALPN, server accepted to use h2
-> GET / HTTP/2
-> Host: www.google.com
-> user-agent: curl/7.68.0
-> accept: */*
->
-< HTTP/2 200
-< content-type: text/html; charset=ISO-8859-1
-< date: Mon, 11 Mar 2024 10:30:00 GMT
-```
-
----
-
-## HTTP/2 Configuration and Tuning
-
-### Nginx Configuration
+**nginx (1.25.1 and newer):**
 
 ```nginx
 server {
-    listen 443 ssl http2;  # Enable HTTP/2
+    listen 443 ssl;
+    http2 on;                          # (older versions: listen 443 ssl http2;)
     server_name example.com;
-    
-    ssl_certificate /path/to/cert.pem;
-    ssl_certificate_key /path/to/key.pem;
-    
-    # HTTP/2 specific settings
-    http2_max_concurrent_streams 128;   # Max parallel streams (default: 128)
-    http2_max_field_size 16k;           # Max header field size
-    http2_max_header_size 32k;          # Max total headers size
-    
-    # Recommended: Enable gzip (works with HTTP/2)
-    gzip on;
-    gzip_types text/plain text/css application/json application/javascript;
-    
-    location / {
-        root /var/www/html;
-    }
+
+    ssl_certificate     /etc/nginx/certs/cert.pem;
+    ssl_certificate_key /etc/nginx/certs/key.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+
+    keepalive_timeout 65;
+    http2_max_concurrent_streams 128;      # default 128 (in newer versions set via `http2` block or defaults)
+    location / { root /usr/share/nginx/html; }
 }
 ```
+(Older nginx: `http2_max_field_size`, `http2_max_header_size`, `http2_recv_timeout` no longer exist in current releases; check `nginx -V` and the docs for your version.)
 
-### Apache Configuration
+**Apache:** `LoadModule http2_module ...`, `Protocols h2 http/1.1`, `H2MaxSessionStreams`, `H2Push off`.
 
-```apache
-# Enable HTTP/2 module
-LoadModule http2_module modules/mod_http2.so
+**Caddy, Traefik, Envoy, HAProxy, Go's `net/http`, Node's `http2`, Jetty, Tomcat** all support it; Caddy and Go's standard library enable it automatically over TLS.
 
-<VirtualHost *:443>
-    ServerName example.com
-    
-    # Enable HTTP/2
-    Protocols h2 http/1.1
-    
-    # HTTP/2 tuning
-    H2MaxSessionStreams 100
-    H2ModernTLSOnly on
-    H2Push on
-    
-    SSLEngine on
-    SSLCertificateFile /path/to/cert.pem
-    SSLCertificateKeyFile /path/to/key.pem
-    
-    DocumentRoot /var/www/html
-</VirtualHost>
+---
+
+## 13. Hands-on labs
+
+**Lab 1: Is a site using HTTP/2?**
+
+```bash
+curl -sI --http2 https://www.cloudflare.com | head -3          # first line: HTTP/2 200
+curl -v --http2 https://example.com/ -o /dev/null 2>&1 | grep -E 'ALPN|HTTP/2|SETTINGS|stream'
+openssl s_client -alpn h2 -connect example.com:443 </dev/null 2>/dev/null | grep -i 'ALPN'   # "ALPN protocol: h2"
 ```
 
-### Performance Tuning Guidelines
+**Lab 2: Browser DevTools**: Network tab → right-click the column headers → enable **Protocol** and **Connection ID**. Reload: `h2` rows share one Connection ID (multiplexing); `http/1.1` sites show many. Click a request → Headers: names are lowercase and pseudo-headers (`:method`, `:path`) appear.
 
-**1. Increase Max Concurrent Streams:**
+**Lab 3: Your own HTTP/2 server with nginx in Docker**
 
-Default is often 100-128. For resource-heavy pages:
-```
-http2_max_concurrent_streams 256;
-```
-
-**2. Optimize Initial Window Size:**
-
-Larger windows reduce round trips for large responses:
-```nginx
-http2_recv_timeout 30s;
-http2_chunk_size 8k;
-```
-
-**3. Enable Server Push (Carefully):**
-
-Only push critical resources:
-```nginx
-location = /index.html {
-    http2_push /style.css;
-    http2_push /script.js;
+```bash
+mkdir h2lab && cd h2lab
+openssl req -x509 -newkey rsa:2048 -nodes -keyout key.pem -out cert.pem -days 30 -subj "/CN=localhost"
+cat > default.conf << 'EOF'
+server {
+    listen 443 ssl;
+    http2 on;
+    ssl_certificate     /certs/cert.pem;
+    ssl_certificate_key /certs/key.pem;
+    location / { root /usr/share/nginx/html; }
 }
+EOF
+docker run -d --name h2 -p 8443:443 \
+  -v "$PWD/default.conf":/etc/nginx/conf.d/default.conf:ro \
+  -v "$PWD":/certs:ro nginx:1.27-alpine
+curl -k -v --http2 https://localhost:8443/ -o /dev/null 2>&1 | grep -E 'ALPN|< HTTP/2|server:'
+curl -k --http1.1 -sI https://localhost:8443/ | head -1        # the same server also speaks HTTP/1.1
+docker rm -f h2
+```
+(`-k` accepts the self-signed certificate. Requires nginx ≥ 1.25.1 for `http2 on;`; use `listen 443 ssl http2;` on older images.)
+
+**Lab 4: See the frames with `nghttp`** (`apt install nghttp2-client`, or `brew install nghttp2`):
+
+```bash
+nghttp -nv https://nghttp2.org/          # -v verbose frame log: SETTINGS, HEADERS, DATA, WINDOW_UPDATE
+nghttp -nv -m 5 https://nghttp2.org/     # request the same URL 5 times on one connection: streams 1, 3, 5, 7, 9
+nghttp -nas https://nghttp2.org/         # -a follow links and fetch page assets; -s show stats
+```
+Identify: the connection preface, `SETTINGS` and `SETTINGS ACK`, `HEADERS` with `END_HEADERS`, odd stream IDs, `DATA` with `END_STREAM`, `GOAWAY` at the end.
+
+**Lab 5: Decrypt HTTP/2 in Wireshark**
+
+```bash
+export SSLKEYLOGFILE=$HOME/tls-keys.log
+curl --http2 https://example.com/ -o /dev/null           # curl (and Chrome/Firefox launched from the same shell) write TLS secrets
+# Wireshark → Preferences → Protocols → TLS → (Pre)-Master-Secret log filename = that file
+# Capture on your interface, filter: http2   → expand "HyperText Transfer Protocol 2"
 ```
 
-**4. Avoid Domain Sharding:**
+**Lab 6: Watch multiplexing and HOL blocking.** With a Python HTTP/2-capable client (`pip install httpx[http2]`) and the nginx from lab 3 (add `location /slow { proxy_pass ...; }` or use any server with a slow endpoint):
 
-HTTP/2 makes domain sharding counterproductive. Consolidate:
+```python
+import asyncio, httpx, time
+async def main():
+    async with httpx.AsyncClient(http2=True, verify=False) as c:
+        t = time.time()
+        r = await asyncio.gather(*[c.get("https://localhost:8443/") for _ in range(50)])
+        print(len(r), "responses in", round(time.time()-t, 3), "s; http_version =", r[0].http_version)
+asyncio.run(main())
 ```
-BAD:  cdn1.example.com, cdn2.example.com, cdn3.example.com
-GOOD: cdn.example.com (single domain, HTTP/2 multiplexing)
-```
+`http_version` should print `HTTP/2`; all 50 requests share one connection. Compare with `http2=False` (HTTP/1.1, pooled connections).
 
-**5. Monitor Connection Reuse:**
+**Lab 7: Compare with lossy networking (Linux, root).** Add `sudo tc qdisc add dev lo root netem loss 3%`, repeat lab 6 with `http2=True` and `http2=False`, then `sudo tc qdisc del dev lo root`. Observe how HTTP/2 vs HTTP/1.1 behave under loss (results vary; that's the point).
 
-Check server logs for connection persist rates:
-```
-HTTP/1.1: ~6 connections per client
-HTTP/2: ~1 connection per client
-```
+**Lab 8: HPACK in action.** Capture two requests on one connection with `nghttp -nv -m 2 https://nghttp2.org/`: the second `HEADERS` frame is far smaller than the first (look at the frame `length`).
 
 ---
 
-## Key Takeaways
+## 14. Common misconceptions
 
-### What HTTP/2 Achieved
-
-1. **Eliminated HTTP-level HOL blocking** via multiplexing
-2. **Reduced header overhead by 30-80%** via HPACK compression
-3. **Single connection** replaces 6-8 connections (less memory, less CPU, less network overhead)
-4. **Binary framing** enables efficient parsing and reduces ambiguity
-5. **Backward compatible** with HTTP/1.1 semantics (same methods, headers, status codes)
-
-### What HTTP/2 Couldn't Solve
-
-1. **TCP-level HOL blocking** remains (one lost packet blocks all streams)
-2. **Server push** proved impractical and is rarely used
-3. **Stream prioritization** was too complex and poorly adopted (deprecated)
-4. **TLS requirement** effectively mandates HTTPS (good for security, adds latency for initial handshake)
-
-### When to Use HTTP/2
-
-**Always prefer HTTP/2 over HTTP/1.1** for:
-- Web applications (browsers fully support it)
-- APIs (REST or gRPC)
-- High-resource pages (100+ resources)
-- Mobile applications (reduces connection overhead)
-- CDN-delivered content (all major CDNs support it)
-
-**HTTP/2 is the default** for modern web infrastructure. Unless you're maintaining legacy systems or debugging HTTP/1.1-specific issues, you should be using HTTP/2.
-
-### The Road to HTTP/3
-
-HTTP/2 dominated 2015-2020, but by 2022, **HTTP/3** (using QUIC over UDP) began widespread adoption:
-
-**HTTP/3 Advantages:**
-- No TCP HOL blocking (QUIC provides per-stream reliability)
-- Faster handshakes (0-RTT possible with QUIC)
-- Better mobile performance (connection migration)
-- Simplified protocol stack (QUIC integrates transport + TLS)
-
-**HTTP/3 Adoption (2025):**
-- ~40% of top websites support it
-- All major browsers support it
-- Growing CDN support (Cloudflare leads adoption)
-
-**Recommendation:** Understand HTTP/2 deeply, because:
-1. HTTP/3 is HTTP/2-over-QUIC (same framing, different transport)
-2. HTTP/2 is still dominant and will be for years
-3. Many HTTP/2 concepts (streams, frames, multiplexing) carry forward to HTTP/3
+| Misconception | Reality |
+|---|---|
+| "HTTP/2 needs TLS" | The spec allows cleartext (`h2c`); **browsers** only implement `h2` over TLS |
+| "HTTP/2 is a new application protocol / changes my API" | Same semantics; only the wire format changed |
+| "HTTP/2 removes all head-of-line blocking" | Only at the HTTP level. TCP HOL blocking remains (fixed by HTTP/3) |
+| "HTTP/2 always makes sites much faster" | Often modestly; bandwidth, server time and render-blocking resources still dominate |
+| "Server push is great, enable it" | Effectively dead: removed from Chrome and nginx. Use preload/Early Hints |
+| "Stream IDs are reused" | Never reused on a connection; a new connection is opened when they run out |
+| "One connection can only carry 6/…" | The concurrent-stream limit is server-announced (typically 100–128+) |
+| "Headers are sent in text" | They are HPACK-encoded binary; names are lowercase |
+| "HTTP/2 supports chunked encoding / `Connection` header" | No: forbidden; the framing replaces them |
+| "Domain sharding still helps" | It hurts under HTTP/2 |
+| "HTTP/3 replaces HTTP/2 entirely" | They coexist; clients fall back to HTTP/2 or HTTP/1.1 |
 
 ---
 
-## Conclusion
+## 15. Summary
 
-HTTP/2 represents a masterclass in protocol evolution. It took the fundamental semantics of HTTP—requests, responses, headers, status codes—and completely reimagined how they flow over the network. By introducing binary framing, multiplexing, and stream independence, HTTP/2 eliminated the head-of-line blocking that plagued HTTP/1.1 for nearly two decades.
-
-The elegance of HTTP/2 lies in its **transparency**: to application developers, it's still just HTTP. You send GET requests, receive 200 OK responses, and work with familiar headers. But under the hood, the binary framing layer orchestrates an intricate dance of interleaved frames across dozens of concurrent streams over a single TCP connection.
-
-From 2015 to 2025, HTTP/2 transformed the web:
-- Page load times dropped by 30-50% on average
-- Server connection counts decreased by 80-90%
-- Mobile experience improved dramatically (fewer handshakes, less battery drain)
-- New application models emerged (gRPC's bidirectional streaming, real-time APIs)
-
-Yet HTTP/2's reliance on TCP ultimately revealed its Achilles' heel: TCP-level head-of-line blocking. On lossy mobile networks, HTTP/2 could perform **worse** than HTTP/1.1's multiple connections. This limitation directly motivated HTTP/3's adoption of QUIC.
-
-Understanding HTTP/2 comprehensively—streams, frames, multiplexing, HPACK, flow control—is essential not just for working with HTTP/2 itself, but for understanding HTTP/3, gRPC, WebTransport, and the future of application protocols. The binary framing mental model HTTP/2 introduced is here to stay.
-
-The web's evolution from HTTP/1.0's one-connection-per-request (1996) → HTTP/1.1's persistent connections (1998) → HTTP/2's multiplexing (2015) → HTTP/3's per-stream reliability (2022) tells a story of continuous innovation driven by emerging bottlenecks. Each protocol didn't fail; rather, the web's demands outgrew the constraints they were optimized for.
-
-HTTP/2 will remain a cornerstone of web infrastructure for years to come. Master it, and you'll understand the foundation upon which the modern Internet is built.
+- **HTTP/2** = same HTTP semantics, new **binary framing**: connection → streams → frames (9-byte header with length, type, flags, stream ID).
+- **Multiplexing** many requests/responses on **one** TCP+TLS connection; odd stream IDs for client requests; `RST_STREAM` cancels one stream.
+- **HPACK** shrinks repeated headers using static and dynamic tables and Huffman coding, designed to resist CRIME.
+- **Flow control** per stream and connection with `WINDOW_UPDATE`; `SETTINGS` tune limits.
+- Negotiated via **ALPN** (`h2`) in TLS; connection preface + `SETTINGS`; `GOAWAY` for graceful shutdown.
+- **Server push** and **PRIORITY** frames did not work out (removed/deprecated; replaced by preload/Early Hints and RFC 9218 priorities).
+- **TCP HOL blocking** remains, addressed by **HTTP/3 over QUIC**. Watch for HTTP/2-specific attacks (**Rapid Reset**).
 
 ---
 
-## Further Reading
+## 16. Check your understanding
 
-- **RFC 7540:** HTTP/2 Specification (2015)
-- **RFC 7541:** HPACK - Header Compression for HTTP/2
-- **RFC 9113:** HTTP/2 (Updated specification, 2022)
-- **RFC 9114:** HTTP/3 (to understand HTTP/2's evolution)
-- **High Performance Browser Networking** by Ilya Grigorik - Chapter on HTTP/2
-- **gRPC Documentation:** Real-world HTTP/2 usage examples
-- **HTTP/2 Explained** by Daniel Stenberg (curl author)
-- **Cloudflare Blog:** HTTP/2 performance studies and real-world data
+1. What is the difference between a frame, a stream, and a message in HTTP/2?
+2. Why do clients use odd stream IDs? Can an ID be reused?
+3. Explain how HTTP/2 lets a fast response overtake a slow one on the same connection, and why HTTP/1.1 couldn't.
+4. What are the static table, the dynamic table and Huffman coding in HPACK, and why is HPACK designed differently from gzip?
+5. How is HTTP/2 negotiated during a TLS handshake, and what is the connection preface?
+6. What does flow control protect against that TCP's flow control doesn't?
+7. Why can HTTP/2 be slower than HTTP/1.1 on a lossy network?
+8. Why did server push fail in practice, and what replaces its use case?
+9. What is the Rapid Reset attack in one sentence?
+
+<details>
+<summary>Answers</summary>
+
+1. A frame is the smallest unit (9-byte header + payload, tagged with a stream ID). A message is a complete request or response (a HEADERS frame plus DATA frames). A stream is the bidirectional sequence of frames carrying one request/response exchange.
+2. Client-initiated streams are odd and server-initiated (push) streams are even, so neither side needs to coordinate. IDs are never reused on a connection.
+3. Each response is broken into frames tagged with its own stream ID, so frames from different streams interleave and the server can send whichever is ready. HTTP/1.1 requires responses on a connection to be returned in request order.
+4. Static table: 61 predefined common headers. Dynamic table: headers seen earlier on this connection, sent later as small indexes. Huffman: compact coding for literal strings. gzip-style adaptive compression leaks secrets through size changes (CRIME), whereas HPACK uses exact-match indexing plus "never indexed" for sensitive headers.
+5. The client offers `h2` and `http/1.1` in the ALPN extension and the server picks `h2`. Then the client sends the 24-byte preface `PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n` and a SETTINGS frame; the server sends its SETTINGS; both acknowledge.
+6. It protects individual streams and the whole connection at the application level, so one slow-consuming stream can't hog buffers or block others, while TCP's flow control sees only one byte stream.
+7. All streams share a single TCP byte stream, so a lost packet delays delivery of every stream until it is retransmitted (TCP head-of-line blocking).
+8. Servers couldn't know what browsers already had cached and pushes wasted bandwidth and competed with critical resources. `<link rel="preload">` and `103 Early Hints` replace it.
+9. The client repeatedly opens streams and immediately cancels them with `RST_STREAM`, forcing the server to do work without hitting the concurrent-stream limit, producing enormous request floods from few connections.
+</details>
+
+**Practice**
+
+1. Use `nghttp -nv` against a site and produce an annotated list of the frames exchanged in order (SETTINGS, HEADERS, DATA, etc.).
+2. Check five well-known sites for `h2` and `h3` (`curl -sI --http3 ...` if your curl supports it, or the `alt-svc` response header).
+3. Build the nginx container above, serve two large files, and use `nghttp -nv -m 2` to request them in parallel; identify the interleaved `DATA` frames.
+4. Take a simple HTTP/1.1 optimization (domain sharding for images) and explain in detail why it degrades HTTP/2 performance.
+5. Read RFC 9113 sections 4 (frames) and 5 (streams), and verify the frame header layout against a Wireshark capture.
+
+---
+
+**Next:** [Chapter 28 – DNS (Domain Name System) in Detail](28_dns_domain_name_system_in_details.md)
