@@ -95,7 +95,7 @@ Two crucial facts:
 | `192.168.3.0/24` | `192.168.3.0` | ✅ candidate (prefix 24) |
 | `127.0.0.0/8` | `192.0.0.0` | ✗ |
 
-Candidates: default (/0) and `192.168.3.0/24`. **Longest prefix → `192.168.3.0/24` → eth2**, on-link → ARP for **192.168.3.10** itself.
+Candidates: default (/0) and `192.168.3.0/24`. **Longest prefix → `192.168.3.0/24` → eth2**, on-link → ARP for **192.168.3.20** itself.
 
 ```
 Packet:  IP  src 192.168.3.10 (eth2's address)   dst 192.168.3.20
