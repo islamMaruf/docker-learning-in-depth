@@ -1,1022 +1,413 @@
-# Chapter 10: Running Ubuntu on Docker - A Complete Beginner's Guide
+# Chapter 10: Running Ubuntu in Docker (Your First Real Container)
 
-## Introduction: Why Run Linux Inside Docker?
+> **In one sentence:** In this chapter you download an Ubuntu image, start an interactive container from it, look around inside, exit, and learn what happens to the container afterward.
 
-Welcome back! In this chapter, we're taking an exciting step forward in our Docker journey. Previously, we explored Linux fundamentals and GNU Core Utilities. Now, we're going to combine everything by **running a Linux distribution (Ubuntu) inside Docker containers**.
+**Level:** 🟢 Beginner · **Reading time:** ~30 minutes (plus hands-on time)
 
-### The Cross-Platform Challenge
-
-Here's a common problem developers face every day:
-
-- **You** might be working on a Mac
-- **Your colleague** might be using Windows
-- **Your production servers** are probably running Linux
-
-This creates what we call the **"it works on my machine"** problem. Docker solves this by letting everyone run the exact same Linux environment, regardless of their host operating system.
-
-### What You'll Learn
-
-By the end of this chapter, you will:
-
-1. Understand why containerization bridges the operating system gap
-2. Know how to pull Ubuntu images from Docker Hub
-3. Be able to start and interact with Ubuntu containers
-4. Understand the Docker workflow from image to running container
-5. Navigate inside a Linux container using basic shell commands
-
-> **Important Philosophy**: Think of Docker as the foundation of a tree. You can see the fruit at the top (the cool applications), but you must start at the roots (Linux fundamentals) and learn to climb (Docker basics) before you can reach the fruit. Don't skip the fundamentals!
+**Prerequisites:** Docker installed and running (see the install notes below), and the basics from [Chapter 8](08_linux.md) and [Chapter 9](09_gnu_coreutils.md).
 
 ---
 
-## Understanding the Architecture: What Happens When You Run Docker?
+## What you will learn
 
-Before we dive into commands, let's understand the **complete picture** of what's happening behind the scenes.
-
-### The Docker Desktop Layer
-
-When you install Docker Desktop on Mac or Windows, you're actually installing:
-
-1. **A lightweight virtual machine** running Linux
-2. **Docker Engine** (the core Docker server)
-3. **Docker CLI** (command-line interface)
-4. **A graphical interface** for managing containers
-
-**Why is Docker Desktop "heavy"?** Because it's virtualizing an entire Linux kernel on non-Linux operating systems. This takes time to start up because it needs to:
-- Initialize the virtual machine
-- Start the Linux kernel
-- Launch the Docker daemon (background service)
-- Establish networking between your host OS and the VM
-
-### The Terminal Environment
-
-In Linux, there are two primary ways to interact with the system:
-
-1. **Desktop Environment** - Graphical interface (like Windows or macOS)
-2. **Terminal/CLI** - Command-line interface (text-based, powerful)
-
-When you open a terminal, you're actually interacting with a **shell**. A shell is a program that:
-- Accepts your commands (like `ls`, `cd`, `mkdir`)
-- Interprets those commands
-- Communicates with the operating system kernel
-- Executes programs from GNU Core Utilities
-- Returns the output to you
-
-Common shells include:
-- **Bash** (Bourne Again Shell) - Most common on Linux
-- **Zsh** (Z Shell) - Popular on modern macOS
-- **Fish** - User-friendly alternative
-
-> **Key Concept**: The shell is your interpreter. When you type `ls`, the shell finds the `ls` program in the GNU Core Utilities, executes it, and shows you the results.
+- How to check that Docker works
+- How to **pull** an image and read the output
+- How to **run** a container, and why `docker run ubuntu` "does nothing"
+- What `-i`, `-t`, `--name` and `--rm` mean
+- What you see inside a fresh Ubuntu container, and what is missing on purpose
+- The container life cycle: created → running → exited → removed
+- Why your changes disappear, and three ways to deal with it
+- Common errors and how to fix them
 
 ---
 
-## Step 1: Starting Docker Desktop
+## 0. Setup: is Docker ready?
 
-Before we can run any containers, Docker Desktop must be running.
+**Install Docker** (one-time), from the official docs at docs.docker.com/get-started/get-docker:
 
-### Starting Docker Desktop
+- **Windows / macOS:** install **Docker Desktop**, start it, and wait until it says it is running (it boots the Linux VM from Chapter 5; this can take a minute the first time).
+- **Linux:** install **Docker Engine** using your distribution's instructions, then start it (`sudo systemctl enable --now docker`). Optionally allow your user to run Docker without `sudo`: `sudo usermod -aG docker $USER`, then log out and back in. (Remember: this group is root-equivalent; see Chapter 6.)
 
-**For Windows:**
-1. Find Docker Desktop in your Start Menu
-2. Click to launch
-3. Wait for the whale icon in the system tray to become steady (not animated)
+**Verify:**
 
-**For macOS:**
-1. Find Docker Desktop in Applications
-2. Launch the application
-3. Wait for the whale icon in the menu bar to show "Docker Desktop is running"
-
-### Why Does It Take So Long?
-
-Docker Desktop is resource-intensive because it needs to:
-
-```
-┌─────────────────────────────────┐
-│   Your Computer (Mac/Windows)   │
-│                                 │
-│  ┌───────────────────────────┐  │
-│  │  Docker Desktop VM        │  │
-│  │  ┌─────────────────────┐  │  │
-│  │  │  Linux Kernel       │  │  │
-│  │  │  ┌───────────────┐  │  │  │
-│  │  │  │ Docker Engine │  │  │  │
-│  │  │  │  (daemon)     │  │  │  │
-│  │  │  └───────────────┘  │  │  │
-│  │  └─────────────────────┘  │  │
-│  └───────────────────────────┘  │
-└─────────────────────────────────┘
+```bash
+docker version                 # should show both Client and Server sections
+docker run --rm hello-world    # downloads a tiny image and prints "Hello from Docker!"
 ```
 
-The initialization sequence:
-1. **VM Boot** - Start the virtual machine (5-10 seconds)
-2. **Kernel Load** - Load the Linux kernel (3-5 seconds)
-3. **Docker Daemon** - Start the Docker engine (2-5 seconds)
-4. **Network Setup** - Configure networking bridges (1-2 seconds)
-5. **Ready** - System is ready to accept commands
-
-**Pro Tip**: Keep Docker Desktop running in the background if you're developing regularly. Closing and reopening wastes time.
+If you see `Cannot connect to the Docker daemon`, the engine isn't running yet: start Docker Desktop, or `sudo systemctl start docker` on Linux.
 
 ---
 
-## Step 2: Understanding Docker Hub - The Image Repository
+## 1. Why run Ubuntu in a container?
 
-Before we can run Ubuntu, we need to understand where Docker images come from.
+Ubuntu is the most common Linux for tutorials, servers and CI. A container gives you a **throw-away Ubuntu** in about a second, on any host OS, without a VM, without touching your real system:
 
-### What is Docker Hub?
+- Learn Linux commands safely (break things freely, then delete and start again).
+- Test how an install script behaves on a clean system.
+- Reproduce a bug seen on an Ubuntu server.
+- Try several Ubuntu versions side by side.
 
-**Docker Hub** is the **official public registry** for Docker images. Think of it as:
-- **GitHub for code** → **Docker Hub for container images**
-- **App Store for apps** → **Docker Hub for containerized software**
+> Remember Chapter 4: the container has Ubuntu's **files** (programs, libraries), but it runs on **your machine's kernel**.
 
-### Key Concepts
+---
 
-**Container Image**: A packaged, immutable snapshot containing:
-- An operating system (like Ubuntu)
-- Pre-installed software
-- Configuration files
-- Application code
-- All dependencies
+## 2. Pull the image
 
-**Container**: A running instance of an image. The relationship:
-```
-Image (Blueprint)  →  Container (Running Instance)
-    Class          →      Object
-    Recipe         →      Cooked Meal
-    Program File   →      Running Process
-```
-
-### Exploring Docker Hub
-
-Let's find the Ubuntu image:
-
-1. **Open your web browser**
-2. **Search for**: `docker hub`
-3. **Navigate to**: `https://hub.docker.com`
-4. **Search for**: `ubuntu`
-
-You'll see the **official Ubuntu repository** with several important pieces of information:
-
-```
-ubuntu
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Official Image
-Docker Pulls: 1B+
-Stars: 14K+
-
-Tags:
-  - latest (22.04 LTS)
-  - 24.04
-  - 22.04
-  - 20.04
-  - 18.04
-```
-
-### Understanding Tags
-
-**Tags** are like version numbers for images. They let you specify exactly which version you want:
-
-- `ubuntu:latest` - The newest stable release
-- `ubuntu:24.04` - Ubuntu 24.04 (Noble Numbat)
-- `ubuntu:22.04` - Ubuntu 22.04 LTS (Jammy Jellyfish)
-- `ubuntu:20.04` - Ubuntu 20.04 LTS (Focal Fossa)
-
-**LTS** means "Long Term Support" - these versions receive updates for 5 years.
-
-### The Pull Command
-
-Docker Hub provides a command to download (pull) images:
+An **image** must be present locally before a container can start from it. Docker downloads it from a registry (Docker Hub by default):
 
 ```bash
 docker pull ubuntu:24.04
 ```
 
-This command means:
-- `docker` - Use the Docker CLI
-- `pull` - Download an image from a registry
-- `ubuntu` - The image name
-- `:24.04` - The specific tag/version
-
----
-
-## Step 3: Pulling the Ubuntu Image
-
-Now let's actually download Ubuntu to our local system.
-
-### Opening Your Terminal
-
-**macOS:**
-- Press `Cmd + Space`
-- Type "Terminal"
-- Press Enter
-
-**Windows (with WSL2):**
-- Press `Win + R`
-- Type `cmd` or `powershell`
-- Press Enter
-
-**Linux:**
-- Press `Ctrl + Alt + T`
-
-### Running the Pull Command
-
-Type this command exactly:
-
-```bash
-docker pull ubuntu:24.04
-```
-
-**What Happens Behind the Scenes:**
-
-```
-┌────────────────┐     1. Request      ┌─────────────┐
-│  Docker CLI    │ ───────────────────>│ Docker      │
-│  (your input)  │                     │ Daemon      │
-└────────────────┘                     └─────────────┘
-                                              │
-                                              │ 2. Check local cache
-                                              ├──> Not found locally
-                                              │
-                                              │ 3. Request from Hub
-                                              ▼
-                                       ┌─────────────┐
-                                       │ Docker Hub  │
-                                       │ (Registry)  │
-                                       └─────────────┘
-                                              │
-                                              │ 4. Download layers
-                                              ▼
-                                       ┌─────────────┐
-                                       │ Local Cache │
-                                       │ (containerd)│
-                                       └─────────────┘
-```
-
-### Understanding the Output
-
-You'll see output like this:
+Typical output:
 
 ```
 24.04: Pulling from library/ubuntu
-b237fe92c9bc: Pull complete
-Digest: sha256:aabed3296a3d45cede1dc866a24476c4d7e093aa806263c27ddaadbdce3c1054
+<layer-id>: Pull complete
+Digest: sha256:<long hash>
 Status: Downloaded newer image for ubuntu:24.04
 docker.io/library/ubuntu:24.04
 ```
 
-**Line-by-line explanation:**
+| Line | Meaning |
+|---|---|
+| `Pulling from library/ubuntu` | `library` = Docker Official Images namespace |
+| `<layer-id>: Pull complete` | One image **layer** downloaded and verified (Ubuntu's base image is typically a single layer) |
+| `Digest: sha256:...` | The image's immutable content fingerprint |
+| `Status: Downloaded newer image` | It wasn't cached before. (`Image is up to date` if you already had it) |
 
-1. **`24.04: Pulling from library/ubuntu`**
-   - Confirms we're downloading Ubuntu version 24.04
-   - `library/ubuntu` is the official repository path
+### Tags: which Ubuntu?
+- `ubuntu:24.04` is Ubuntu 24.04 LTS ("Noble Numbat"), `ubuntu:22.04` is 22.04 LTS ("Jammy Jellyfish"), and so on. **LTS** = Long Term Support (5 years of security updates).
+- `ubuntu:latest` (or just `ubuntu`) points to the newest LTS *as chosen by the image maintainers*, not "the newest thing that exists". For repeatable work, **name the version explicitly**.
+- Browse tags at hub.docker.com/_/ubuntu.
 
-2. **`b237fe92c9bc: Pull complete`**
-   - This is a **layer hash** (unique identifier)
-   - Docker images are composed of layers (we'll learn more later)
-   - Each layer is downloaded and verified
-
-3. **`Digest: sha256:aab...`**
-   - A cryptographic hash of the entire image
-   - Ensures the image hasn't been tampered with
-   - Used for verification and security
-
-4. **`Status: Downloaded newer image`**
-   - Confirms successful download
-   - "newer" means this version wasn't cached locally
-
-5. **`docker.io/library/ubuntu:24.04`**
-   - The full canonical name
-   - `docker.io` - The registry (Docker Hub)
-   - `library` - Official images namespace
-   - `ubuntu:24.04` - Image name and tag
-
----
-
-## Step 4: Verifying the Downloaded Image
-
-After pulling, let's verify the image is stored locally.
-
-### The Images Command
+### List and inspect what you have
 
 ```bash
-docker images
+docker images                     # (same as `docker image ls`)
 ```
 
-**Expected Output:**
-
 ```
-REPOSITORY   TAG       IMAGE ID       CREATED       SIZE
-ubuntu       24.04     e4c58958181a   2 weeks ago   77.9MB
+REPOSITORY   TAG      IMAGE ID       CREATED       SIZE
+ubuntu       24.04    <12 chars>     2 weeks ago   ~78MB
 ```
 
-**Understanding Each Column:**
-
-| Column | Meaning | Example Value |
-|--------|---------|---------------|
-| `REPOSITORY` | Image name | `ubuntu` |
-| `TAG` | Version identifier | `24.04` |
-| `IMAGE ID` | Unique hash (shortened) | `e4c58958181a` |
-| `CREATED` | When image was built | `2 weeks ago` |
-| `SIZE` | Disk space required | `77.9MB` |
-
-### Why is Ubuntu Only 77MB?
-
-A full Ubuntu desktop installation is usually 2-4 GB. This Docker image is minimal because it includes:
-
-✅ **Included:**
-- Linux kernel interface (uses host kernel)
-- Core system libraries
-- Package manager (apt)
-- Essential command-line utilities
-- Bash shell
-
-❌ **Not Included:**
-- Graphical desktop environment
-- Office applications
-- Browsers
-- Media players
-- Development tools (installed separately if needed)
-
-This is the **beauty of containers** - they contain only what's necessary for your application.
+The image is only tens of MB (versus several GB for a desktop install), because it holds only a minimal set of user-space files: no desktop, no kernel, no documentation, few tools. That is deliberate: you add what you need.
 
 ---
 
-## Step 5: Running the Ubuntu Container
-
-Now for the exciting part - let's actually run Ubuntu!
-
-### The Run Command - First Attempt
+## 3. Run it: the "nothing happens" surprise
 
 ```bash
 docker run ubuntu:24.04
 ```
 
-**What happens?**
+It returns instantly and prints nothing. Why?
 
-You'll see... nothing? The command returns immediately. Let's check if anything is running:
+1. Docker created a container from the image.
+2. Ubuntu's default command is `bash`.
+3. That `bash` had **no terminal and no input** (stdin closed), so it exited immediately.
+4. **A container lives exactly as long as its main process (PID 1).** Process ended → container stopped.
 
 ```bash
-docker ps
+docker ps        # running containers: none
+docker ps -a     # ALL containers: shows one with STATUS "Exited (0) ..."
 ```
 
-**Output:**
-```
-CONTAINER ID   IMAGE     COMMAND   CREATED   STATUS    PORTS     NAMES
-(empty)
-```
-
-**Why did nothing happen?** Because:
-1. Docker created a container from the Ubuntu image
-2. The container started
-3. The container had nothing to do (no command specified)
-4. The container **immediately exited**
-
-**Key Principle**: Containers run as long as their main process is running. When that process ends, the container stops.
-
-### The Run Command - Correct Way
-
-To interact with Ubuntu, we need to start a **shell** and keep it running:
+### Keep it alive: interactive mode
 
 ```bash
 docker run -it ubuntu:24.04 bash
 ```
 
-**Breaking Down the Command:**
+Your prompt changes to something like:
 
 ```
-docker run -it ubuntu:24.04 bash
-│      │   │  │           └─── Command to run inside container
-│      │   │  └───────────────── Image name and tag
-│      │   └──────────────────────── Flags (options)
-│      └──────────────────────────────── Docker action
-└─────────────────────────────────────────── Docker CLI
+root@3f9c2a1b7d4e:/#
 ```
 
-### Understanding the Flags
+| Piece | Meaning |
+|---|---|
+| `root` | The current user, the all-powerful root user *inside the container* |
+| `3f9c2a1b7d4e` | The hostname, which is the first 12 characters of the container ID |
+| `/` | The current directory (the container's root; on a normal Linux desktop the prompt would start in your home) |
+| `#` | Prompt for root (`$` for normal users) |
 
-**`-i` (interactive):**
-- Keeps STDIN (standard input) open
-- Allows you to type commands
-- Without this, you couldn't send input to the container
+You are now inside an Ubuntu container.
 
-**`-t` (tty):**
-- Allocates a pseudo-TTY (terminal)
-- Provides a proper terminal interface
-- Makes output formatted and interactive
+### The flags
 
-**Combined `-it`:**
-- Creates a fully interactive terminal session
-- You can type commands and see formatted output
-- Essential for working with shells
+| Flag | Long form | Meaning |
+|---|---|---|
+| `-i` | `--interactive` | Keep **stdin** open so you can type |
+| `-t` | `--tty` | Allocate a **pseudo-terminal** so you get a proper prompt, colors, line editing |
+| `-it` | | Both. Use these together for any interactive shell |
+| `--name web1` | | Give the container a friendly name instead of a random one like `quirky_hopper` |
+| `--rm` | | **Automatically delete** the container when it exits |
+| `bash` (last) | | The command to run instead of the image's default |
 
-**`bash`:**
-- The command to run inside the container
-- Starts the Bash shell
-- This becomes the container's main process
-- The container runs as long as bash is running
-
-### What Happens When You Run It
+Anatomy:
 
 ```
-┌─────────────────────────────────────────────────┐
-│ Your Host Machine (Mac/Windows/Linux)          │
-│                                                 │
-│  Terminal running Docker CLI                   │
-│  ↓                                              │
-│  Docker Engine creates:                        │
-│  ┌─────────────────────────────────────────┐   │
-│  │ Ubuntu Container                        │   │
-│  │                                         │   │
-│  │  - Isolated filesystem                  │   │
-│  │  - Isolated process space               │   │
-│  │  - Bash shell running                   │   │
-│  │                                         │   │
-│  │  root@a3d5f7890b:/# ← You are here!    │   │
-│  └─────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────┘
+docker run   -it   --name lab   ubuntu:24.04   bash
+   │          │        │           │             └ command inside the container
+   │          │        │           └ image (repository:tag)
+   │          │        └ option with a value
+   │          └ flags
+   └ subcommand
 ```
+
+Everything after the image name is the command and its arguments; everything before is an option for Docker itself.
 
 ---
 
-## Step 6: Inside the Ubuntu Container
+## 4. Look around inside
 
-Congratulations! If you see a prompt like this, you're inside Ubuntu:
-
-```bash
-root@a3d5f7890b12:/#
-```
-
-### Understanding the Prompt
-
-Let's break down what each part means:
-
-```
-root@a3d5f7890b12:/#
-│    │           │ └─ You're in the root (/) directory
-│    │           └─── Separator
-│    └───────────────── Hostname (container ID prefix)
-└────────────────────────── Current user (root)
-```
-
-- **`root`** - You're logged in as the root user (superuser with all permissions)
-- **`@`** - Separator between username and hostname
-- **`a3d5f7890b12`** - The container's unique ID (first 12 characters)
-- **`/`** - Your current directory (root of filesystem)
-- **`#`** - Prompt character (# for root, $ for regular users)
-
-### Your First Commands
-
-Let's explore! Type:
+Try these one at a time:
 
 ```bash
-ls
+cat /etc/os-release       # Ubuntu 24.04 LTS
+whoami                    # root
+hostname                  # the container ID
+pwd                       # /
+ls /                      # the standard Linux directory tree
+ps aux                    # only a couple of processes: bash and ps! (PID namespace)
+uname -r                  # the HOST's kernel version (shared kernel!)
+echo $$                   # 1  (bash is PID 1)
 ```
 
-**Output:**
-```
-bin  boot  dev  etc  home  lib  lib64  media  mnt  opt  proc  root  run  sbin  srv  sys  tmp  usr  var
-```
-
-**What are these directories?** These are the **standard Linux filesystem directories**:
+### The directory tree (Linux "FHS")
 
 | Directory | Purpose |
-|-----------|---------|
-| `/bin` | Essential command binaries (ls, cp, mv, etc.) |
-| `/boot` | Boot loader files (usually minimal in containers) |
-| `/dev` | Device files (hardware interfaces) |
+|---|---|
+| `/bin`, `/usr/bin` | Programs (`ls`, `cat`, ...) |
+| `/sbin`, `/usr/sbin` | System administration programs |
+| `/lib`, `/usr/lib` | Shared libraries |
 | `/etc` | System configuration files |
-| `/home` | User home directories |
-| `/lib` | Shared libraries needed by binaries |
-| `/root` | Home directory for root user |
-| `/usr` | User programs and utilities |
-| `/var` | Variable data (logs, caches, etc.) |
+| `/home` | Normal users' home folders |
+| `/root` | The root user's home folder |
+| `/var` | Data that changes: logs, caches, package lists |
 | `/tmp` | Temporary files |
+| `/proc`, `/sys` | Virtual files served by the kernel (process and system info) |
+| `/dev` | Device files (`/dev/null`, ...) |
+| `/opt`, `/usr/local` | Optionally installed software |
 
-### Navigating the Filesystem
+### What is missing on purpose
 
-Try these commands:
+A fresh Ubuntu container is very bare:
 
-**1. Change to the /bin directory:**
 ```bash
-cd /bin
+ping -c1 8.8.8.8     # bash: ping: command not found
+curl --version       # bash: curl: command not found
+nano file            # not found
+man ls               # "This system has been minimized..."
+sudo ls              # not found (you are root; you don't need it)
 ```
 
-**2. List what's inside:**
+To install things, first update the package list (the image ships without one):
+
 ```bash
-ls
+apt-get update
+apt-get install -y curl iputils-ping nano
+curl --version
 ```
 
-You'll see hundreds of programs! These are the GNU Core Utilities we discussed in previous chapters.
+(`apt-get` is the script-friendly form of `apt`; Chapter 11 covers package management in detail.)
 
-**3. Go back to the root directory:**
-```bash
-cd /
-```
-
-Or simply:
-```bash
-cd
-```
-
-**4. Check your current directory:**
-```bash
-pwd
-```
-
-Output: `/root` (the root user's home directory)
+**Important:** what you install lives only in **this container**. Continue reading to see what that means.
 
 ---
 
-## Understanding What Just Happened: The Full Docker Workflow
+## 5. Leaving, and what stays behind
 
-Let's trace the complete journey from Docker Hub to running container:
-
-### The Complete Flow
-
-```
-1. DOCKER HUB (Registry)
-   ┌─────────────────────────┐
-   │ Ubuntu Images           │
-   │ - 24.04 (77.9 MB)      │
-   │ - 22.04 (77.8 MB)      │
-   │ - 20.04 (72.8 MB)      │
-   └─────────────────────────┘
-              │
-              │ docker pull ubuntu:24.04
-              ↓
-2. LOCAL IMAGE STORAGE (Cached)
-   ┌─────────────────────────┐
-   │ Docker Engine           │
-   │ /var/lib/docker/        │
-   │   └─ ubuntu:24.04       │
-   └─────────────────────────┘
-              │
-              │ docker run -it ubuntu:24.04 bash
-              ↓
-3. RUNNING CONTAINER
-   ┌─────────────────────────┐
-   │ Container ID: a3d5f789  │
-   │ Image: ubuntu:24.04     │
-   │ Command: bash           │
-   │ Status: Running         │
-   │ PID: 12345             │
-   └─────────────────────────┘
-```
-
-### The Docker Engine Internals
-
-Remember from earlier chapters, the Docker Engine has several components:
-
-1. **Docker CLI (`docker` command)**
-   - Your interface to Docker
-   - Sends REST API requests to Docker daemon
-
-2. **Docker Daemon (`dockerd`)**
-   - Background service
-   - Manages containers, images, networks, volumes
-   - Communicates with containerd
-
-3. **containerd**
-   - Container runtime
-   - Manages container lifecycle
-   - Pulls and stores images
-
-4. **runC**
-   - Low-level container runtime
-   - Interacts with Linux kernel
-   - Creates namespaces and cgroups
-
-### The Execution Flow
-
-When you run `docker run -it ubuntu:24.04 bash`:
-
-```
-┌─────────────┐
-│ docker CLI  │
-└──────┬──────┘
-       │ 1. Parse command
-       │ 2. Send REST request
-       ↓
-┌─────────────┐
-│  dockerd    │  3. Check if image exists locally
-└──────┬──────┘
-       │ 4. Image found in cache
-       │ 5. Request container creation
-       ↓
-┌─────────────┐
-│ containerd  │  6. Prepare container filesystem
-└──────┬──────┘  7. Set up container configuration
-       │
-       │ 8. Request kernel container
-       ↓
-┌─────────────┐
-│    runC     │  9. Create namespaces:
-└──────┬──────┘     - PID namespace (process isolation)
-       │            - Network namespace (network isolation)
-       │            - Mount namespace (filesystem isolation)
-       │            - UTS namespace (hostname isolation)
-       │         10. Create cgroups (resource limits)
-       │         11. Execute bash inside namespaces
-       ↓
-┌─────────────┐
-│ bash shell  │  12. Running inside container
-│ (PID 1)     │  13. Waiting for your commands
-└─────────────┘
-```
-
-### Why Does This Matter?
-
-Understanding this flow helps you:
-- **Debug issues** - Know where problems occur
-- **Optimize performance** - Understand caching behavior
-- **Secure containers** - Understand isolation mechanisms
-- **Troubleshoot networking** - Know how containers communicate
-
----
-
-## Important Concepts: Images vs Containers
-
-Let's cement this crucial distinction:
-
-### The Blueprint Analogy
-
-```
-┌─────────────────────┐
-│   IMAGE (Class)     │
-│   ubuntu:24.04      │
-│   - Read-only       │
-│   - Stored on disk  │
-│   - Reusable        │
-└─────────────────────┘
-          │
-          │ docker run (instantiate)
-          │
-          ├──────────────┬──────────────┬──────────────┐
-          ↓              ↓              ↓              ↓
-    ┌──────────┐   ┌──────────┐   ┌──────────┐   ┌──────────┐
-    │Container1│   │Container2│   │Container3│   │Container4│
-    │ Running  │   │ Stopped  │   │ Running  │   │ Exited   │
-    │ ID: a3d5 │   │ ID: b7f2 │   │ ID: c9e1 │   │ ID: d4a8 │
-    └──────────┘   └──────────┘   └──────────┘   └──────────┘
-```
-
-### Key Differences
-
-| Aspect | Image | Container |
-|--------|-------|-----------|
-| **Nature** | Template/Blueprint | Running instance |
-| **Mutability** | Immutable (read-only) | Mutable (can change) |
-| **Storage** | Stored in Docker's image store | Created from image + writable layer |
-| **Lifetime** | Permanent until deleted | Temporary (deleted when removed) |
-| **Resource Usage** | Disk space only | CPU, RAM, disk, network |
-| **Command** | `docker images` | `docker ps` |
-
-### The Layered Filesystem
-
-Docker images use a **layered filesystem**:
-
-```
-Container (Read-Write Layer)
-────────────────────────────────
-│ Your changes, new files     │
-│ Temporary data              │
-────────────────────────────────
-        ↓ based on
-────────────────────────────────
-Image (Read-Only Layers)
-────────────────────────────────
-│ Layer 4: Application code   │
-│ Layer 3: Dependencies       │
-│ Layer 2: Package manager    │
-│ Layer 1: Base OS (Ubuntu)   │
-────────────────────────────────
-```
-
-**Why layers matter:**
-- **Efficiency** - Shared layers save disk space
-- **Speed** - Only changed layers need downloading
-- **Caching** - Unchanged layers are reused
-
----
-
-## Exiting and Managing Containers
-
-### Exiting the Container
-
-You're inside the Ubuntu container. To exit:
-
-```bash
-exit
-```
-
-Or press: `Ctrl + D`
-
-**What happens?**
-1. The `bash` process terminates
-2. Since bash was the main process (PID 1), the container stops
-3. You return to your host machine's terminal
-
-### Checking Container Status
-
-After exiting, check if the container still exists:
-
-```bash
-docker ps
-```
-
-**Output:**
-```
-CONTAINER ID   IMAGE     COMMAND   CREATED   STATUS    PORTS     NAMES
-(empty - no running containers)
-```
-
-**Check all containers (including stopped):**
+Exit with `exit` or **Ctrl+D**. Because `bash` was PID 1, the container **stops**, but it is **not deleted**:
 
 ```bash
 docker ps -a
 ```
 
-**Output:**
 ```
-CONTAINER ID   IMAGE          COMMAND   CREATED          STATUS                      
-a3d5f7890b12   ubuntu:24.04   "bash"    2 minutes ago    Exited (0) 1 minute ago
-```
-
-**Understanding the status:**
-- `Exited (0)` - Container stopped, exit code 0 (success)
-- `Exited (1)` - Container stopped with error
-- `Up 5 minutes` - Container currently running
-
-### The Container Lifecycle
-
-```
-                docker run
-    Image ────────────────────> Container (Running)
-                                     │
-                                     │ Main process exits
-                                     ↓
-                               Container (Stopped)
-                                     │
-                                     │ docker start
-                                     ↓
-                               Container (Running)
-                                     │
-                                     │ docker rm
-                                     ↓
-                                  Deleted
+CONTAINER ID   IMAGE          COMMAND   CREATED         STATUS                     NAMES
+3f9c2a1b7d4e   ubuntu:24.04   "bash"    2 minutes ago   Exited (0) 10 seconds ago  quirky_hopper
 ```
 
----
+`Exited (0)` = ended successfully. `Exited (1)`, `(127)`, etc. = error codes. (Recall Chapter 9: 137 usually means killed.)
 
-## Common Beginner Mistakes and Troubleshooting
+### The life cycle
 
-### Mistake 1: Docker Desktop Not Running
+```
+docker create ──► Created ──docker start──► Running ──exit / docker stop──► Exited
+                                              ▲                                │
+                                              └──────── docker start ──────────┘
+                                                                               │
+                                                            docker rm ─────────▼
+                                                                            Removed
+```
 
-**Symptom:**
+`docker run` = `docker create` + `docker start` (+ attach if `-it`).
+
+### Three ways to get your work back
+
+**A. Restart the same container.** Its writable layer is intact, including the packages you installed:
+
 ```bash
-docker: Cannot connect to the Docker daemon
+docker start -ai quirky_hopper       # -a attach output, -i interactive
+# or, if it is still running in another terminal:
+docker exec -it quirky_hopper bash
 ```
 
-**Solution:** Start Docker Desktop and wait until it's fully loaded.
+**B. Start a new container.** It starts fresh from the image, so your `apt-get install` is **gone**:
 
-### Mistake 2: Running Without `-it` Flags
-
-**Command:**
-```bash
-docker run ubuntu:24.04 bash
-```
-
-**Result:** Container starts and immediately exits.
-
-**Why?** Without `-it`, there's no interactive terminal. Bash sees no input source and exits immediately.
-
-**Correct command:**
 ```bash
 docker run -it ubuntu:24.04 bash
+curl --version                        # command not found again
 ```
 
-### Mistake 3: Forgetting the Shell Command
+This surprises beginners. Each `docker run` makes a **new** container. Containers are meant to be **disposable**.
 
-**Command:**
-```bash
-docker run -it ubuntu:24.04
-```
-
-**Result:** You'll see errors or unexpected behavior.
-
-**Why?** The Ubuntu image has a default command (usually `/bin/bash`), but it's better to be explicit.
-
-### Mistake 4: Not Understanding Persistence
-
-**Problem:** Made changes inside container, exited, and changes are gone.
-
-**Why?** Each `docker run` creates a **new container**. To reuse a container:
-
-```bash
-# First run - creates container
-docker run -it --name my-ubuntu ubuntu:24.04 bash
-
-# After exiting, start the same container
-docker start -i my-ubuntu
-```
+**C. Keep important data outside the container** (volumes or bind mounts, covered in later chapters), and build a proper image with a **Dockerfile** for anything you need to repeat (Chapters 15–20).
 
 ---
 
-## Why This Matters: The Bigger Picture
-
-### The Development Workflow Problem
-
-**Before Docker:**
-```
-Developer's Mac     QA's Windows     Production Linux
-     ↓                   ↓                  ↓
-Different OS → Different behaviors → Bugs in production!
-"Works on my machine" syndrome
-```
-
-**With Docker:**
-```
-Everyone runs:
-docker run -it ubuntu:24.04 bash
-
-↓
-Identical environment for everyone!
-```
-
-### Real-World Use Cases
-
-**1. Development Environment Consistency**
-- Team uses different OS (Mac, Windows, Linux)
-- Docker ensures everyone has identical Ubuntu environment
-- No more "works on my machine" excuses
-
-**2. Testing Different Linux Distributions**
-- Test on Ubuntu 24.04, 22.04, 20.04
-- Test on Debian, Alpine, CentOS
-- No need to install each OS separately
-
-**3. Safe Experimentation**
-- Try commands without affecting your computer
-- Break things without consequences
-- Delete and recreate in seconds
-
-**4. CI/CD Pipelines**
-- Automated testing in clean environments
-- Reproducible builds
-- Version-controlled infrastructure
-
----
-
-## The Philosophy: Understanding vs. Memorizing
-
-### The Tree Climbing Metaphor
-
-Imagine learning Docker is like climbing a tree to get fruit:
-
-```
-                    🍎 Fruit (Advanced Docker Skills)
-                    │
-            ┌───────┴───────┐
-        🌿 Branches (Docker Commands)
-            │
-    ───────┴─────── (Docker Basics)
-            │
-    ═══════╬═══════ (Linux Fundamentals)
-         Root
-```
-
-**The Journey:**
-1. **Intention** - You see the fruit and want it (this course)
-2. **Foundation** - You must come to the tree base (Linux basics)
-3. **Climbing** - Learn Docker fundamentals (this chapter)
-4. **Reaching** - Practice until you reach the fruit (mastery)
-
-### Why Linux Fundamentals Come First
-
-Without Linux knowledge, you'll face:
-- **Mystery commands** - Why do these work? Where do they come from?
-- **Debugging nightmares** - Can't troubleshoot without understanding
-- **Impostor syndrome** - Feel like everyone knows magic you don't
-- **Career ceiling** - Can't advance to Kubernetes, cloud platforms
-
-With Linux knowledge:
-- **Confidence** - Understand why things work
-- **Problem-solving** - Debug issues independently
-- **Career advancement** - Stand out from other developers
-- **Future-proof** - Foundation for DevOps, cloud, microservices
-
----
-
-## Practice Exercises
-
-### Exercise 1: Pull Different Ubuntu Versions
-
-Pull and explore multiple Ubuntu versions:
+## 6. Useful everyday commands
 
 ```bash
-# Pull Ubuntu 22.04
-docker pull ubuntu:22.04
+docker run -it --rm ubuntu:24.04 bash   # throw-away shell: auto-removed on exit  ← your default for experiments
+docker run -it --name lab ubuntu:24.04 bash   # named, persists after exit
+docker ps                               # running containers
+docker ps -a                            # all containers
+docker start -ai lab                    # restart a stopped container and attach
+docker exec -it lab bash                # open ANOTHER shell in a running container
+docker stop lab                         # ask it to stop (SIGTERM, then SIGKILL after 10 s)
+docker rm lab                           # delete a stopped container
+docker rm -f lab                        # force delete a running one
+docker cp lab:/etc/os-release .         # copy a file OUT of a container (works both ways)
+docker rmi ubuntu:24.04                 # delete the image (no containers may be using it)
+docker container prune                  # delete ALL stopped containers
+```
 
-# Pull Ubuntu 20.04
-docker pull ubuntu:20.04
+**Detach without stopping** a container you started with `-it`: press **Ctrl+P then Ctrl+Q**. The container keeps running; re-enter with `docker attach <name>` or `docker exec -it <name> bash`.
 
-# Verify all images
-docker images
+---
 
-# Run 22.04
-docker run -it ubuntu:22.04 bash
+## 7. Experiments to try
 
-# Inside container, check version
-cat /etc/os-release
-
-# Exit and try 20.04
+### Experiment 1: Disposable environments
+```bash
+docker run -it --rm ubuntu:24.04 bash
+touch /important.txt && ls /
 exit
-docker run -it ubuntu:20.04 bash
-cat /etc/os-release
+docker run -it --rm ubuntu:24.04 bash
+ls /                                     # no important.txt: a brand-new container
 ```
 
-**Question:** What differences do you notice between versions?
-
-### Exercise 2: Named Containers
-
-Create containers with specific names:
+### Experiment 2: Several containers from one image
+Open two terminals:
 
 ```bash
-# Create named container
-docker run -it --name dev-environment ubuntu:24.04 bash
-
-# Exit container
-exit
-
-# Start the same container again
-docker start -i dev-environment
-
-# Remove the container
-docker rm dev-environment
+# terminal 1
+docker run -it --name c1 ubuntu:24.04 bash -c 'echo I am c1; sleep 300'
+# terminal 2
+docker run -it --name c2 ubuntu:24.04 bash -c 'echo I am c2; sleep 300'
+# terminal 3
+docker ps        # two containers, ONE image
+docker rm -f c1 c2
 ```
 
-### Exercise 3: Multiple Containers from One Image
+### Experiment 3: Different versions
+```bash
+docker run --rm ubuntu:22.04 cat /etc/os-release | head -2
+docker run --rm ubuntu:24.04 cat /etc/os-release | head -2
+```
 
-Run multiple containers from the same image:
+### Experiment 4: Run one command, no shell
+You don't always need an interactive shell:
 
 ```bash
-# Terminal 1
-docker run -it --name container1 ubuntu:24.04 bash
-
-# Open Terminal 2
-docker run -it --name container2 ubuntu:24.04 bash
-
-# In Terminal 3, list running containers
-docker ps
+docker run --rm ubuntu:24.04 echo "hello from a container"
+docker run --rm ubuntu:24.04 cat /etc/os-release
+docker run --rm ubuntu:24.04 ls /
 ```
 
-**Question:** Can multiple containers run from one image simultaneously? (Answer: Yes!)
+### Experiment 5: The shared kernel
+```bash
+uname -r
+docker run --rm ubuntu:24.04 uname -r    # identical (on Windows/macOS: the Docker Desktop VM's kernel)
+```
+
+### Experiment 6: See it from the host (Linux)
+```bash
+docker run -d --name sleeper ubuntu:24.04 sleep 600
+ps aux | grep '[s]leep 600'              # the container's process appears in the HOST's list
+docker rm -f sleeper
+```
 
 ---
 
-## Key Takeaways
+## 8. Troubleshooting
 
-1. **Docker Hub** is the public registry where images are stored
-2. **Images** are immutable templates; **containers** are running instances
-3. **`docker pull`** downloads images to your local system
-4. **`docker images`** shows cached images on your computer
-5. **`docker run -it ubuntu:24.04 bash`** creates an interactive Ubuntu container
-6. **Flags matter**: `-i` for interactive, `-t` for terminal, `bash` for shell
-7. **Containers are isolated** - they have their own filesystem and processes
-8. **Exiting bash** stops the container because bash is PID 1
-9. **`docker ps`** shows running containers; **`docker ps -a`** shows all containers
-10. **Understanding the flow** (Hub → Image → Container) is crucial
-
----
-
-## Coming Up Next
-
-In the next chapters, we'll dive deeper into:
-- **Package Management** - Installing software inside containers
-- **Linux Commands** - Navigating and manipulating the filesystem
-- **User and Permissions** - Understanding security and access control
-- **Advanced Docker** - Building custom images with Dockerfile
+| Message or symptom | Cause | Fix |
+|---|---|---|
+| `Cannot connect to the Docker daemon at unix:///var/run/docker.sock` | Engine/Docker Desktop not running | Start it (`systemctl start docker` or launch Docker Desktop) |
+| `permission denied while trying to connect to the Docker daemon socket` | Your Linux user isn't in the `docker` group | `sudo usermod -aG docker $USER`, re-login, or use `sudo` |
+| `docker run ubuntu` returns immediately | No terminal/stdin attached | Use `-it` (and a command like `bash`) |
+| `bash: <tool>: command not found` | Minimal image | `apt-get update && apt-get install -y <package>` |
+| `E: Unable to locate package` | Package lists empty | Run `apt-get update` first |
+| `Conflict. The container name "/lab" is already in use` | Name taken by an old (stopped) container | `docker rm lab`, or choose another name, or use `--rm` |
+| `Unable to find image ... locally` then a long pause | First-time download | Normal; the second run is fast |
+| `pull access denied` / `repository does not exist` | Typo in image name, or private image | Check the name at hub.docker.com; `docker login` |
+| `toomanyrequests: You have reached your pull rate limit` | Anonymous Docker Hub limit | `docker login` or wait |
+| Disk filling up | Old containers and images | `docker system df`, then `docker container prune` / `docker image prune` |
 
 ---
 
-## Conclusion
+## 9. Common misconceptions
 
-Congratulations! You've taken your first real step into the containerized world. You now understand:
-- Why we run Linux inside Docker
-- How to pull images from Docker Hub
-- How to create and interact with containers
-- The distinction between images and containers
-- The internal Docker workflow from CLI to running container
-
-This foundational knowledge is critical. Don't rush past it. Practice until these concepts feel natural. The journey to mastering Docker, Kubernetes, microservices, and cloud platforms **starts here**, with these fundamentals.
-
-**Remember:** You're not just learning commands to memorize. You're building a mental model of how containerization works. This understanding will serve you throughout your entire career as a software engineer.
-
-**Next time**, we'll explore package management in Linux - how to install, update, and remove software inside our Ubuntu containers. This will unlock the ability to create truly custom environments for any application.
-
-Keep practicing, stay curious, and remember: the strongest developers are those who master the fundamentals!
+| Misconception | Reality |
+|---|---|
+| "The container is an Ubuntu VM" | It's an isolated process with Ubuntu's files, running on your kernel |
+| "When I `exit`, my container is deleted" | It's stopped. Only `--rm` or `docker rm` deletes it |
+| "Running `docker run` again continues my session" | It creates a **new** container. Use `docker start -ai <name>` to continue |
+| "`ubuntu:latest` is always the newest Ubuntu" | It's whatever tag the maintainers point to (currently the newest LTS) |
+| "Being `root` in the container means being root on my machine" | Root inside is still confined by namespaces and capabilities, but it is not harmless. Chapter 13 discusses non-root users |
+| "The image is small because it lacks Linux" | It lacks the kernel (shared), docs, and most tools, but has the core Ubuntu user space |
 
 ---
 
-**Chapter Progress**: ✅ Chapter 17 Complete
+## 10. Summary
 
-**Next Chapter**: Chapter 18 - Managing Packages on Linux
+- `docker pull ubuntu:24.04` downloads an image; `docker images` lists them.
+- `docker run -it ubuntu:24.04 bash` starts an **interactive** container; `-i` keeps stdin open, `-t` gives a terminal.
+- A container runs **only as long as its main process**. Without a terminal, `bash` exits at once.
+- After `exit` the container is **stopped, not removed** (`docker ps -a`). Restart with `docker start -ai`; delete with `docker rm`; use `--rm` for throw-away containers.
+- Each `docker run` = a fresh container from the unchanged image, so installed packages disappear. Use Dockerfiles and volumes for anything that must last.
+- The image has minimal tools by design; install what you need with `apt-get`.
+
+---
+
+## 11. Check your understanding
+
+1. Why does `docker run ubuntu:24.04` print nothing and return immediately?
+2. What do `-i` and `-t` do, and why are they usually used together?
+3. You installed `curl` in a container, exited, and ran `docker run -it ubuntu:24.04 bash` again. Why is `curl` missing?
+4. What is the difference between `docker exec` and `docker run`?
+5. How do you run one command in Ubuntu and clean up automatically afterward?
+6. Which command shows stopped containers?
+
+<details>
+<summary>Answers</summary>
+
+1. The default command (`bash`) had no terminal or input, so it exited immediately, and the container stops when its main process ends.
+2. `-i` keeps stdin open; `-t` allocates a pseudo-terminal. Together they give you a usable interactive shell.
+3. `docker run` creates a new container from the unchanged image; the previous container's changes live only in its own writable layer.
+4. `docker run` creates and starts a *new* container. `docker exec` runs an extra command inside an *already running* container.
+5. `docker run --rm ubuntu:24.04 <command>`.
+6. `docker ps -a`.
+</details>
+
+**Practice:** start a named container, install `curl`, exit, restart it with `docker start -ai`, and confirm `curl` is still there. Then delete the container and confirm it's gone from `docker ps -a`.
+
+---
+
+**Next:** [Chapter 11 – Managing Packages on Linux](11_managing_packages_on_linux.md)
