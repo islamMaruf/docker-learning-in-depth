@@ -1,1683 +1,565 @@
-# Chapter 31: Data Link Layer Frame In Details
+# Chapter 31: The Data Link Layer and Ethernet Frames
 
-## Overview
+> **In one sentence:** The Data Link layer (Layer 2) moves data across **one link** (one local network) by wrapping each IP packet in a **frame** with **MAC addresses** (who on this link should receive it), a **type** (what is inside) and a **checksum** (was it damaged); switches forward frames by MAC address, and the frame is rebuilt at every router.
 
-The Data Link Layer (Layer 2) is where the abstract concept of "IP packets" becomes concrete physical reality. When you send data across a network—whether through an Ethernet cable, WiFi radio waves, or fiber optic light pulses—the Data Link Layer is responsible for taking IP packets from the Network Layer and packaging them into **frames** that can be transmitted over physical media.
+**Level:** 🟢 Beginner → 🟡 Intermediate · **Reading time:** ~55 minutes
 
-Understanding frames is understanding how networking actually works at the hardware level. While IP addresses (Layer 3) tell packets *where* to go across the Internet, MAC addresses (Layer 2) tell frames *how* to get from one physical device to the next hop—from your laptop to your WiFi router, from your router to your ISP's router, from one router to another across the backbone. Without the Data Link Layer, IP packets would be abstract data structures with no mechanism to actually traverse physical network links.
-
-This layer handles critical responsibilities that higher layers take for granted: detecting transmission errors through checksums, identifying the physical destination through MAC addresses, controlling access to shared media (like WiFi where multiple devices compete for airtime), and synchronizing sender and receiver through preambles and frame delimiters. When you see an Ethernet frame header or a WiFi 802.11 frame header, you're seeing the machinery that makes physical data transmission possible.
-
-This chapter is intentionally abstract because the Data Link Layer encompasses enormous complexity—different protocols for different physical media (Ethernet, WiFi, PPP, HDLC, Frame Relay, ATM), different frame structures, different error detection mechanisms, different media access control algorithms. We'll focus on the most common protocol: **Ethernet frames**, both wired (802.3) and wireless (802.11 WiFi), explaining their structure, purpose, and how they encapsulate IP packets for physical transmission.
-
-By the end of this chapter, you'll understand exactly what happens when a 10MB file travels from Layer 7 (Application) all the way down to Layer 1 (Physical)—how "I love you" becomes JSON, becomes TCP segments, becomes IP packets, becomes Ethernet frames, becomes electrical signals or radio waves crossing physical space. You'll see the complete encapsulation hierarchy and understand why each layer exists, what headers it adds, and what problems it solves.
-
-**The Data Link Layer is where networking becomes physics. Master frames, and you master the physical reality of data transmission.**
+**Prerequisites:** [Chapter 21](21_philosophy_of_osi_model.md) (encapsulation) and [Chapter 30](30_internet_protocol_ip_in_details.md) (IP, MTU, routing).
 
 ---
 
-## The OSI Model: Complete Data Flow
+## What you will learn
 
-### Seven Layers Revisited
-
-Before diving into frames, let's trace a complete message through all seven layers to see where frames fit.
-
-```
-┌─────────────────────────────────────────────────────────┐
-│  Layer 7: Application Layer                             │
-│  Data: "I love you"                                     │
-└───────────────────────────┬─────────────────────────────┘
-                            │
-┌───────────────────────────▼─────────────────────────────┐
-│  Layer 6: Presentation Layer                            │
-│  Data: {"message": "I love you"} (JSON format)          │
-└───────────────────────────┬─────────────────────────────┘
-                            │
-┌───────────────────────────▼─────────────────────────────┐
-│  Layer 5: Session Layer                                 │
-│  (Skipped in most protocols)                            │
-└───────────────────────────┬─────────────────────────────┘
-                            │
-┌───────────────────────────▼─────────────────────────────┐
-│  Layer 4: Transport Layer (TCP)                         │
-│  Produces: SEGMENT                                      │
-│  ┌────────────────────────────────────┐                 │
-│  │ TCP Header (ports, seq, ack, etc.) │                 │
-│  │ Data: JSON (10 MB in this example) │                 │
-│  └────────────────────────────────────┘                 │
-│  Result: 10 segments (1 MB each)                        │
-└───────────────────────────┬─────────────────────────────┘
-                            │
-┌───────────────────────────▼─────────────────────────────┐
-│  Layer 3: Network Layer (IP)                            │
-│  Produces: PACKET                                       │
-│  ┌────────────────────────────────────┐                 │
-│  │ IP Header (source/dest IPs, TTL)   │                 │
-│  │ Data: TCP Segment                  │                 │
-│  └────────────────────────────────────┘                 │
-│  Result: 10 packets (one per segment)                   │
-└───────────────────────────┬─────────────────────────────┘
-                            │
-┌───────────────────────────▼─────────────────────────────┐
-│  Layer 2: Data Link Layer (Ethernet)    ★              │
-│  Produces: FRAME                                        │
-│  ┌────────────────────────────────────┐                 │
-│  │ Header (MAC addresses, type)       │                 │
-│  │ Packet (IP packet from L3)         │                 │
-│  │ Trailer (checksum for errors)      │                 │
-│  └────────────────────────────────────┘                 │
-│  Result: 10 frames (one per packet)                     │
-└───────────────────────────┬─────────────────────────────┘
-                            │
-┌───────────────────────────▼─────────────────────────────┐
-│  Layer 1: Physical Layer                                │
-│  Produces: BITS                                         │
-│  Binary: 101010101010... (electrical signals, radio)    │
-│  Medium: Ethernet cable, WiFi radio waves, fiber optic  │
-└─────────────────────────────────────────────────────────┘
-```
+- What Layer 2 is responsible for, and what a **frame** is (header, payload, trailer)
+- The **Ethernet II frame**, byte by byte: preamble/SFD, destination and source **MAC**, **EtherType**, payload (with minimum-size **padding**), **FCS (CRC-32)**
+- **MAC addresses**: format, OUI, unicast/multicast/broadcast, locally administered addresses (VMs, containers, phones)
+- **VLAN tags (802.1Q)**, jumbo frames, and the frame-size numbers (64, 1518, 1522, 9000)
+- **Wi-Fi (802.11)** frames and why they differ (four addresses, ACKs, CSMA/CA)
+- Why we need **both** MAC and IP addresses, and how **ARP** ties them together
+- How **switches** learn and forward, and how that differs from **routers** (frame rewritten at each hop)
+- **Error detection** (CRC), what happens to bad frames, and how **TCP** repairs losses
+- The **physical layer** below: real encodings for copper, fiber and radio (and common myths)
+- Frames in **Docker** (veth, bridge, MACs) and **VMs**
+- Hands-on: `ip link`, `tcpdump -e`, `ethtool`, `bridge`, Python frame-building, Wireshark
 
 ---
 
-### Example: "I Love You" Message Flow
+## 1. What Layer 2 does
 
-**Scenario:** You send a message "I love you" from your computer to someone across the Internet.
+IP (Chapter 30) decides **where a packet is going across the world**. It can't put bits on a wire. For each hop, the packet needs a way to get from *this* device to the *next* device on the same physical or wireless network. That is the job of the **Data Link layer**:
 
-**Layer 7 (Application):**
+| Responsibility | How |
+|---|---|
+| **Framing**: mark where a message starts and ends | Frames with delimiters/lengths |
+| **Local addressing**: identify the next device on this link | **MAC addresses** |
+| **Say what's inside** | EtherType (IPv4, IPv6, ARP, ...) |
+| **Detect damage** | **FCS**, a 32-bit CRC |
+| **Share the medium** | Ethernet (full duplex/CSMA/CD historically), Wi-Fi **CSMA/CA** |
+| **Segment traffic** | VLANs, bridges/switches |
+
+Layer 2 does **not** route between networks, guarantee delivery, or retransmit (Ethernet silently drops bad frames; TCP or the application repairs it). Wi-Fi does add link-layer acknowledgments and retries.
+
+### The names again
 ```
-Raw message: "I love you"
-Application: Web browser, chat app, etc.
+Application data → [TCP hdr | data]  segment → [IP hdr | segment]  packet → [Eth hdr | packet | FCS]  FRAME → bits on the wire
 ```
-
-**Layer 6 (Presentation):**
-```
-Format as JSON:
-{
-  "message": "I love you",
-  "timestamp": "2026-03-11T10:30:00Z",
-  "sender": "user123"
-}
-
-Convert to binary representation
-Result: ~10 MB of data (for this example)
-```
-
-**Layer 5 (Session):**
-```
-(Typically skipped in modern protocols like HTTP/TCP/IP)
-Session management handled by application or transport layer
-```
-
-**Layer 4 (Transport - TCP):**
-```
-10 MB of data split into segments:
-- Maximum Segment Size (MSS): ~1 MB per segment
-- Result: 10 TCP segments
-
-Each segment:
-┌──────────────────────────────────────┐
-│ TCP Header:                          │
-│  - Source Port: 54321                │
-│  - Destination Port: 443             │
-│  - Sequence Number: 1000, 2000, ...  │
-│  - Acknowledgment Number             │
-│  - Flags: PSH, ACK                   │
-│  - Window Size                       │
-│  - Checksum                          │
-│  - Urgent Pointer                    │
-│  - Options (optional)                │
-├──────────────────────────────────────┤
-│ Data: 1 MB chunk of JSON             │
-└──────────────────────────────────────┘
-
-Total: 10 segments
-```
-
-**Layer 3 (Network - IP):**
-```
-Each TCP segment wrapped in IP packet:
-
-Packet 1:
-┌──────────────────────────────────────┐
-│ IP Header:                           │
-│  - Version: 4                        │
-│  - IHL: 5                            │
-│  - Total Length: ~1 MB               │
-│  - Identification: 12345             │
-│  - TTL: 64                           │
-│  - Protocol: 6 (TCP)                 │
-│  - Source IP: 192.168.1.50           │
-│  - Destination IP: 142.250.185.206   │
-│  - Checksum                          │
-├──────────────────────────────────────┤
-│ Data: TCP Segment 1                  │
-└──────────────────────────────────────┘
-
-Packets 2-10: Same structure with subsequent segments
-
-Total: 10 packets
-```
-
-**Layer 2 (Data Link - Ethernet):**
-```
-Each IP packet wrapped in Ethernet frame:
-
-Frame 1:
-┌──────────────────────────────────────┐
-│ Header:                              │
-│  - Preamble: 7 bytes (sync)          │
-│  - Start Frame Delimiter (SFD): 1 byte│
-│  - Destination MAC: AA:BB:CC:DD:EE:FF│
-│  - Source MAC: 11:22:33:44:55:66     │
-│  - EtherType: 0x0800 (IPv4)          │
-├──────────────────────────────────────┤
-│ Payload: IP Packet 1                 │
-├──────────────────────────────────────┤
-│ Trailer:                             │
-│  - FCS (Frame Check Sequence): CRC   │
-└──────────────────────────────────────┘
-
-Frames 2-10: Same structure with subsequent packets
-
-Total: 10 frames
-```
-
-**Layer 1 (Physical):**
-```
-Ethernet Cable:
-- Electrical voltages represent bits
-- High voltage = 1
-- Low voltage = 0
-- Binary: 10101010001111000...
-
-WiFi Radio Waves:
-- Radio frequency modulation
-- Different wave patterns represent 0 and 1
-- Transmitted at 2.4 GHz or 5 GHz frequency bands
-- Binary: 10101010001111000...
-
-Fiber Optic:
-- Light pulses through glass fiber
-- Light pulse = 1
-- No light = 0
-- Binary: 10101010001111000...
-```
+A frame's **payload is the entire IP packet**. Layer 2 treats it as opaque bytes.
 
 ---
 
-### Naming Convention Clarity
+## 2. Where frames fit in a transfer
 
-**Different layers produce different names:**
+Send 10 MB over a gigabit Ethernet LAN (typical MTU 1500, TCP MSS 1460):
 
-| Layer | Name | Example |
-|-------|------|---------|
-| L7 (Application) | Data | "I love you", HTTP request |
-| L6 (Presentation) | Formatted Data | JSON, XML, encrypted data |
-| L5 (Session) | Session Data | (Often merged with L7) |
-| L4 (Transport) | **Segment** | TCP segment, UDP datagram |
-| L3 (Network) | **Packet** | IP packet |
-| L2 (Data Link) | **Frame** | Ethernet frame, WiFi frame |
-| L1 (Physical) | **Bits** | 101010... (electrical/radio) |
+| Layer | What happens | Numbers |
+|---|---|---|
+| TCP | Data is cut into segments of ≤ **1460** bytes | 10,485,760 ÷ 1460 ≈ **7,182 segments** |
+| IP | Each segment gets a 20-byte header → packet of ≤ **1500** bytes (the MTU) | ≈ 7,182 packets |
+| Ethernet | Each packet gets a 14-byte header and 4-byte FCS → frame of ≤ **1518** bytes | ≈ 7,182 frames |
+| Physical | + preamble/SFD (8 bytes) + inter-frame gap (12 byte-times) per frame | **1538 byte-times** on the wire per full frame |
 
-**Why Different Names?**
-
-1. **Clarity:** Makes it obvious which layer you're discussing
-2. **Encapsulation:** Each layer wraps previous layer's data
-3. **Protocols:** Different protocols at each layer have different formats
-4. **Debugging:** Network tools report errors by layer (e.g., "frame error" vs "packet loss" vs "segment retransmission")
+**Wire time at 1 Gbit/s:** each full frame occupies 1538 × 8 = 12,304 bit-times = **12.3 µs**, so 7,182 frames take about **88 ms**. That means **TCP goodput on a 1 Gbit/s Ethernet tops out around 941 Mbit/s** (1460 ÷ 1538 of the line rate), a useful number to remember. (Segments are *not* 1 MB each: they are at most one MTU minus headers.)
 
 ---
 
-## What Is a Frame?
-
-### Definition
-
-**Frame:**
-A data structure produced by the Data Link Layer (Layer 2) consisting of:
-1. **Header:** Contains addressing (MAC addresses), frame type, and control information
-2. **Payload:** The IP packet from Layer 3
-3. **Trailer:** Contains error detection information (typically a checksum)
-
-**Purpose:**
-- Deliver data from one physical device to the next hop on the same network
-- Detect transmission errors
-- Identify sender and receiver at the hardware level (MAC addresses)
-- Control access to shared media (WiFi, Ethernet hub)
-
----
-
-### Frame Structure
-
-**Generic Frame Format:**
+## 3. The Ethernet II frame
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                         FRAME                           │
-├───────────────┬─────────────────────┬───────────────────┤
-│   Header      │      Payload        │     Trailer       │
-│  (Variable)   │   (IP Packet)       │  (Usually 4 bytes)│
-├───────────────┼─────────────────────┼───────────────────┤
-│ - MAC addrs   │ ┌─────────────────┐ │ - FCS/CRC         │
-│ - Type/Length │ │   IP Header     │ │   (checksum)      │
-│ - Control     │ ├─────────────────┤ │                   │
-│               │ │   TCP Segment   │ │                   │
-│               │ │   (or UDP)      │ │                   │
-│               │ └─────────────────┘ │                   │
-└───────────────┴─────────────────────┴───────────────────┘
+   ┌─── added by the PHY (not part of "the frame" in size counts) ───┐┌──────────── the Ethernet frame (64–1518 bytes) ────────────┐
+   │ Preamble │ SFD │                                                  │ Dst MAC │ Src MAC │ EtherType │      Payload      │   FCS   │
+   │  7 bytes │ 1 B │                                                  │ 6 bytes │ 6 bytes │  2 bytes  │  46 – 1500 bytes  │ 4 bytes │
+   └──────────┴─────┘                                                  └─────────┴─────────┴───────────┴───────────────────┴─────────┘
+                                                                        └──────────── 14-byte header ──────┘                  trailer
 ```
 
-**Key Insight:**
-The frame's payload is the **entire IP packet** (including IP header and TCP/UDP segment). The Data Link Layer doesn't inspect or modify the IP packet—it simply treats it as opaque data to be delivered.
+### 3.1 Preamble and SFD (8 bytes, added by the physical layer)
+- **Preamble:** 7 bytes of `10101010` (0xAA). It lets the receiver's clock **lock onto the sender's bit timing** (like a drummer's count-in).
+- **SFD (Start Frame Delimiter):** `10101011` (0xAB). The final `11` says "the frame begins right after this byte".
+- Analyzers (`tcpdump`, Wireshark) don't show them, and frame sizes are counted **without** them.
 
----
-
-### Why Header AND Trailer?
-
-**Header (Before Payload):**
-- **MAC Addresses:** Who's sending? Who should receive?
-- **Type:** What kind of data is in the payload? (IPv4, IPv6, ARP, etc.)
-- **Length:** How long is the frame?
-- **Preamble/SFD:** Synchronize sender and receiver clocks
-
-**Trailer (After Payload):**
-- **FCS (Frame Check Sequence):** Detects bit errors during transmission
-- If checksum doesn't match, frame is corrupted → discard frame
-
-**Why Not Just a Header?**
-
-The trailer's checksum protects the **entire** frame (header + payload). If errors occur during transmission, the receiver can detect them only after receiving the complete frame—hence the checksum must come at the end.
-
----
-
-## Ethernet Frame Structure (802.3)
-
-Ethernet is the most common wired networking technology. Let's examine the Ethernet II frame format (used for IP traffic).
-
-### Ethernet II Frame Format
+### 3.2 Destination MAC (6 bytes) and Source MAC (6 bytes)
+A **MAC address** (Media Access Control address, also "hardware", "physical", or "EUI-48" address) is **48 bits**, written as six hex pairs: `a4:83:e7:1c:9b:02` (or `a4-83-e7-1c-9b-02`, or `a483.e71c.9b02` on Cisco).
 
 ```
- ┌──────────┬──────────┬────────┬────────┬──────────┬─────────┬─────┐
- │ Preamble │   SFD    │  Dest  │ Source │ EtherType│ Payload │ FCS │
- │ 7 bytes  │  1 byte  │  MAC   │  MAC   │ 2 bytes  │46-1500  │4 byt│
- │          │          │ 6 bytes│ 6 bytes│          │  bytes  │     │
- └──────────┴──────────┴────────┴────────┴──────────┴─────────┴─────┘
-    
-       NOT in actual frame                  Actual frame contents
-       (Physical layer adds)                (Data Link Layer adds)
+   a4 : 83 : e7    :   1c : 9b : 02
+  └─────OUI─────┘    └─ device part ─┘
+  vendor (assigned by IEEE)   assigned by the vendor
 ```
 
-**Total Frame Size:**
-- Minimum: 64 bytes (including headers and trailer)
-- Maximum: 1518 bytes (standard Ethernet)
-- Jumbo frames: Up to 9000 bytes (not universally supported)
+The **first byte** contains two special bits (least-significant bits of that byte):
+
+| Bit | Name | 0 | 1 |
+|---|---|---|---|
+| bit 0 (LSB) | **I/G** (individual/group) | **Unicast** (one device) | **Multicast/broadcast** (a group) |
+| bit 1 | **U/L** (universally/locally administered) | Assigned by the manufacturer (globally unique OUI) | **Locally administered** (set by software) |
+
+So `a4` = `1010 0100`: I/G = 0 (unicast), U/L = 0 (universal). `02` = `0000 0010`: unicast, locally administered.
+
+| Kind | Example | Meaning |
+|---|---|---|
+| **Unicast** | `a4:83:e7:1c:9b:02` | Exactly one interface |
+| **Broadcast** | `ff:ff:ff:ff:ff:ff` | Every device on the local network (ARP requests, DHCP discover) |
+| **Multicast** | `01:00:5e:xx:xx:xx` (IPv4 multicast), `33:33:xx:xx:xx:xx` (IPv6 multicast) | A group of interested devices |
+
+**What a NIC does with an arriving frame:** accept it if the destination MAC is **its own**, **broadcast**, or a **multicast group it joined**; otherwise ignore it. (*Promiscuous mode*, used by `tcpdump`, accepts everything it sees.)
+
+Truths about MAC addresses:
+
+- They're **burned in** at manufacture, but **not truly permanent**: operating systems can change them, and **modern phones and laptops randomize** the Wi-Fi MAC per network for privacy.
+- **Virtual machines and containers get generated MACs** (locally administered): Docker uses `02:42:` + the container's IPv4 in hex, so a container with `172.17.0.2` has MAC `02:42:ac:11:00:02` (172=0xac, 17=0x11, 0, 2); VirtualBox/VMware/KVM use their own OUIs.
+- MAC addresses must be **unique on the same L2 network** (duplicates cause chaos), not globally.
+- They are **flat** (no hierarchy), meaningful **only on the local link** and **not routable**.
+
+### 3.3 EtherType (2 bytes)
+Says what's in the payload:
+
+| Value | Payload |
+|---|---|
+| `0x0800` | IPv4 |
+| `0x0806` | ARP |
+| `0x86DD` | IPv6 |
+| `0x8100` | An **802.1Q VLAN tag** follows (section 5) |
+| `0x88CC` | LLDP (neighbor discovery) |
+| `0x8847` / `0x8848` | MPLS |
+| `0x88A8` | 802.1ad (Q-in-Q) |
+
+(In original IEEE 802.3 framing this field was a **length**; values ≤ 1500 mean "length", values ≥ 1536 (0x0600) mean "type", which is why the two coexist. Almost all IP traffic uses Ethernet II with EtherType.)
+
+### 3.4 Payload: 46 to 1500 bytes
+- The **1500-byte** maximum is the **MTU** of standard Ethernet (Chapter 30).
+- The **46-byte minimum** exists so that the whole frame (14 header + 46 + 4 FCS) is at least **64 bytes**, a legacy of collision detection on shared cables: a sender must still be transmitting when the far end's collision reaches it. Shorter payloads are **padded with zeros** by the sender (the IP header's Total Length lets the receiver strip the padding).
+
+### 3.5 FCS: Frame Check Sequence (4 bytes)
+A **CRC-32** computed over the header and payload. The receiver recomputes it; a mismatch means the frame was damaged, so it is **silently discarded** (counted as a CRC/FCS error).
+
+Sizes summary:
+
+| | Bytes |
+|---|---|
+| Minimum frame (header + payload + FCS, no preamble) | **64** |
+| Maximum standard frame | **1518** |
+| With one 802.1Q tag | 64–**1522** |
+| Jumbo frame | up to ~**9000-byte MTU** (every device on the path must support it) |
+| On the wire per frame | + 8 (preamble+SFD) + 12 (inter-frame gap) |
 
 ---
 
-### Field-by-Field Breakdown
+## 4. A frame in hex: an ARP request
 
----
+An **ARP request** ("who has 192.168.1.1? tell 192.168.1.50") is a perfect first frame because it's short and has a *broadcast* destination. Bytes (before FCS and padding):
 
-#### 1. Preamble (7 bytes)
-
-**Purpose:** Synchronize sender and receiver clocks.
-
-**Content:**
-```
-Binary Pattern: 10101010 10101010 10101010 10101010 10101010 10101010 10101010
-Hex: 0xAA 0xAA 0xAA 0xAA 0xAA 0xAA 0xAA
-
-Alternating 1s and 0s (56 bits total)
-```
-
-**Why Needed?**
-
-When data arrives over a wire, the receiver's clock must synchronize with the sender's clock to correctly interpret bits. The alternating pattern gives the receiver time to:
-1. Detect that a frame is incoming
-2. Lock onto the bit timing
-3. Prepare to receive actual data
-
-**Analogy:**
-Like a musician counting "1, 2, 3, 4..." before playing—synchronizes all band members.
-
-**Important:**
-The preamble is technically added by the **Physical Layer (L1)**, not the Data Link Layer, but it's shown here because it's conceptually part of frame transmission.
-
----
-
-#### 2. Start Frame Delimiter (SFD) - 1 byte
-
-**Purpose:** Marks the beginning of the actual frame.
-
-**Content:**
-```
-Binary: 10101011
-Hex: 0xAB
-
-Note: Last two bits are "11" (different from preamble's "10")
-```
-
-**Why Different from Preamble?**
-
-The SFD's unique pattern (ending in "11") tells the receiver: "The synchronization pattern is over, the actual frame starts NOW."
-
-**Receiver Logic:**
-```
-1. See alternating 10101010... → "Preamble, synchronizing clock"
-2. See 10101011 → "SFD detected, frame starts after this byte"
-3. Start reading actual frame data
-```
-
----
-
-#### 3. Destination MAC Address (6 bytes)
-
-**Purpose:** Identifies the physical device that should receive this frame.
-
-**Format:**
-```
-MAC Address: 48 bits (6 bytes)
-Example: AA:BB:CC:DD:EE:FF
-Notation: Six hexadecimal pairs separated by colons (or hyphens)
-```
-
-**Example:**
-```
-Hex: AA:BB:CC:DD:EE:FF
-Binary: 10101010 10111011 11001100 11011101 11101110 11111111
-```
-
-**Types of Addresses:**
-
-1. **Unicast:** Single specific device
-   ```
-   Example: 00:1A:2B:3C:4D:5E
-   First byte LSB = 0 (unicast)
-   ```
-
-2. **Multicast:** Group of devices
-   ```
-   Example: 01:00:5E:00:00:01
-   First byte LSB = 1 (multicast)
-   ```
-
-3. **Broadcast:** All devices on local network
-   ```
-   Special address: FF:FF:FF:FF:FF:FF
-   All bits set to 1
-   ```
-
-**How Devices Respond:**
-
-When a network interface card (NIC) receives a frame:
-```python
-# Pseudocode for NIC
-received_dest_mac = frame.destination_mac
-my_mac = "AA:BB:CC:DD:EE:FF"
-
-if received_dest_mac == my_mac:
-    accept_frame()  # This frame is for me
-elif received_dest_mac == "FF:FF:FF:FF:FF:FF":
-    accept_frame()  # Broadcast, everyone processes
-elif is_multicast(received_dest_mac) and in_multicast_group(received_dest_mac):
-    accept_frame()  # Multicast group I'm subscribed to
-else:
-    discard_frame()  # Not for me, ignore
-```
-
-**MAC Address Structure:**
-
-```
- AA    :    BB    :    CC    :    DD    :    EE    :    FF
-┌─────────────────────┬──────────────────────────────────┐
-│ OUI (first 3 bytes) │ Device ID (last 3 bytes)         │
-│ Organizationally    │ Manufacturer-assigned            │
-│ Unique Identifier   │ (unique serial number)           │
-└─────────────────────┴──────────────────────────────────┘
-
-Example:
-00:1A:2B (Intel Corporation OUI)
-3C:4D:5E (specific device serial)
-Full MAC: 00:1A:2B:3C:4D:5E
-```
-
-**Fun Fact:**
-Every network device has a globally unique MAC address burned into hardware (though it can be overridden in software).
-
----
-
-#### 4. Source MAC Address (6 bytes)
-
-**Purpose:** Identifies the physical device that sent this frame.
-
-**Format:** Same as Destination MAC (6 bytes, hexadecimal)
-
-**Example:**
-```
-Source MAC: 11:22:33:44:55:66
-```
-
-**Usage:**
-
-1. **Replies:** Receiver knows where to send response frames
-2. **ARP:** Maps IP addresses to MAC addresses
-3. **Switching:** Ethernet switches learn "MAC → port" mappings
-4. **Debugging:** Network admins identify source of problematic traffic
-
-**Important:**
-Source MAC is the MAC address of the **current sender**, not the original sender. As a frame hops through routers:
-- **IP addresses stay the same** (end-to-end)
-- **MAC addresses change at every hop** (link-by-link)
-
-**Example Path:**
-
-```
-Your Computer → Home Router → ISP Router → Destination
-
-Hop 1: Your Computer → Home Router
-┌─────────────────────────────────────┐
-│ Dest MAC: Router MAC                │
-│ Source MAC: Your Computer MAC       │
-│ Dest IP: 142.250.185.206 (Google)   │
-│ Source IP: 192.168.1.50 (Your PC)   │
-└─────────────────────────────────────┘
-
-Hop 2: Home Router → ISP Router
-┌─────────────────────────────────────┐
-│ Dest MAC: ISP Router MAC            │  ← Changed!
-│ Source MAC: Home Router MAC         │  ← Changed!
-│ Dest IP: 142.250.185.206            │  ← Same
-│ Source IP: 192.168.1.50             │  ← Same (or NAT'd)
-└─────────────────────────────────────┘
-```
-
-**Key Insight:**
-- **Layer 3 (IP):** End-to-end addressing (source and destination IPs constant across Internet)
-- **Layer 2 (MAC):** Hop-by-hop addressing (MAC addresses change at every router)
-
----
-
-#### 5. EtherType (2 bytes)
-
-**Purpose:** Indicates the protocol of the payload.
-
-**Common Values:**
-
-| EtherType | Protocol | Description |
-|-----------|----------|-------------|
-| 0x0800    | IPv4     | Internet Protocol version 4 |
-| 0x0806    | ARP      | Address Resolution Protocol |
-| 0x86DD    | IPv6     | Internet Protocol version 6 |
-| 0x8100    | VLAN     | 802.1Q VLAN tagging |
-| 0x88CC    | LLDP     | Link Layer Discovery Protocol |
-| 0x8847    | MPLS     | Multiprotocol Label Switching |
-
-**Example:**
-```
-EtherType: 0x0800
-Meaning: Payload contains an IPv4 packet
-
-Receiver logic:
-if ethertype == 0x0800:
-    pass_to_ip_layer(payload)
-elif ethertype == 0x0806:
-    process_arp(payload)
-elif ethertype == 0x86DD:
-    pass_to_ipv6_layer(payload)
-```
-
-**Historical Note:**
-
-Original Ethernet (802.3) used this field for frame **length** instead of type. Modern Ethernet uses **Ethernet II** format with EtherType. How to distinguish?
-- **Value < 1500:** It's a length field (802.3)
-- **Value ≥ 1536 (0x0600):** It's an EtherType field (Ethernet II)
-
-Since no valid EtherType is below 0x0600, this creates no ambiguity.
-
----
-
-#### 6. Payload (46 - 1500 bytes)
-
-**Purpose:** Contains the data from the upper layer (typically an IP packet).
-
-**Size Limits:**
-
-- **Minimum:** 46 bytes
-- **Maximum:** 1500 bytes (standard Ethernet MTU)
-- **Jumbo Frames:** Up to 9000 bytes (requires all devices on network to support)
-
-**Padding:**
-
-If payload is less than 46 bytes, padding is added:
-```
-Actual data: 20 bytes
-Required minimum: 46 bytes
-Padding added: 26 bytes (zeros)
-
-Result: 20 bytes of real data + 26 bytes of padding = 46 bytes total
-```
-
-**Why Minimum 46 Bytes?**
-
-Ethernet collision detection (CSMA/CD) requires frames to be long enough that a collision can be detected before transmission completes. Minimum frame size = 64 bytes:
-- 14 bytes header (dest MAC + source MAC + EtherType)
-- 46 bytes payload (minimum)
-- 4 bytes trailer (FCS)
-- Total: 64 bytes
-
-**MTU (Maximum Transmission Unit):**
-
-```
-MTU = 1500 bytes (standard Ethernet)
-
-This limits the size of IP packets:
-- IP packet can be up to 1500 bytes
-- If larger, fragmentation required (or Path MTU Discovery)
-```
-
-**Contents:**
-
-Typically an IP packet:
-```
-┌────────────────────────────────────┐
-│ Payload (up to 1500 bytes)         │
-├────────────────────────────────────┤
-│ IP Header (20-60 bytes)            │
-│ - Source IP, Dest IP, TTL, etc.    │
-├────────────────────────────────────┤
-│ TCP/UDP Segment                    │
-│ - Ports, sequence numbers, data    │
-└────────────────────────────────────┘
-```
-
----
-
-#### 7. Frame Check Sequence (FCS) - 4 bytes
-
-**Purpose:** Detects transmission errors in the frame.
-
-**Algorithm:** CRC-32 (Cyclic Redundancy Check, 32-bit)
-
-**How It Works:**
-
-**Sender:**
-```
-1. Calculate CRC-32 of entire frame (header + payload)
-2. Append 4-byte CRC result as FCS at end of frame
-3. Transmit frame with FCS
-```
-
-**Receiver:**
-```
-1. Receive complete frame including FCS
-2. Calculate CRC-32 of received frame (excluding FCS)
-3. Compare calculated CRC with received FCS
-4. If match: Frame intact
-5. If mismatch: Frame corrupted → discard frame
-```
-
-**Example:**
-
-```
-Frame contents (simplified):
-Header: AA BB CC DD EE FF 11 22 33 44 55 66 08 00
-Payload: [1486 bytes of IP packet data]
-
-CRC-32 calculation:
-Input: All 1500 bytes (header + payload)
-Output: 4-byte checksum, e.g., 0xA1B2C3D4
-
-Frame transmitted:
-[Header] [Payload] [FCS: A1 B2 C3 D4]
-
-Receiver calculates CRC-32 of [Header] [Payload]:
-Result: 0xA1B2C3D4
-
-Compare with FCS: 0xA1B2C3D4 == 0xA1B2C3D4 ✅ Match!
-Frame accepted.
-```
-
-**What Causes Errors?**
-
-- Electrical interference
-- Cable damage
-- Wireless signal attenuation
-- Cosmic rays (rare but real!)
-- Faulty network hardware
-
-**Error Rate:**
-
-Modern Ethernet has very low error rates:
-```
-Typical Bit Error Rate (BER): 10^-12
-Meaning: ~1 bit error per 1 trillion bits transmitted
-With FCS: Nearly all errors detected and discarded
-```
-
-**Important:**
-If FCS detects corruption, the frame is **silently discarded**. No error message sent to sender. Higher layers (TCP) handle retransmission if needed.
-
----
-
-## Ethernet Frame Example: Complete Analysis
-
-### Scenario
-
-Your computer (MAC: `11:22:33:44:55:66`, IP: `192.168.1.50`) sends a ping to Google (IP: `142.250.185.206`). Your home router's MAC is `AA:BB:CC:DD:EE:FF`.
-
----
-
-### Frame Construction
-
-**Step 1: Application Layer**
-```
-Command: ping 142.250.185.206
-```
-
-**Step 2: Transport Layer (ICMP, not TCP/UDP)**
-```
-ICMP Echo Request:
-- Type: 8 (Echo Request)
-- Code: 0
-- Checksum: (calculated)
-- Identifier: 0x0001
-- Sequence: 0x0001
-- Data: 56 bytes (timestamp, padding)
 ```
-
-**Step 3: Network Layer (IP Packet)**
-```
-IP Header:
-- Version: 4
-- IHL: 5 (20 bytes)
-- Total Length: 84 bytes (20 IP header + 64 ICMP)
-- TTL: 64
-- Protocol: 1 (ICMP)
-- Source IP: 192.168.1.50
-- Destination IP: 142.250.185.206
-- Checksum: (calculated)
-
-Payload: ICMP Echo Request (64 bytes)
-
-Total IP Packet: 84 bytes
-```
-
-**Step 4: Data Link Layer (Ethernet Frame)**
-
-```
-┌──────────────────────────────────────────────────────────┐
-│                    ETHERNET FRAME                        │
-├──────────────────────────────────────────────────────────┤
-│ Preamble: AA AA AA AA AA AA AA                           │
-│ SFD: AB                                                  │
-├──────────────────────────────────────────────────────────┤
-│ Destination MAC: AA:BB:CC:DD:EE:FF (Router)              │
-│ Source MAC: 11:22:33:44:55:66 (Your Computer)            │
-│ EtherType: 08 00 (IPv4)                                  │
-├──────────────────────────────────────────────────────────┤
-│ Payload (84 bytes):                                      │
-│   IP Header (20 bytes):                                  │
-│     - Source IP: 192.168.1.50                            │
-│     - Dest IP: 142.250.185.206                           │
-│     - Protocol: 1 (ICMP)                                 │
-│   ICMP Message (64 bytes):                               │
-│     - Type: 8 (Echo Request)                             │
-│     - Data: 56 bytes                                     │
-├──────────────────────────────────────────────────────────┤
-│ FCS: A1 B2 C3 D4 (CRC-32 checksum)                       │
-└──────────────────────────────────────────────────────────┘
-
-Total Frame: 106 bytes (14 header + 84 payload + 4 FCS + 4 pad)
-```
-
-**Hexadecimal Representation:**
-```
-Dest MAC:    AA BB CC DD EE FF
-Source MAC:  11 22 33 44 55 66
-EtherType:   08 00
-IP Header:   45 00 00 54 ... (20 bytes)
-ICMP:        08 00 ... (64 bytes)
-FCS:         A1 B2 C3 D4
-```
-
----
-
-### Transmission Process
-
-**Step 1: Physical Layer**
-
-Frame converted to electrical signals on Ethernet cable:
-```
-Binary: 101010101010... 10101011 10101010 10111011 ...
-
-Voltage levels:
-High voltage (+2.5V): Binary 1
-Low voltage (0V): Binary 0
-
-Transmitted at 100 Mbps / 1 Gbps / 10 Gbps depending on NIC
-```
-
-**Step 2: Router Receives Frame**
-
-Router's NIC:
-1. Detects electrical signals
-2. Synchronizes clock using preamble
-3. Identifies frame start using SFD
-4. Reads destination MAC: `AA:BB:CC:DD:EE:FF`
-5. Checks: "Is this my MAC?" → Yes!
-6. Calculates CRC-32 of received frame
-7. Compares with FCS
-8. If match: Accept frame
-9. Strip Ethernet header and trailer
-10. Pass IP packet to Layer 3 (Network Layer)
-
-**Step 3: Router Processes IP Packet**
-
-Router (acting as Layer 3 device):
-1. Examines destination IP: `142.250.185.206`
-2. Checks routing table: "Not local network, forward to ISP"
-3. Determines next-hop router MAC address (via ARP if unknown)
-4. Creates NEW Ethernet frame:
-   - Dest MAC: ISP router's MAC
-   - Source MAC: Your home router's MAC (its WAN interface)
-   - Payload: Same IP packet (unchanged)
-
-**Step 4: Forwarding**
-
-New frame transmitted to ISP router. Process repeats hop-by-hop until packet reaches Google.
-
----
-
-## WiFi Frames (802.11)
-
-WiFi uses different frame structure than wired Ethernet due to wireless medium challenges.
-
-### 802.11 Frame Format
-
-```
-┌──────┬──────┬───────┬────────┬────────┬────────┬────────┬─────────┬─────┐
-│Frame │Dura- │Address│Address │Address │Sequence│Address │ Payload │ FCS │
-│Control│ tion │  1    │   2    │   3    │ Control│   4    │         │     │
-│2 bytes│2 byte│6 bytes│6 bytes │6 bytes │2 bytes │6 bytes │0-2304 B │4 byt│
-└──────┴──────┴───────┴────────┴────────┴────────┴────────┴─────────┴─────┘
-
-Note: Four address fields (up to 24 bytes of addresses!)
-```
-
-**Why Four MAC Addresses?**
-
-WiFi infrastructure mode involves three entities:
-1. **Source device** (your laptop)
-2. **Destination device** (server)
-3. **Access Point (AP)** (WiFi router)
-
-**Four addresses needed for different scenarios:**
-- Address 1: Receiver address (immediate recipient)
-- Address 2: Transmitter address (immediate sender)
-- Address 3: Filtering/routing information
-- Address 4: Only used in WDS (Wireless Distribution System) mesh networks
-
----
-
-### WiFi vs Ethernet Comparison
-
-| Feature | Ethernet (802.3) | WiFi (802.11) |
-|---------|------------------|---------------|
-| Addresses | 2 (source, dest) | 4 (SA, DA, TA, RA) |
-| Collision Detection | CSMA/CD (old) / Full-duplex switches (modern) | CSMA/CA |
-| Transmission | Wired (cable) | Wireless (radio) |
-| Error Rate | Very low (10^-12) | Higher (10^-6 to 10^-4) |
-| Security | Physical access required | Encryption required (WPA2/WPA3) |
-| Frame Size Max | 1518 bytes (standard) | 2346 bytes |
-| Acknowledgments | Implicit (FCS) | Explicit (ACK frames required) |
-
----
-
-## MAC Address vs IP Address: Why Both?
-
-### The Two-Layer Addressing Problem
-
-**Question:** Why do we need MAC addresses (Layer 2) AND IP addresses (Layer 3)? Why not just use IP addresses?
-
-**Answer:** Separation of concerns—different problems at different layers.
-
----
-
-### IP Addresses (Layer 3): End-to-End
-
-**Purpose:** Identify devices across the entire Internet
-
-**Scope:** Global (end-to-end)
-
-**Characteristics:**
-- Hierarchical (network portion + host portion)
-- Routable (routers make forwarding decisions based on IP)
-- Logical (assigned by network administrator or DHCP)
-- Can change (DHCP reassigns, device moves networks)
-
-**Example:**
-```
-Source: 192.168.1.50 (Bangladesh)
-Destination: 142.250.185.206 (USA, Google)
-
-These addresses stay the same from source to destination
-(except NAT, but conceptually the same)
-```
-
----
-
-### MAC Addresses (Layer 2): Hop-by-Hop
-
-**Purpose:** Identify devices on the same physical network (one hop)
-
-**Scope:** Local (link-by-link)
-
-**Characteristics:**
-- Flat (no hierarchy)
-- Not routable (routers don't use MAC addresses for forwarding decisions)
-- Physical (burned into network interface hardware)
-- (Mostly) permanent (tied to hardware)
-
-**Example:**
-```
-Hop 1: Your PC → Home Router
-- Dest MAC: Router's MAC
-- Source MAC: Your PC's MAC
-
-Hop 2: Home Router → ISP Router
-- Dest MAC: ISP Router's MAC (DIFFERENT!)
-- Source MAC: Home Router's MAC (DIFFERENT!)
-
-MAC addresses change at every hop, but IP addresses stay constant
-```
-
----
-
-### Why This Design?
-
-**IP Without MAC Would Fail:**
-
-Imagine if we only had IP addresses:
-1. Your computer knows destination IP: `142.250.185.206`
-2. Your computer is on local network `192.168.1.0/24`
-3. How does it physically transmit data?
-   - WiFi: Needs to know which radio signal encoding to use → needs to identify AP
-   - Ethernet hub: Multiple devices on same wire → needs to identify specific device
-
-**Layer 2 Handles Physical Media:**
-- Ethernet needs MAC addresses to switch frames to correct port
-- WiFi needs MAC addresses to direct radio transmissions to correct device
-- Access control: "Is this device allowed on this network?"
-
-**Layer 3 Handles Routing:**
-- IP addresses have network hierarchy → enables routing at scale
-- Routers use IP prefixes to make forwarding decisions
-- ARP/NDP translates IP to MAC when needed
-
----
-
-### ARP: Connecting IP to MAC
-
-**Problem:** You know destination IP but need destination MAC to send frame.
-
-**Solution:** Address Resolution Protocol (ARP) maps IP → MAC on local network.
-
-**ARP Process:**
-
-```
-1. Your computer wants to send to 192.168.1.1 (router)
-2. Check ARP cache: "Do I know 192.168.1.1's MAC?"
-   - If yes: Use cached MAC
-   - If no: Send ARP request
-
-3. ARP Request (broadcast):
-   ┌─────────────────────────────────────┐
-   │ Dest MAC: FF:FF:FF:FF:FF:FF (bcast) │
-   │ Source MAC: 11:22:33:44:55:66       │
-   │ EtherType: 0x0806 (ARP)             │
-   │                                     │
-   │ ARP Payload:                        │
-   │   Operation: Request (1)            │
-   │   Sender MAC: 11:22:33:44:55:66     │
-   │   Sender IP: 192.168.1.50           │
-   │   Target MAC: 00:00:00:00:00:00     │
-   │   Target IP: 192.168.1.1            │
-   └─────────────────────────────────────┘
-
-4. All devices on network receive broadcast
-5. Router (192.168.1.1) recognizes its IP
-6. Router sends ARP Reply (unicast):
-   ┌─────────────────────────────────────┐
-   │ Dest MAC: 11:22:33:44:55:66         │
-   │ Source MAC: AA:BB:CC:DD:EE:FF       │
-   │ EtherType: 0x0806 (ARP)             │
-   │                                     │
-   │ ARP Payload:                        │
-   │   Operation: Reply (2)              │
-   │   Sender MAC: AA:BB:CC:DD:EE:FF     │
-   │   Sender IP: 192.168.1.1            │
-   │   Target MAC: 11:22:33:44:55:66     │
-   │   Target IP: 192.168.1.50           │
-   └─────────────────────────────────────┘
-
-7. Your computer caches: "192.168.1.1 = AA:BB:CC:DD:EE:FF"
-8. Now can send IP packets in Ethernet frames with correct dest MAC
-```
-
-**ARP Cache:**
-```bash
-$ arp -a
-? (192.168.1.1) at aa:bb:cc:dd:ee:ff [ether] on eth0
-? (192.168.1.100) at 12:34:56:78:9a:bc [ether] on eth0
-```
-
----
-
-## How Switches vs Routers Process Frames
-
-### Switches (Layer 2 Devices)
-
-**Purpose:** Forward frames within a local network based on MAC addresses
-
-**Operation:**
-
-```
-1. Receive frame on port 1
-2. Read destination MAC: AA:BB:CC:DD:EE:FF
-3. Check MAC address table:
-   - AA:BB:CC:DD:EE:FF → Port 3
-4. Forward frame only to port 3
-5. Learn: "Source MAC 11:22:33:44:55:66 is on port 1"
-```
-
-**MAC Address Table (CAM Table):**
-
-| MAC Address | Port | Age |
-|-------------|------|-----|
-| 11:22:33:44:55:66 | 1 | 10s |
-| AA:BB:CC:DD:EE:FF | 3 | 5s |
-| 99:88:77:66:55:44 | 2 | 120s |
-
-**Learning Process:**
-
-```
-Switch starts with empty table.
-
-Frame arrives:
-- Source MAC: 11:22:33:44:55:66
-- Dest MAC: AA:BB:CC:DD:EE:FF
-- Port: 1
-
-Switch learns: "11:22:33:44:55:66 is on port 1" → add to table
-
-If dest MAC not in table:
-- Flood frame to all ports except arrival port
-- Destination will reply, switch learns its location
-```
-
-**Why Switches Are Fast:**
-
-Switches operate at Layer 2:
-- Only examine Ethernet header (14 bytes)
-- Don't inspect IP packet
-- Hardware-accelerated MAC lookups (ASIC/TCAM)
-- Zero processing delay (wire-speed forwarding)
-
----
-
-### Routers (Layer 3 Devices)
-
-**Purpose:** Forward packets between different networks based on IP addresses
-
-**Operation:**
-
-```
-1. Receive Ethernet frame on interface eth0
-2. Check destination MAC: "Is this for me?" → Yes
-3. Validate FCS (checksum)
-4. Strip Ethernet header and trailer
-5. Extract IP packet
-6. Read destination IP: 142.250.185.206
-7. Check routing table:
-   - 142.250.0.0/16 → Next-hop: 203.0.113.1, Interface: eth1
-8. Decrement TTL: 64 → 63
-9. Recalculate IP checksum
-10. Determine next-hop MAC address (via ARP if unknown)
-11. Create NEW Ethernet frame:
-    - Dest MAC: Next-hop router's MAC
-    - Source MAC: This router's eth1 MAC
-    - Payload: Modified IP packet
-12. Calculate FCS
-13. Transmit frame on eth1
-```
-
-**Key Difference from Switches:**
-
-Routers:
-- Operate at Layer 3 (IP)
-- Examine IP addresses, not just MAC addresses
-- Change MAC addresses at each hop (source/dest MACs rewritten)
-- IP addresses stay constant (end-to-end)
-- Check TTL, fragment if needed, apply ACLs
-- Slower than switches (more processing required)
-
----
-
-## Frame Errors and Error Detection
-
-### Types of Transmission Errors
-
-**1. Bit Errors:**
-```
-Sent:     101010101010
-Received: 101011101010
-             ^^
-          Single bit flipped due to interference
-```
-
-**2. Burst Errors:**
-```
-Sent:     10101010 11001100 10101010
-Received: 10101010 00000000 10101010
-                   ^^^^^^^^
-          Entire byte corrupted
-```
-
-**3. Frame Corruption:**
-```
-Sent:     [Full 1500-byte frame]
-Received: [1200 bytes received, rest lost]
-
-Partial frame due to cable unplugged mid-transmission
-```
-
----
-
-### FCS (Frame Check Sequence) Detection
-
-**CRC-32 Algorithm:**
-
-```
-Polynomial: x^32 + x^26 + x^23 + x^22 + x^16 + x^12 + x^11 + 
-            x^10 + x^8 + x^7 + x^5 + x^4 + x^2 + x + 1
-
-Binary: 100000100110000010001110110110111
-
-This polynomial can detect:
-✅ All single-bit errors
-✅ All double-bit errors
-✅ All odd-number bit errors
-✅ All burst errors of 32 bits or less
-✅ Most longer burst errors (99.99%+)
+ff ff ff ff ff ff   11 22 33 44 55 66   08 06                       ← Ethernet header (14 bytes)
+00 01  08 00  06  04  00 01                                         ← ARP: hw type Ethernet, proto IPv4, hw len 6, proto len 4, opcode 1 (request)
+11 22 33 44 55 66   c0 a8 01 32                                      ← sender MAC, sender IP 192.168.1.50
+00 00 00 00 00 00   c0 a8 01 01                                      ← target MAC (unknown = zeros), target IP 192.168.1.1
 ```
+That is 14 + 28 = **42 bytes**, less than the 60 bytes minimum (before the FCS), so the NIC **pads with 18 zero bytes**, then appends the 4-byte FCS = the required **64**.
 
-**Calculation Process (Simplified):**
+**Build and check it in Python:**
 
 ```python
-def calculate_crc32(frame_data):
-    # Initialize CRC
-    crc = 0xFFFFFFFF
-    
-    # Process each byte
-    for byte in frame_data:
-        crc = crc ^ byte
-        for _ in range(8):
-            if crc & 1:
-                crc = (crc >> 1) ^ 0xEDB88320  # Polynomial
-            else:
-                crc = crc >> 1
-    
-    # Finalize
-    return crc ^ 0xFFFFFFFF
-
-# Example
-frame_data = [0xAA, 0xBB, 0xCC, ...]  # Header + payload
-fcs = calculate_crc32(frame_data)
-# Append fcs to frame
+import struct, zlib
+dst = bytes.fromhex("ffffffffffff")
+src = bytes.fromhex("112233445566")
+eth = dst + src + struct.pack("!H", 0x0806)
+arp = struct.pack("!HHBBH", 1, 0x0800, 6, 4, 1) + src + bytes([192,168,1,50]) + bytes(6) + bytes([192,168,1,1])
+frame = eth + arp
+frame += bytes(60 - len(frame))                       # pad to 60 bytes (min frame without FCS)
+fcs = zlib.crc32(frame) & 0xFFFFFFFF                  # CRC-32 over header+payload; hardware appends it (transmit bit/byte ordering is handled by the NIC)
+print(len(frame), "bytes + 4 FCS =", len(frame)+4, "  crc32 = %08x" % fcs)
+print(frame.hex(" "))
 ```
 
-**Verification:**
+**Read a real one:**
 
-```python
-def verify_frame(frame_with_fcs):
-    frame_data = frame_with_fcs[:-4]  # All except last 4 bytes
-    received_fcs = frame_with_fcs[-4:]  # Last 4 bytes
-    
-    calculated_fcs = calculate_crc32(frame_data)
-    
-    if calculated_fcs == received_fcs:
-        return True  # Frame intact
-    else:
-        return False  # Frame corrupted, discard
-```
-
----
-
-### What Happens When Errors Detected?
-
-**Layer 2 (Ethernet):**
-```
-Frame received with FCS mismatch
-→ Frame silently discarded
-→ No error message sent to sender
-→ Higher layers (TCP) must detect missing data and retransmit
-```
-
-**Why Silent Discard?**
-
-1. **Performance:** Sending error messages would increase traffic
-2. **Rare:** Errors are very rare in modern networks
-3. **Redundant:** TCP already handles retransmission
-
-**TCP's Role:**
-
-```
-TCP Sender:
-- Sends segments 1, 2, 3, 4, 5
-- Waits for ACKs
-
-TCP Receiver:
-- Receives segments 1, 2, 4, 5
-- Segment 3 missing (frame discarded due to FCS error)
-- Sends ACK for segment 2 only (not 3, 4, 5)
-
-TCP Sender:
-- Timeout waiting for ACK for segment 3
-- Retransmits segment 3
-- Communication continues
-```
-
----
-
-## Physical Layer: From Frames to Bits
-
-### Electrical Encoding (Ethernet)
-
-**Frames become electrical voltages on copper wire:**
-
-```
-Binary 1: High voltage (+2.5V for 1000BASE-T)
-Binary 0: Low voltage (0V)
-
-Frame bits: 10101010 10101011 10101010 10111011 ...
-                ↓
-Voltages:   +2.5V 0V +2.5V 0V +2.5V 0V ...
-
-Transmitted at:
-- 10 Mbps (10BASE-T): 10 million bits per second
-- 100 Mbps (100BASE-TX): 100 million bits per second
-- 1 Gbps (1000BASE-T): 1 billion bits per second
-- 10 Gbps (10GBASE-T): 10 billion bits per second
-```
-
-**Encoding Schemes:**
-
-Different Ethernet standards use different encoding:
-
-**Manchester Encoding (10BASE-T):**
-```
-Binary 0: High-to-low transition
-Binary 1: Low-to-high transition
-
-Ensures clock synchronization (transition in every bit period)
-```
-
-**4B/5B + MLT-3 (100BASE-TX):**
-```
-4 data bits encoded as 5 code bits (adds redundancy)
-Multi-Level Transmit with 3 levels (+1V, 0V, -1V)
-More efficient than Manchester
-```
-
-**PAM-5 (1000BASE-T):**
-```
-Pulse Amplitude Modulation with 5 voltage levels
-Transmits on all 4 pairs simultaneously
-Complex signal processing for 1 Gbps over Cat5e
-```
-
----
-
-### Radio Encoding (WiFi)
-
-**Frames become radio waves:**
-
-```
-Radio Frequency Bands:
-- 2.4 GHz: Channels 1-13 (14 in Japan)
-- 5 GHz: Channels 36-165 (depending on country regulations)
-- 6 GHz: WiFi 6E (newest)
-
-Modulation Techniques:
-- OFDM (Orthogonal Frequency Division Multiplexing)
-- QAM (Quadrature Amplitude Modulation)
-- MIMO (Multiple Input Multiple Output - multiple antennas)
-```
-
-**How Binary Becomes Radio:**
-
-```
-1. Frame bits: 10101010...
-2. Modulate onto carrier wave (e.g., 2.437 GHz for channel 6)
-3. Different modulation schemes encode more bits per symbol:
-   - BPSK: 1 bit per symbol
-   - QPSK: 2 bits per symbol
-   - 16-QAM: 4 bits per symbol
-   - 64-QAM: 6 bits per symbol
-   - 256-QAM: 8 bits per symbol (WiFi 6)
-4. Transmit using antenna
-5. Receiver antenna receives radio waves
-6. Demodulate to recover bits
-7. Reconstruct frame
-```
-
-**WiFi Challenges:**
-
-Unlike wired Ethernet:
-- **Signal attenuation:** Radio waves weaken with distance
-- **Interference:** Other WiFi networks, microwaves, Bluetooth
-- **Multipath:** Signal bounces off walls, arrives at different times
-- **Hidden node problem:** Device A can't hear device C but both can hear AP
-- **Collision detection impossible:** Can't listen while transmitting radio
-
-**CSMA/CA (Collision Avoidance):**
-
-WiFi uses collision avoidance instead of collision detection:
-```
-1. Device wants to transmit
-2. Listen: Is channel busy?
-   - If busy: Wait random time, try again
-   - If clear: Wait DIFS (Distributed Interframe Space)
-3. Transmit frame
-4. Wait for ACK from receiver
-5. If no ACK: Collision assumed, retransmit with exponential backoff
-```
-
----
-
-### Fiber Optic Encoding
-
-**Frames become light pulses:**
-
-```
-Binary 1: Light pulse
-Binary 0: No light (darkness)
-
-Frame bits: 10101010...
-                ↓
-Light:      On Off On Off On Off On Off...
-
-Transmission:
-- LED or laser diode generates light
-- Light travels through glass fiber (core ~9μm diameter)
-- Photodetector at other end detects light pulses
-- Converts back to electrical signals
-- Reconstructs frame
-```
-
-**Advantages:**
-- **Speed:** Up to 100 Gbps per fiber (or higher with WDM)
-- **Distance:** 40-80 km without repeaters (single-mode fiber)
-- **Immunity:** No electrical interference
-- **Security:** Difficult to tap (physical access required)
-
-**Disadvantages:**
-- **Cost:** More expensive than copper
-- **Fragility:** Glass fiber can break if bent too sharply
-- **Termination:** Requires specialized equipment to install connectors
-
----
-
-## Frame Processing Performance
-
-### Switch Performance
-
-**Modern switches process millions of frames per second:**
-
-```
-1 Gigabit Ethernet:
-- Minimum frame: 64 bytes
-- Frame time: 64 bytes × 8 bits/byte ÷ 1 Gbps = 512 ns
-- Theoretical max: 1,953,125 frames/second (line rate)
-
-Switch must:
-1. Receive frame (512 ns)
-2. Examine dest MAC (< 10 ns with ASIC)
-3. Look up in MAC table (< 10 ns with TCAM)
-4. Forward to output port (< 10 ns)
-
-Total processing: ~30 ns (negligible overhead)
-Result: Wire-speed switching (zero packet loss)
-```
-
----
-
-### Router Performance
-
-**Routers slower than switches due to Layer 3 processing:**
-
-```
-Software Router (Linux):
-- ~50,000 - 500,000 packets/second per core
-- Limited by CPU performance
-
-Hardware Router (ASIC, FPGA):
-- Millions of packets/second
-- Dedicated forwarding hardware
-
-ISP Core Router:
-- 100+ Tbps throughput
-- Billions of packets/second
-- Specialized hardware (e.g., Cisco CRS, Juniper PTX)
-```
-
-**Router Overhead:**
-
-```
-Per packet:
-1. Receive frame
-2. Validate FCS
-3. Strip L2 header
-4. Parse IP header
-5. Decrement TTL
-6. Recalculate IP checksum
-7. Longest prefix match in routing table
-8. Apply access control lists (ACLs)
-9. Determine next-hop
-10. ARP lookup (if needed)
-11. Fragment if needed
-12. Build new L2 frame
-13. Calculate FCS
-14. Transmit
-
-Each step adds latency (~1-10 μs total for software router)
-```
-
----
-
-## Complete Example: 10 MB File Transfer
-
-Let's trace a 10 MB file transfer through all layers.
-
-### Initial Setup
-
-**Application sends 10 MB file**
-
----
-
-### Layer 4: TCP Segments
-
-```
-10 MB = 10,485,760 bytes
-
-Maximum Segment Size (MSS): 1460 bytes
-(MTU 1500 - IP header 20 - TCP header 20 = 1460)
-
-Number of segments: 10,485,760 ÷ 1460 = ~7,184 segments
-
-Each segment:
-┌────────────────────────────┐
-│ TCP Header (20 bytes)      │
-│ Data (1460 bytes)          │
-└────────────────────────────┘
-Total: 1480 bytes per segment
-```
-
----
-
-### Layer 3: IP Packets
-
-```
-Each TCP segment wrapped in IP packet:
-
-┌────────────────────────────┐
-│ IP Header (20 bytes)       │
-│ TCP Segment (1480 bytes)   │
-└────────────────────────────┘
-Total: 1500 bytes per packet
-
-Result: 7,184 IP packets
-```
-
----
-
-### Layer 2: Ethernet Frames
-
-```
-Each IP packet wrapped in Ethernet frame:
-
-┌──────────────────────────────────────┐
-│ Ethernet Header (14 bytes)           │
-│  - Dest MAC (6)                      │
-│  - Source MAC (6)                    │
-│  - EtherType (2)                     │
-├──────────────────────────────────────┤
-│ IP Packet (1500 bytes)               │
-├──────────────────────────────────────┤
-│ FCS (4 bytes)                        │
-└──────────────────────────────────────┘
-Total: 1518 bytes per frame
-
-Result: 7,184 Ethernet frames
-```
-
----
-
-### Transmission Time
-
-**1 Gigabit Ethernet:**
-
-```
-Total data: 7,184 frames × 1518 bytes × 8 bits/byte = 87,200,256 bits
-
-Transmission time: 87,200,256 bits ÷ 1,000,000,000 bits/second
-                 = 0.0872 seconds
-                 = 87.2 milliseconds
-
-(Plus overhead: inter-frame gaps, TCP ACKs, retransmissions)
-
-Actual transfer time: ~100-150 ms over local network
-```
-
-**100 Megabit Ethernet:**
-
-```
-Transmission time: 87,200,256 bits ÷ 100,000,000 bits/second
-                 = 0.872 seconds
-                 = 872 milliseconds
-
-Actual transfer time: ~1-1.5 seconds over local network
-```
-
----
-
-## Troubleshooting Frame-Level Issues
-
-### Common Problems
-
-**1. Frame Errors (FCS Failures):**
-
-```
-$ ifconfig eth0
-RX packets: 1000000  errors: 50  dropped: 0  overruns: 0  frame: 50
-
-"frame: 50" = 50 frames with FCS errors
-
-Causes:
-- Bad cable (damaged, wrong category)
-- Electrical interference
-- Faulty NIC
-- Cable too long (>100m for Ethernet)
-
-Fix:
-- Replace cable
-- Test with different NIC
-- Check for interference sources
-```
-
-**2. Collision Errors (Obsolete in Switched Networks):**
-
-```
-$ ifconfig eth0
-TX packets: 500000  errors: 100  collisions: 100
-
-Causes (Ethernet hubs only):
-- Too many devices on same collision domain
-- Network overloaded
-
-Fix:
-- Replace hub with switch (eliminates collisions)
-```
-
-**3. Broadcast Storms:**
-
-```
-Symptom: Network extremely slow, CPU usage high on switches
-
-Cause:
-- Switching loop (two switches connected by multiple paths, no STP)
-- Broadcasts circulate infinitely
-
-Fix:
-- Enable Spanning Tree Protocol (STP)
-- Remove redundant connections (or configure properly)
-```
-
----
-
-### Diagnostic Tools
-
-**tcpdump / Wireshark:**
-
-Capture frames to analyze:
 ```bash
-$ tcpdump -i eth0 -e -n
-11:22:33:44:55:66 > aa:bb:cc:dd:ee:ff, ethertype IPv4 (0x0800), length 1518
-11:22:33:44:55:66 > aa:bb:cc:dd:ee:ff, ethertype IPv4 (0x0800), length 1518
-
-Flags:
--i eth0: Interface
--e: Print MAC addresses
--n: Don't resolve names
+sudo tcpdump -i any -nn -e -XX -c 1 arp          # in another terminal: ping a local device you haven't contacted (or: sudo ip neigh flush all)
+# ... 11:22:33:44:55:66 > ff:ff:ff:ff:ff:ff, ethertype ARP (0x0806), length 42: Request who-has 192.168.1.1 tell 192.168.1.50
 ```
+The `-e` flag prints the link-layer (Ethernet) header. `length 42` matches our hand-built frame (the capture doesn't show padding or FCS, because NIC hardware handles them).
 
-**ethtool:**
+A second frame, an **IPv4/ICMP echo**, has EtherType `08 00`, then `45 00 00 54 ...` (the IP header from Chapter 30), then the ICMP message. For the 84-byte IP packet of a default ping the frame is 14 + 84 + 4 = **102 bytes** on the wire, since the payload already exceeds 46 bytes and needs no padding.
 
-Check link status and errors:
+---
+
+## 5. VLANs (802.1Q), jumbo frames and other variations
+
+### 5.1 VLAN tagging
+A **VLAN** (Virtual LAN) splits one physical switch (or a network of switches) into several **separate broadcast domains**, so departments, guests and servers stay isolated without separate hardware. The frame carries a **4-byte 802.1Q tag** between the source MAC and the EtherType:
+
+```
+Dst MAC │ Src MAC │ 0x8100 (TPID) │ PCP(3) DEI(1) VLAN-ID(12) │ real EtherType │ payload │ FCS
+                     └───────── 4-byte tag ──────────────────┘
+```
+- **VLAN ID** is 12 bits → **1–4094** usable VLANs. **PCP** is a 3-bit priority (QoS) field.
+- A switch port is either an **access port** (untagged, belongs to one VLAN, for end devices) or a **trunk port** (carries tagged frames of many VLANs between switches or to a router/hypervisor).
+- Different VLANs can talk only through a **router** (L3), which is why "inter-VLAN routing" exists. Tagging makes the maximum frame 1522 bytes.
+- **Q-in-Q (802.1ad)** stacks two tags (providers).
+
 ```bash
-$ ethtool -S eth0
-NIC statistics:
-     rx_packets: 1000000
-     tx_packets: 950000
-     rx_errors: 0
-     tx_errors: 0
-     rx_crc_errors: 0
-     collisions: 0
+ip -d link show          # look for "vlan protocol 802.1Q id 100"
+sudo ip link add link eth0 name eth0.100 type vlan id 100     # create a VLAN sub-interface (needs a tagged switch port to be useful)
 ```
 
-**arp:**
+### 5.2 Jumbo frames
+A larger MTU (up to ~9000) reduces per-frame overhead for bulk traffic (storage, backups). **Every** device on the path (NICs, switches, VLANs, tunnels) must be configured for it, or you get silent drops and PMTU problems (Chapter 30). Enable with `ip link set eth0 mtu 9000` where supported.
 
-View ARP cache:
+### 5.3 Other Layer-2 protocols
+PPP/PPPoE (DSL), HDLC, Frame Relay/ATM (legacy), Wi-Fi 802.11, Bluetooth, cellular data links, and virtual L2 such as **VXLAN** (an Ethernet frame inside a UDP packet: overlay networks in Docker Swarm/Kubernetes, Chapter 40s).
+
+---
+
+## 6. Wi-Fi (802.11) frames
+
+Radio is harder than a cable: signals fade, interfere, and a device **can't listen while it transmits**. So Wi-Fi's link layer is more elaborate:
+
+| | Ethernet (802.3) | Wi-Fi (802.11) |
+|---|---|---|
+| Medium | Copper/fiber, point-to-point with a switch | Shared radio channel |
+| Addresses in header | 2 (dst, src) | **Up to 4** (receiver, transmitter, plus the "real" source/destination when an **access point** relays) |
+| Media access | Full duplex on switched links (no collisions) | **CSMA/CA**: listen, wait a random back-off, transmit, expect an **ACK** |
+| Delivery | No link ACK; drops silently on error | **Link-layer ACK** for each unicast frame and **retransmissions** |
+| Frame types | Data (plus control like pause) | **Management** (beacon, probe, authenticate, associate), **control** (RTS/CTS, ACK), **data** |
+| Max payload | 1500 (MTU) | Up to 2304 (MSDU); aggregation (A-MPDU) for efficiency |
+| Security | Physical access (802.1X optional) | **Encryption in the link layer**: WPA2 (AES-CCMP), WPA3 |
+| Error rate | Very low | Much higher; adaptive modulation lowers rate when the signal is poor |
+
+Address usage (infrastructure mode): a laptop sending to a server via the AP puts the **AP's MAC** as receiver, its own as transmitter, and the **final destination MAC** as the third address; the AP then builds an Ethernet frame for the wired side (the AP is a **bridge** between 802.11 and 802.3).
+
+Extras: frequency bands **2.4 / 5 / 6 GHz**, channel width 20–160 MHz, **OFDM/OFDMA + QAM (up to 1024-QAM in Wi-Fi 6/7)**, **MIMO/MU-MIMO**, the **hidden node problem**, **roaming** between APs, and **airtime fairness**. Wi-Fi throughput is shared by everyone on the channel and drops with distance and interference.
+
+---
+
+## 7. MAC address + IP address: why both, and how ARP glues them
+
+| | IP address | MAC address |
+|---|---|---|
+| Layer | 3 | 2 |
+| Scope | Whole internet (**end-to-end**) | One local link (**hop-by-hop**) |
+| Structure | Hierarchical (network + host) → routable/aggregatable | Flat (vendor + serial) |
+| Assigned by | DHCP/admin/ISP | Manufacturer (or software) |
+| Changes during a packet's trip? | No (except NAT) | **At every router** |
+
+If we only had MACs, routing the internet would need every router to know every device in the world (no hierarchy). If we only had IPs, Layer 2 wouldn't know which physical port, radio, or cable to use. Separation of concerns solves both.
+
+### ARP (Address Resolution Protocol)
+Your PC knows the **next hop's IP** (the default gateway `192.168.1.1`), but a frame needs the **MAC**. **ARP** resolves it on the local network (Chapter 39 in depth):
+
+1. Check the **ARP cache** (`ip neigh`).
+2. If missing, **broadcast** an ARP request (`dst ff:ff:ff:ff:ff:ff`, EtherType 0x0806): "Who has 192.168.1.1? Tell 192.168.1.50."
+3. The owner replies **unicast** with its MAC ("192.168.1.1 is at aa:bb:cc:dd:ee:ff").
+4. The sender caches the mapping for a few minutes and sends the frame.
+
+IPv6 uses **Neighbor Discovery** (ICMPv6) instead of ARP.
+
 ```bash
-$ arp -a
-router.local (192.168.1.1) at aa:bb:cc:dd:ee:ff [ether] on eth0
+ip neigh                     # the neighbor (ARP) cache: IP, dev, MAC, state (REACHABLE, STALE, DELAY, FAILED)
+arp -a                       # older tool
+sudo ip neigh flush all      # clear it, then ping and capture the ARP exchange
 ```
 
 ---
 
-## Summary and Key Takeaways
+## 8. Switches and routers handle frames differently
 
-### Frames in One Sentence
+### 8.1 A hub, a bridge and a switch
+- **Hub (L1, obsolete):** repeats every bit out of every other port, so one big **collision domain** (half duplex, CSMA/CD).
+- **Bridge/Switch (L2):** looks at **destination MAC** and forwards **only where needed**; each port is its own collision domain; full duplex; multiple conversations at once.
 
-**Frames are Layer 2 data structures that encapsulate IP packets with MAC addresses and error detection, enabling physical transmission over network media.**
-
----
-
-### Essential Concepts
-
-1. **Frame Structure:**
-   - Header (MAC addresses, type)
-   - Payload (IP packet from Layer 3)
-   - Trailer (FCS checksum)
-
-2. **Ethernet Frame Fields:**
-   - Preamble + SFD (synchronization)
-   - Destination MAC (who receives)
-   - Source MAC (who sent)
-   - EtherType (what's inside: IPv4, IPv6, ARP)
-   - Payload (46-1500 bytes)
-   - FCS (CRC-32 error detection)
-
-3. **MAC vs IP Addresses:**
-   - MAC: Layer 2, hop-by-hop, physical addressing
-   - IP: Layer 3, end-to-end, logical addressing
-   - Both needed: MAC for local delivery, IP for routing
-
-4. **Frame Processing:**
-   - Switches: Forward based on MAC, Layer 2 only
-   - Routers: Forward based on IP, change MAC at each hop
-
-5. **Physical Transmission:**
-   - Ethernet: Electrical voltages on copper
-   - WiFi: Radio waves (2.4/5/6 GHz)
-   - Fiber: Light pulses through glass
-
-6. **Error Detection:**
-   - FCS (CRC-32) detects transmission errors
-   - Corrupted frames silently discarded
-   - TCP retransmits missing data
-
-7. **ARP:**
-   - Maps IP addresses to MAC addresses
-   - Required for local delivery
-   - Cached to avoid repeated lookups
-
----
-
-### Complete Encapsulation Hierarchy
+### 8.2 How a switch learns and forwards
+A switch keeps a **MAC address table** (CAM table): `MAC → port (+ VLAN)`.
 
 ```
-Layer 7 (Application):     "I love you"
-         ↓
-Layer 6 (Presentation):    {"message": "I love you"}
-         ↓
-Layer 4 (Transport):       TCP Segment (header + data)
-         ↓
-Layer 3 (Network):         IP Packet (header + segment)
-         ↓
-Layer 2 (Data Link):       Ethernet Frame (header + packet + trailer)
-         ↓
-Layer 1 (Physical):        101010101... (electrical/radio/light)
+1. Frame arrives on port 1 with src MAC A → LEARN: "A is on port 1" (entries age out, typically ~5 minutes).
+2. Look up the destination MAC B:
+     • known, on port 3          → forward ONLY out of port 3 (unless port 3 == arrival port: drop)
+     • unknown unicast           → FLOOD out of all ports in the same VLAN except the arrival port
+     • broadcast/multicast       → flood (multicast may be pruned by IGMP snooping)
+3. When B answers, the switch learns B's port, and later frames go straight there.
 ```
 
-**Each layer wraps previous layer's data with its own header/trailer.**
+Switches use fast hardware (ASICs and TCAM) and operate at "wire speed". Managed switches add VLANs, **STP** (below), port security, **mirroring (SPAN)**, link aggregation (LACP), and PoE.
+
+**Broadcast domain vs collision domain:** all ports of a switch (in one VLAN) share one **broadcast domain** (a broadcast reaches all of them); a **router** (or a VLAN boundary) separates broadcast domains.
+
+**Loops and STP:** with redundant links, a broadcast can circle forever, causing a **broadcast storm** that takes down the network. **Spanning Tree Protocol (802.1D, RSTP 802.1w)** blocks redundant ports so the topology is loop-free.
+
+### 8.3 A router rebuilds the frame at every hop
+
+```
+Frame 1 (PC → home router):   dst MAC = router's LAN MAC, src MAC = PC's MAC,        IP: 192.168.1.50 → 142.250.185.206, TTL 64
+   router: check FCS → strip Ethernet header/trailer → route by IP → TTL-1 → NEW frame:
+Frame 2 (router → ISP):       dst MAC = ISP gateway's MAC, src MAC = router's WAN MAC, IP: 203.0.113.50 → 142.250.185.206 (NAT), TTL 63
+```
+IP header (dest) constant; MACs new at each hop. A **switch never changes the MACs** and never touches the IP header; it forwards the *same* frame.
+
+| | Switch | Router |
+|---|---|---|
+| Layer / looks at | 2 / Ethernet header (dst MAC, VLAN) | 3 / IP header (dst IP, TTL) |
+| Table | MAC table (learned) | Routing table (configured/learned by protocols) |
+| Rewrites the frame? | No (may add/remove VLAN tag) | Yes (new L2 header per hop; TTL, checksum) |
+| Broadcast handling | Floods within the VLAN | **Doesn't forward** L2 broadcasts |
+| Typical speed | Wire speed in hardware | Hardware (ASIC) on core routers; slower in software |
+
+(Modern "Layer 3 switches" do both in hardware.)
 
 ---
 
-## Conclusion
+## 9. Error detection and what happens to bad frames
 
-The Data Link Layer bridges the gap between abstract networking concepts and physical reality. While IP addresses tell us *where* to send data across the global Internet, MAC addresses tell us *how* to physically deliver that data to the next hop—whether by electrical signals through a copper wire, radio waves through the air, or light pulses through fiber optic glass.
+**Types of errors:** single-bit flips, **burst errors** (interference), truncated frames (cable unplugged mid-frame), and frames that are too short/long ("runts"/"giants").
 
-Frames are the fundamental unit of physical data transmission. Every email you send, every web page you load, every video you stream—all of it travels as countless frames, each carefully structured with source and destination MAC addresses, each protected by a CRC-32 checksum, each transmitted as physical signals that traverse cables and airwaves.
+**CRC-32** (polynomial `0x04C11DB7`, computed in hardware) catches all single-bit errors, all bursts up to 32 bits and virtually every longer error (undetected probability ≈ 2⁻³²). A bad frame is **discarded by the receiving NIC**; nothing is sent back. Counters increase:
 
-Understanding frames means understanding the complete picture: how an IP packet gets encapsulated with MAC addresses, how switches forward frames based on hardware addresses, how routers strip off the old Layer 2 frame and create a new one for the next hop, how ARP translates between IP and MAC addressing, how FCS error detection catches transmission errors, and how physical encoding converts digital frames into analog signals.
+```bash
+ip -s link show eth0             # RX: errors, dropped, overrun, frame (CRC/alignment errors)
+ethtool -S eth0 | grep -iE 'crc|err|drop|collis|fcs|align'    # NIC-specific counters
+ethtool eth0                     # speed, duplex, link detected, auto-negotiation
+```
 
-You've now learned the complete journey from Layer 7 to Layer 1: Application data becomes formatted data, becomes TCP segments, becomes IP packets, becomes Ethernet frames, becomes physical bits. At each layer, headers are added solving specific problems—TCP adds reliability, IP adds routing, Ethernet adds physical addressing and error detection.
+**Recovery** happens above: **TCP** notices a missing segment (no ACK or duplicate ACKs) and retransmits (Chapter 23); UDP applications tolerate or handle loss themselves. **Wi-Fi** retransmits at the link layer itself.
 
-When you run `tcpdump` and see MAC addresses in the output, when you examine ARP cache entries, when you investigate FCS errors, when you configure VLAN tagging, when you troubleshoot switching loops—you're working at Layer 2, the Data Link Layer, where frames make networking physically possible.
+**Error counters as diagnostics**
 
-**The Data Link Layer is where networking becomes tangible. Master frames, and you understand how abstract packets become real electrical signals, radio waves, and light pulses that carry the world's data.**
+| Symptom (counter) | Typical cause | Fix |
+|---|---|---|
+| Rising **CRC/FCS/frame errors** | Bad/damaged/too-long cable, bad connector, EMI, failing NIC/SFP, **duplex mismatch** | Replace cable, check length (≤100 m copper), re-terminate, swap ports/NIC, set both ends to auto-negotiate |
+| **Late collisions / collisions** on a "switched" link | **Duplex mismatch** (one end forced full, the other half) or a hub | Fix duplex settings |
+| **Runts** (<64 bytes) / **giants** (>1518 B, or >1522 with VLAN) | Collisions, faulty NIC, or MTU mismatch (jumbo vs standard) | Align MTUs |
+| **Broadcast storm** (huge broadcast counts, switch CPU high, network unusable) | L2 **loop** without STP | Enable STP/RSTP, remove the loop, storm control |
+| **MAC flapping** (a MAC keeps moving between ports) | Loop, duplicate MAC, misconfigured VM/NIC teaming | Investigate topology; unique MACs |
+| **Link flapping** | Bad cable/port, power saving (EEE) issues | Replace cable/port |
+| Packets drop only when large | MTU mismatch or PMTU black hole (Chapter 30) | Check MTU end-to-end |
 
 ---
 
-## Further Reading
+## 10. The physical layer below the frame
 
-- **IEEE 802.3:** Ethernet standard specification
-- **IEEE 802.11:** WiFi standard specification  
-- **"Computer Networks" by Andrew S. Tanenbaum:** Chapter on Data Link Layer
-- **"Ethernet: The Definitive Guide" by Charles Spurgeon**
-- **Wireshark Documentation:** Frame analysis tutorials
-- **"802.11 Wireless Networks: The Definitive Guide" by Matthew Gast**
-- **Data Communication textbooks:** Physical layer encoding in depth
-- **RFC 826:** Address Resolution Protocol (ARP)
-- **IEEE 802.1Q:** VLAN tagging standard
-- **IEEE 802.1D:** Spanning Tree Protocol (STP)
+Layer 2 hands a frame to **Layer 1**, which turns bits into signals. The details depend on the medium (and are often misdescribed as "high voltage = 1, low = 0"):
+
+| Medium | How bits are sent |
+|---|---|
+| **10BASE-T** (10 Mbit/s, old) | **Manchester** encoding: every bit has a mid-bit voltage transition (self-clocking). Each bit's *transition direction* encodes 0 or 1 |
+| **100BASE-TX** (Fast Ethernet) | 4B/5B block coding + **MLT-3** (three voltage levels) over 2 twisted pairs |
+| **1000BASE-T** (Gigabit) | **PAM-5** (five voltage levels) using **all four pairs simultaneously in both directions** with echo cancellation |
+| **2.5/5/10GBASE-T** | PAM-16 and advanced signal processing; needs Cat5e/6/6a cabling and shorter runs for 10G |
+| **Fiber** (SFP/SFP+/QSFP) | Light: LEDs or **lasers**, on/off keying or advanced modulation; **multimode** (short, up to a few hundred meters) vs **single-mode** (kilometers, 10 km–80+ km); multiple wavelengths on one fiber (WDM) |
+| **Wi-Fi** | Radio: **OFDM/OFDMA** subcarriers, each modulated with **BPSK/QPSK/16-/64-/256-/1024-QAM** (more bits per symbol at higher signal quality), 2.4/5/6 GHz, MIMO antennas |
+| **Cellular** | Licensed spectrum, OFDM variants (4G/5G) |
+
+Practical rules: copper Ethernet is limited to **100 m** per segment; use **Cat5e or better** for gigabit, **Cat6/6a** for 10G; fiber for long distance or noise immunity; wireless shares airtime. The **preamble** and **inter-frame gap** are physical-layer artifacts that don't appear in captures.
+
+---
+
+## 11. Frames in Docker, containers and VMs
+
+A container's network interface is one end of a **veth pair** (a virtual Ethernet cable) whose other end plugs into a **Linux bridge** (`docker0` or `br-<id>`), a **software switch** doing exactly the learn/flood/forward behavior of section 8.
+
+```
+ container A               container B
+   eth0 (02:42:ac:11:00:02)   eth0 (02:42:ac:11:00:03)
+     │ veth pair                │ veth pair
+   vethabc ────┐         ┌──── vethdef
+               └── docker0 (bridge = virtual switch, 172.17.0.1) ──── host routing/NAT ──── physical NIC
+```
+
+- **Same bridge → pure Layer 2:** A→B frames go through the bridge; ARP resolves B's MAC.
+- **To the outside:** frames go to the bridge's own MAC (the gateway), and the **host routes and NATs** the IP packet (Chapter 30).
+- **MACs** are generated from IPs (`02:42:` + hex IP).
+- **Other Docker network drivers:** **macvlan** gives each container its own MAC directly on your physical LAN (visible to your switch; some Wi-Fi and cloud networks reject multiple MACs on one port), **ipvlan** shares the host's MAC, **overlay** wraps L2 frames in **VXLAN/UDP** between hosts, **host** shares the host's interfaces.
+- **VMs:** each VM NIC has a virtual MAC; a **bridged** vNIC appears as a separate device on your LAN; hypervisor "vSwitches" work like switches.
+- **Security:** MAC spoofing and **ARP spoofing** attacks work on shared L2 (Chapter 39); enable port security, Dynamic ARP Inspection, and isolation (`icc=false`, separate networks).
+
+---
+
+## 12. Hands-on labs
+
+**Lab 1: See your L2 identity and neighbors**
+
+```bash
+ip -br link            # interfaces, state, MAC (e.g. eth0 UP a4:83:e7:1c:9b:02), flags
+ip link show eth0      # mtu 1500, "link/ether <MAC> brd ff:ff:ff:ff:ff:ff"
+ip neigh               # who you've talked to recently: IP → MAC, state
+ethtool eth0 | grep -E 'Speed|Duplex|Link detected|Auto-negotiation'      # (may need sudo; not for Wi-Fi)
+iw dev wlan0 link 2>/dev/null                                             # Wi-Fi: SSID, signal, bitrate
+```
+Decode the first byte of your MAC: is it unicast? universally or locally administered?
+
+**Lab 2: Capture frames with MAC addresses**
+
+```bash
+sudo tcpdump -i any -nn -e -c 10                     # -e shows "src MAC > dst MAC, ethertype IPv4 (0x0800), length N"
+sudo tcpdump -i eth0 -nn -e -XX -c 1 icmp            # full hex: the first 14 bytes are the Ethernet header
+ping -c 1 <gateway>
+sudo tcpdump -nn -e -i eth0 broadcast                # only broadcast frames (ff:ff:ff:ff:ff:ff)
+sudo tcpdump -nn -e -i eth0 ether multicast          # multicast frames
+```
+
+**Lab 3: Watch ARP**
+
+```bash
+sudo ip neigh flush all
+sudo tcpdump -i eth0 -nn -e arp &
+ping -c 1 <gateway-ip>
+ip neigh              # the entry is back (REACHABLE)
+```
+You'll see the broadcast "who-has" and the unicast "is-at" with their MACs, and the frame lengths (42 bytes captured).
+
+**Lab 4: Docker's bridge and MAC scheme**
+
+```bash
+docker run -d --name a alpine:3.20 sleep 3600
+docker run -d --name b alpine:3.20 sleep 3600
+docker inspect -f '{{.NetworkSettings.IPAddress}} {{.NetworkSettings.MacAddress}}' a b       # 172.17.0.2 02:42:ac:11:00:02 ...
+ip -br link | grep -E 'docker0|veth'         # the bridge and one veth per container
+bridge link                                  # ports attached to docker0
+bridge fdb show br docker0 | head            # the bridge's MAC table (learned addresses)
+docker exec a sh -c 'ip neigh; ping -c1 172.17.0.3; ip neigh'      # ARP entry for B appears: its MAC is 02:42:ac:11:00:03
+sudo tcpdump -i docker0 -nn -e -c 6 &        # then ping again to see the frames (ARP + ICMP)
+docker rm -f a b
+```
+
+**Lab 5: Build a tiny virtual switch** (Linux, root; uses namespaces so it doesn't touch your real network)
+
+```bash
+sudo ip link add br0 type bridge && sudo ip link set br0 up
+for n in 1 2 3; do
+  sudo ip netns add h$n
+  sudo ip link add v$n type veth peer name p$n
+  sudo ip link set p$n netns h$n
+  sudo ip link set v$n master br0 up
+  sudo ip netns exec h$n ip addr add 10.5.0.$n/24 dev p$n
+  sudo ip netns exec h$n ip link set p$n up
+done
+sudo ip netns exec h1 ping -c 2 10.5.0.2          # frames flow through the bridge (a learning switch)
+bridge fdb show br br0 | grep -v permanent        # MACs learned per port
+sudo ip netns exec h3 tcpdump -nn -e -c 3 -i p3 &  # h3 sees ARP broadcasts but NOT unicast between h1 and h2
+sudo ip netns exec h1 ping -c 2 10.5.0.2
+# clean up
+for n in 1 2 3; do sudo ip netns del h$n; done; sudo ip link del br0
+```
+Observe: the first frame (ARP broadcast) is **flooded** to everyone; after learning, unicast frames go **only** to the right port, so h3 stops seeing the h1↔h2 traffic. That's how a switch works.
+
+**Lab 6: VLANs in a namespace lab**
+
+```bash
+sudo ip netns add v && sudo ip link add vv type veth peer name pv && sudo ip link set pv netns v
+sudo ip link set vv up && sudo ip netns exec v ip link set pv up
+sudo ip link add link vv name vv.100 type vlan id 100 && sudo ip link set vv.100 up
+sudo ip netns exec v ip link add link pv name pv.100 type vlan id 100 && sudo ip netns exec v ip link set pv.100 up
+sudo ip addr add 10.100.0.1/24 dev vv.100; sudo ip netns exec v ip addr add 10.100.0.2/24 dev pv.100
+sudo tcpdump -i vv -nn -e -c 3 &
+ping -c 2 10.100.0.2               # tcpdump shows "vlan 100, p 0, ethertype IPv4" (the 802.1Q tag)
+sudo ip netns del v; sudo ip link del vv 2>/dev/null
+```
+
+**Lab 7: Frame counters and errors**
+
+```bash
+ip -s link show eth0
+ethtool -S eth0 2>/dev/null | head -30
+watch -n1 "cat /proc/net/dev"              # per-interface bytes/packets/errs/drops
+```
+Find `errs`, `drop`, `frame`, `colls`; on a healthy wired link they're zero.
+
+**Lab 8: MTU and giant frames**
+
+```bash
+ip link show docker0 | grep mtu
+ping -c 2 -M do -s 1472 <gateway>        # fits in a 1500-byte MTU
+ping -c 2 -M do -s 1473 <gateway>        # too big → error
+```
+
+**Lab 9: Wireshark**: capture on your interface; add columns `eth.src`, `eth.dst`, `eth.type`; expand a frame: **Frame → Ethernet II → IPv4 → TCP**; compare `frame.len` with the sum of headers and payload; look at the OUI resolution of vendor names (View → Name Resolution → Resolve physical addresses).
+
+---
+
+## 13. Troubleshooting
+
+| Symptom | Likely cause | Check |
+|---|---|---|
+| No link ("NO-CARRIER", `Link detected: no`) | Cable, port, switch off, NIC down | `ip link`, `ethtool`, swap cable/port |
+| Link up but slow (100 Mbit/s instead of 1 Gbit/s) | Bad cable pairs, negotiation problem | `ethtool eth0 | grep Speed`; replace cable |
+| Errors/CRC counters climbing, slow transfers | Bad cable/connector/interference, duplex mismatch | `ethtool -S`, replace cable, auto-negotiate |
+| A device is reachable by IP only sometimes | Duplicate IP or duplicate MAC, ARP conflicts | `arping -D -I eth0 <ip>`, `ip neigh` (MAC changes), switch logs |
+| Whole network crawls, switch lights blink madly | **Broadcast storm** from a loop | Check for looped cables; enable STP |
+| Can reach devices in one VLAN but not another | VLAN misconfig (access/trunk, tagging), no inter-VLAN router | Switch port config; `tcpdump -e` for tags |
+| Docker containers on macvlan can't reach the host | Known macvlan limitation (host can't talk to its own macvlan children) | Add a macvlan interface on the host |
+| Wi-Fi connects but is slow/unstable | Interference, weak signal, too many devices, DFS channels | `iw dev wlan0 link`, change channel/band |
+| "Destination host unreachable" from the local subnet | ARP not resolving (device off, firewall, wrong VLAN) | `ip neigh` shows FAILED/INCOMPLETE |
+| Large packets fail, small ones work | MTU mismatch (jumbo, tunnels), PMTU black hole | Lab 8, Chapter 30 |
+
+---
+
+## 14. Common misconceptions
+
+| Misconception | Reality |
+|---|---|
+| "MAC addresses are used across the internet" | They matter only on one link and are rewritten at every router |
+| "A MAC address is permanent and unique forever" | Usually assigned once, but changeable/randomized; VMs/containers use generated ones |
+| "The preamble is part of the frame's 64–1518 bytes" | It (and the inter-frame gap) are added by the PHY and not counted |
+| "Payload min is 46 bytes because Ethernet needs it" | It ensures the 64-byte minimum frame; shorter data is padded |
+| "An Ethernet switch looks at IP addresses" | Plain L2 switches look only at MACs (and VLAN tags) |
+| "Switches change the frame" | They forward it unchanged; routers rebuild it |
+| "Ethernet retransmits lost frames" | It doesn't; upper layers (TCP) do (Wi-Fi does retransmit at L2) |
+| "Ethernet '1' is high voltage, '0' is low voltage" | Real encodings are Manchester, MLT-3, PAM-5 and more |
+| "Gigabit Ethernet gives 1000 Mbit/s of TCP data" | About 941 Mbit/s after headers, preamble and gaps |
+| "Wi-Fi is just wireless Ethernet" | Different framing, ACKs, up to four addresses, encryption at L2, shared airtime |
+| "Frames get bigger than the MTU" | Payload ≤ MTU (1500); the frame with headers is up to 1518 (1522 tagged) |
+| "Collisions are a normal part of modern Ethernet" | Not on switched full-duplex links; collisions indicate a hub or duplex mismatch |
+
+---
+
+## 15. Summary
+
+- **Layer 2** delivers frames across **one link** using **MAC addresses**; a **frame** = header (dst MAC, src MAC, EtherType) + payload (an IP packet) + trailer (**FCS/CRC-32**).
+- **Ethernet II frame:** 14-byte header, 46–1500-byte payload (padded), 4-byte FCS → **64–1518 bytes** (1522 with a VLAN tag); preamble/SFD added by the PHY.
+- **MAC addresses:** 48 bits, OUI + device part, **I/G** and **U/L** bits, `ff:ff:ff:ff:ff:ff` = broadcast; local-only, not routable, spoofable/randomized.
+- **802.1Q VLANs** split broadcast domains with a 4-byte tag; trunks carry multiple VLANs; inter-VLAN traffic needs a router.
+- **Switches** learn source MACs and forward/flood by destination MAC without altering frames; **routers** rebuild the L2 header at every hop; **STP** prevents loops.
+- **Bad frames** are silently dropped; **TCP** (or Wi-Fi's link-layer retries) recovers. Watch error counters.
+- **ARP** maps next-hop IPs to MACs; Docker bridges and veths are software switches with generated MACs.
+- Goodput on gigabit Ethernet is about **941 Mbit/s**; Wi-Fi is a shared, more complex medium.
+
+---
+
+## 16. Check your understanding
+
+1. List the fields of an Ethernet II frame with their sizes, and give the minimum and maximum frame sizes.
+2. A NIC receives a frame addressed to `01:00:5e:00:00:fb`. Under what condition does it accept it?
+3. What does the first byte `02` of a MAC address tell you?
+4. A frame carries a 28-byte ARP payload. How many bytes of padding are added, and how long is the frame with FCS?
+5. What happens to a frame whose FCS doesn't match? Who repairs the loss?
+6. Why do the MAC addresses change at each router, but the destination IP doesn't?
+7. A switch receives a frame for a MAC it has never seen. What does it do? Later it sees a frame from that MAC. What changes?
+8. Why must a Wi-Fi frame have up to four address fields?
+9. What MAC would Docker assign to a container with IP `172.18.0.5`?
+10. TCP over 1 Gbit/s Ethernet reaches only ~941 Mbit/s. Explain where the missing ~6% goes.
+
+<details>
+<summary>Answers</summary>
+
+1. Preamble 7 + SFD 1 (PHY), dst MAC 6, src MAC 6, EtherType 2, payload 46–1500, FCS 4. Minimum frame 64 bytes, maximum 1518 (1522 with an 802.1Q tag), excluding preamble/SFD.
+2. It's a multicast address (I/G bit = 1, IPv4 mDNS group 224.0.0.251); the NIC accepts it only if it has joined that multicast group (or is in promiscuous mode).
+3. `02` = `00000010`: I/G = 0 (unicast) and U/L = 1 (locally administered, i.e. set by software such as Docker, a VM, or MAC randomization).
+4. 14 + 28 = 42 bytes; padded with 60 − 42 = 18 zero bytes; with the 4-byte FCS the frame is 64 bytes.
+5. It is discarded by the receiving NIC with no notification. TCP (or the application) notices the missing data and retransmits; in Wi-Fi the link layer retries.
+6. MAC addresses are hop-by-hop: each router builds a new frame for the next link. The destination IP identifies the end device, so it stays constant (except when NAT rewrites it).
+7. It floods the frame out of all ports of that VLAN except the ingress; when it later sees that MAC as a source, it learns which port it is on and afterwards forwards frames to it out of that single port.
+8. In infrastructure mode a frame may involve a sender, a receiver, an access point relaying it, and a final destination/source: receiver, transmitter, and the real source and destination addresses are needed (address 4 only in special wireless-bridge/mesh modes).
+9. `02:42:ac:12:00:05` (172 = 0xac, 18 = 0x12, 0, 5).
+10. Per full frame the wire carries 1538 byte-times (1518 frame + 8 preamble/SFD + 12 inter-frame gap), while TCP data is only 1460 bytes: 1460 ÷ 1538 ≈ 0.949 of line rate; TCP ACKs and options reduce it slightly further to ~941 Mbit/s.
+</details>
+
+**Practice**
+
+1. Capture 20 frames with `tcpdump -e` on your network; make a table of source MAC, destination MAC, EtherType and length; identify unicast, broadcast and multicast frames and the vendor (OUI) of each source.
+2. Hand-build the Ethernet + IPv4 + ICMP echo request bytes for a ping between two made-up hosts; compute the IP header checksum (Chapter 30) and the frame length, then compare with a real capture.
+3. Run lab 5 and record the bridge's MAC table before and after the first ping; explain each change.
+4. Configure two VLAN sub-interfaces with different IDs in namespaces and prove that hosts in different VLANs can't reach each other without a router.
+5. On a wired link, read `ethtool -S` and `ip -s link` counters before and after a large download, and explain each counter that changed.
+
+---
+
+**Next:** [Chapter 32 – The First Computer and the First Router](32_first_computer_and_first_router_in_details.md)
